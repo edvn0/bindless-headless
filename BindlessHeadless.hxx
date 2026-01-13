@@ -3,6 +3,8 @@
 #include "Pool.hxx"
 #include "Forward.hxx"
 #include "Types.hxx"
+#include "Reflection.hxx"
+#include "GlobalCommandContext.hxx"
 
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_enum_string_helper.h>
@@ -179,7 +181,7 @@ struct CompilerSession {
 		slang::SessionDesc desc{};
 		slang::TargetDesc target{};
 		target.format = SLANG_SPIRV;
-		target.profile = global->findProfile("spirv_1_6");
+		target.profile = global->findProfile("spirv_1_6_vk");
 
 		desc.targets = &target;
 		desc.targetCount = 1;
@@ -224,28 +226,64 @@ struct CompilerSession {
 		return compile_compute_module(module, entry);
 	}
 
-	auto compile_compute_from_file(
-		std::string_view path,
-		std::string_view entry) -> std::vector<u32>
-	{
-		auto extract_module_name = [](const std::filesystem::path& p) {
-			return p.filename().string();
-			};
+	auto compile_entry_from_string(
+        std::string_view name,
+        std::string_view path,
+        std::string_view src,
+        std::string_view entry,
+        ReflectionData* out_reflection = nullptr) -> std::vector<std::uint32_t>
+    {
+        Slang::ComPtr<slang::IBlob> diagnostics;
+        Slang::ComPtr<slang::IModule> module;
 
-		auto load_file_to_string = [](const std::filesystem::path& p) {
-			std::ifstream ifs(p);
-			if (!ifs) std::abort();
-			std::ostringstream oss;
-			oss << ifs.rdbuf();
-			return oss.str();
-			};
+        module = session->loadModuleFromSourceString(
+            name.data(),
+            path.data(),
+            src.data(),
+            diagnostics.writeRef()
+        );
 
-		std::filesystem::path p{ path };
-		auto name = extract_module_name(p);
-		std::string src = load_file_to_string(p);
+        if (diagnostics) {
+            std::cerr << static_cast<const char*>(diagnostics->getBufferPointer());
+        }
+        if (!module) {
+            std::abort();
+        }
 
-		return compile_compute_from_string(name, path, src, entry);
-	}
+        return compile_entry_module(module, entry, out_reflection);
+    }
+
+    auto compile_entry_from_file(
+        std::string_view path,
+        std::string_view entry,
+        ReflectionData* out_reflection = nullptr) -> std::vector<std::uint32_t>
+    {
+        auto extract_module_name = [](std::filesystem::path const& p) {
+            return p.filename().string();
+        };
+
+        auto load_file_to_string = [](std::filesystem::path const& p) {
+            std::ifstream ifs(p);
+            if (!ifs) std::abort();
+            std::ostringstream oss;
+            oss << ifs.rdbuf();
+            return oss.str();
+        };
+
+        std::filesystem::path p{ path };
+        auto name = extract_module_name(p);
+        std::string src = load_file_to_string(p);
+
+        return compile_entry_from_string(name, path, src, entry, out_reflection);
+    }
+
+    // previous compute-only helpers can forward to this if you wish
+    auto compile_compute_from_file(
+        std::string_view path,
+        std::string_view entry) -> std::vector<std::uint32_t>
+    {
+        return compile_entry_from_file(path, entry, nullptr);
+    }
 
 private:
 	auto compile_compute_module(
@@ -316,6 +354,80 @@ private:
 
 		return code;
 	}
+
+	auto compile_entry_module(
+        Slang::ComPtr<slang::IModule> const& module,
+        std::string_view entry,
+        ReflectionData* out_reflection) -> std::vector<std::uint32_t>
+    {
+        Slang::ComPtr<slang::IEntryPoint> ep;
+        {
+            Slang::ComPtr<slang::IBlob> diagnostics;
+            module->findEntryPointByName(entry.data(), ep.writeRef());
+            if (diagnostics) {
+                std::cerr << static_cast<const char*>(diagnostics->getBufferPointer());
+            }
+            if (!ep) {
+                std::abort();
+            }
+        }
+
+        std::array<slang::IComponentType*, 2> components = {
+            module.get(),
+            ep.get()
+        };
+
+        Slang::ComPtr<slang::IComponentType> composed;
+        {
+            Slang::ComPtr<slang::IBlob> diagnostics;
+            auto result = session->createCompositeComponentType(
+                components.data(),
+                components.size(),
+                composed.writeRef(),
+                diagnostics.writeRef()
+            );
+            if (diagnostics) {
+                std::cerr << static_cast<const char*>(diagnostics->getBufferPointer());
+            }
+            if (SLANG_FAILED(result)) {
+                std::abort();
+            }
+        }
+
+        Slang::ComPtr<slang::IComponentType> linked;
+        {
+            Slang::ComPtr<slang::IBlob> diagnostics;
+            auto result = composed->link(linked.writeRef(), diagnostics.writeRef());
+            if (diagnostics) {
+                std::cerr << static_cast<const char*>(diagnostics->getBufferPointer());
+            }
+            if (SLANG_FAILED(result)) {
+                std::abort();
+            }
+        }
+
+        if (out_reflection) {
+            *out_reflection = reflect_program(linked, /*target_index*/ 0);
+        }
+
+        Slang::ComPtr<slang::IBlob> spirv;
+        {
+            Slang::ComPtr<slang::IBlob> diagnostics;
+            auto result = linked->getEntryPointCode(0, 0, spirv.writeRef(), diagnostics.writeRef());
+            if (diagnostics) {
+                std::cerr << static_cast<const char*>(diagnostics->getBufferPointer());
+            }
+            if (SLANG_FAILED(result)) {
+                std::abort();
+            }
+        }
+
+        auto bytes = spirv->getBufferSize();
+        std::vector<std::uint32_t> code(bytes / sizeof(std::uint32_t));
+        std::memcpy(code.data(), spirv->getBufferPointer(), bytes);
+
+        return code;
+    }
 };
 inline auto create_sampler(VmaAllocator& alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler {
 	VkSampler sampler{};
@@ -430,10 +542,9 @@ inline auto create_offscreen_target(
 	return t;
 }
 
-inline auto create_image_from_span(
+inline auto create_image_from_span_v2(
     VmaAllocator alloc,
-    VkCommandPool cmd_pool,
-    VkQueue queue,
+    GlobalCommandContext& cmd_ctx,
     std::uint32_t width,
     std::uint32_t height,
     VkFormat format,
@@ -540,7 +651,7 @@ inline auto create_image_from_span(
             .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
             .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
             .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL, // We always use GENERAL. This is desktop safe.
             .image = t.image,
             .subresourceRange = {
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -566,7 +677,10 @@ inline auto create_image_from_span(
         vkCmdPipelineBarrier2(cb, &di_post);
     };
 
-    detail::submit_and_wait(info.device, cmd_pool, queue, submit_copy);
+    // Submit and wait immediately for this operation
+    submit_one_time_cmd(cmd_ctx, submit_copy, true);
+
+	t.initialized = true;
 
     vmaDestroyBuffer(alloc, staging, staging_alloc);
 

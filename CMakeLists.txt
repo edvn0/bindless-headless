@@ -23,9 +23,7 @@ find_library(SLANG_LIBRARY NAMES slang PATHS ${SLANG_LIB_DIR} REQUIRED)
 find_library(SLANG_COMPILER_LIBRARY NAMES slang-compiler PATHS ${SLANG_LIB_DIR} REQUIRED)
 find_library(SLANG_RT_LIBRARY NAMES slang-rt PATHS ${SLANG_LIB_DIR} REQUIRED)
 
-find_package(FastNoise2 CONFIG REQUIRED)
-
-target_link_libraries(BindlessHeadlessAllocator PRIVATE Vulkan::Vulkan PUBLIC FastNoise2::FastNoise)
+target_link_libraries(BindlessHeadlessAllocator PRIVATE Vulkan::Vulkan)
 target_link_libraries(BindlessHeadless PRIVATE
   Vulkan::Vulkan
   BindlessHeadlessAllocator

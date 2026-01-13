@@ -73,6 +73,9 @@ struct BindlessSet {
 
 	auto destroy() -> void {
 		if (device == VK_NULL_HANDLE) return;
+
+		vkDeviceWaitIdle(device);
+
 		if (pool)   vkDestroyDescriptorPool(device, pool, nullptr);
 		if (layout) vkDestroyDescriptorSetLayout(device, layout, nullptr);
 		pool = VK_NULL_HANDLE;
@@ -119,7 +122,9 @@ struct BindlessSet {
 		DestructionContext::TexturePool& textures,
 		DestructionContext::SamplerPool& samplers) -> void
 	{
-		if (!need_repopulate) return;
+		if  (!need_repopulate)[[likely]] return;
+
+		grow_if_needed(textures.num_objects(), samplers.num_objects(), textures.num_objects(), 0u);
 
 		std::vector<VkWriteDescriptorSet> writes;
 		std::vector<VkDescriptorImageInfo> image_infos;

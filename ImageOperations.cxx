@@ -87,6 +87,17 @@ namespace image_operations {
 						bgr[2] = clamp_convert(float_data[0]); // R
 						break;
 					}
+					case VK_FORMAT_R8_UNORM:
+case VK_FORMAT_R8_SRGB:
+case VK_FORMAT_R8_UINT:
+case VK_FORMAT_R8_SINT: {
+    auto offset = pixel_idx;           // 1 byte per pixel
+    auto v = pixel_data[offset];       // grayscale
+    bgr[0] = v;
+    bgr[1] = v;
+    bgr[2] = v;
+    break;
+}
 					default:
 						break;
 					}
@@ -130,6 +141,12 @@ namespace image_operations {
 			break;
 		case VK_FORMAT_R32G32B32A32_SFLOAT:
 			pixel_size = 16u;
+			break;
+			case VK_FORMAT_R8_UNORM:
+			case VK_FORMAT_R8_SRGB:
+			case VK_FORMAT_R8_UINT:
+			case VK_FORMAT_R8_SINT:
+			pixel_size = 1u;
 			break;
 		default:
 			std::cerr << "Unsupported format for writing to disk: "
