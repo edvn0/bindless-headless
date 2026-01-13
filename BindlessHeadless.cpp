@@ -117,12 +117,12 @@ auto create_compute_pipeline(VkDevice device,
 #include <Windows.h>
 
 auto main(int argc, char **argv) -> int {
-    RENDERDOC_API_1_1_2 *rdoc_api = nullptr;
+    RENDERDOC_API_1_6_0 *rdoc_api = nullptr;
 if(HMODULE mod = GetModuleHandleA("renderdoc.dll"))
 {
     auto RENDERDOC_GetAPI =
         reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(mod, "RENDERDOC_GetAPI"));
-    int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_1_2, reinterpret_cast<void **>(&rdoc_api));
+    int ret = RENDERDOC_GetAPI(eRENDERDOC_API_Version_1_6_0, reinterpret_cast<void **>(&rdoc_api));
     assert(ret == 1);
 }
 
@@ -242,7 +242,7 @@ if(HMODULE mod = GetModuleHandleA("renderdoc.dll"))
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    for (i = 0; i < 10'000; ++i) {
+    for (i = 0; i < 6; ++i) {
         if(rdoc_api) rdoc_api->StartFrameCapture(RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(instance.instance), NULL);
         bindless.repopulate_if_needed(ctx.textures, ctx.samplers);
 
