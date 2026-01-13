@@ -2,3 +2,7 @@ build
 out
 .vs
 .vscode
+.cache
+*.bmp
+*.png
+compile_commands.json

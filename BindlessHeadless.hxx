@@ -36,8 +36,54 @@ constexpr u32 max_in_flight = 2;   // GPU submit throttle depth
 
 namespace detail {
 	auto set_debug_name_impl(VmaAllocator&, VkObjectType, u64, std::string_view) -> void;
+
+	inline auto submit_and_wait(
+    VkDevice device,
+    VkCommandPool cmd_pool,
+    VkQueue queue,
+    auto&& record) -> void
+{
+    VkCommandBufferAllocateInfo ai{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = cmd_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1
+    };
+
+    VkCommandBuffer cb{};
+    vk_check(vkAllocateCommandBuffers(device, &ai, &cb));
+
+    VkCommandBufferBeginInfo bi{
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT
+    };
+    vk_check(vkBeginCommandBuffer(cb, &bi));
+
+    record(cb);
+
+    vk_check(vkEndCommandBuffer(cb));
+
+    VkSubmitInfo si{
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cb
+    };
+
+    VkFenceCreateInfo fci{
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO
+    };
+
+    VkFence fence{};
+    vk_check(vkCreateFence(device, &fci, nullptr, &fence));
+
+    vk_check(vkQueueSubmit(queue, 1, &si, fence));
+    vk_check(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
+
+    vkDestroyFence(device, fence, nullptr);
+    vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
 }
-template<typename T>
+}
+template<typename T> requires std::is_pointer_v<T>
 auto set_debug_name(VmaAllocator& alloc, VkObjectType t, const T& obj, std::string_view name) -> void {
 	detail::set_debug_name_impl(alloc, t, reinterpret_cast<u64>(obj), name);
 }
@@ -384,6 +430,149 @@ inline auto create_offscreen_target(
 	return t;
 }
 
+inline auto create_image_from_span(
+    VmaAllocator alloc,
+    VkCommandPool cmd_pool,
+    VkQueue queue,
+    std::uint32_t width,
+    std::uint32_t height,
+    VkFormat format,
+    std::span<const std::uint8_t> data,
+    std::string_view name) -> OffscreenTarget
+{
+    auto t = create_offscreen_target(alloc, width, height, format, name);
+
+    if (data.empty()) {
+        return t;
+    }
+
+    VmaAllocatorInfo info{};
+    vmaGetAllocatorInfo(alloc, &info);
+
+    VmaAllocationCreateInfo staging_aci{};
+    staging_aci.usage = VMA_MEMORY_USAGE_AUTO;
+    staging_aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+
+    auto sz = static_cast<std::size_t>(data.size_bytes());
+
+    VkBufferCreateInfo bci{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .size = sz,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = nullptr
+    };
+
+    VkBuffer staging{};
+    VmaAllocation staging_alloc{};
+    vk_check(vmaCreateBuffer(alloc, &bci, &staging_aci, &staging, &staging_alloc, nullptr));
+
+    void* mapped{};
+    vk_check(vmaMapMemory(alloc, staging_alloc, &mapped));
+    std::memcpy(mapped, data.data(), sz);
+    vmaUnmapMemory(alloc, staging_alloc);
+
+    auto submit_copy = [&](VkCommandBuffer cb) {
+        VkImageMemoryBarrier2 pre{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .srcAccessMask = 0,
+            .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .image = t.image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+
+        VkDependencyInfo di_pre{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &pre
+        };
+
+        vkCmdPipelineBarrier2(cb, &di_pre);
+
+        VkBufferImageCopy bic{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageOffset = { 0, 0, 0 },
+            .imageExtent = { width, height, 1 }
+        };
+
+        vkCmdCopyBufferToImage(
+            cb,
+            staging,
+            t.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1,
+            &bic
+        );
+
+        VkImageMemoryBarrier2 post{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .image = t.image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+
+        VkDependencyInfo di_post{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &post
+        };
+
+        vkCmdPipelineBarrier2(cb, &di_post);
+    };
+
+    detail::submit_and_wait(info.device, cmd_pool, queue, submit_copy);
+
+    vmaDestroyBuffer(alloc, staging, staging_alloc);
+
+    return t;
+}
+
 struct InstanceWithDebug {
 	VkInstance instance{ VK_NULL_HANDLE };
 	VkDebugUtilsMessengerEXT messenger{ VK_NULL_HANDLE };
@@ -417,6 +606,8 @@ inline auto create_instance_with_debug(auto& callback, bool is_release) -> Insta
 	}
 
 	has_debug_utils &= !is_release;
+
+	std::println("Validation layers status: '{}'", has_debug_utils ? "Enabled" : "Disabled");
 
 	std::vector<const char*> enabled_extensions;
 
@@ -586,8 +777,8 @@ inline auto create_device(
 		.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
 		.pNext = &features13,
 	};
-
 	vkGetPhysicalDeviceFeatures2(pd, &features2);
+	features2.features.robustBufferAccess = VK_TRUE;
 
 	features12.bufferDeviceAddress = VK_TRUE;
 	features12.bufferDeviceAddressCaptureReplay = VK_TRUE;
@@ -608,17 +799,18 @@ inline auto create_device(
 
 	features13.dynamicRendering = VK_TRUE;
 	features13.synchronization2 = VK_TRUE;
+	features13.robustImageAccess = VK_TRUE;
 
 	if (accel_supported) {
 		accel_features.accelerationStructure = VK_TRUE;
 		accel_features.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
-		accel_features.accelerationStructureHostCommands = VK_TRUE;
 		accel_features.accelerationStructureCaptureReplay = VK_TRUE;
-		accel_features.accelerationStructureIndirectBuild = VK_TRUE;
+		// accel_features.accelerationStructureHostCommands = VK_TRUE;
+		// accel_features.accelerationStructureIndirectBuild = VK_TRUE;
 	}
 
 
-	float priority_graphics = 0.7f;
+	float priority_graphics = 1.0f;
 	VkDeviceQueueCreateInfo qci_graphics{
 		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
 		.pNext = nullptr,

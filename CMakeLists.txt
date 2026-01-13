@@ -1,8 +1,8 @@
-﻿cmake_minimum_required (VERSION 3.31)
+cmake_minimum_required (VERSION 3.31)
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141)
-  cmake_policy(SET CMP0141 NEW)
-  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
+    cmake_policy(SET CMP0141 NEW)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
 project ("BindlessHeadless")
@@ -23,7 +23,9 @@ find_library(SLANG_LIBRARY NAMES slang PATHS ${SLANG_LIB_DIR} REQUIRED)
 find_library(SLANG_COMPILER_LIBRARY NAMES slang-compiler PATHS ${SLANG_LIB_DIR} REQUIRED)
 find_library(SLANG_RT_LIBRARY NAMES slang-rt PATHS ${SLANG_LIB_DIR} REQUIRED)
 
-target_link_libraries(BindlessHeadlessAllocator PRIVATE Vulkan::Vulkan)
+find_package(FastNoise2 CONFIG REQUIRED)
+
+target_link_libraries(BindlessHeadlessAllocator PRIVATE Vulkan::Vulkan PUBLIC FastNoise2::FastNoise)
 target_link_libraries(BindlessHeadless PRIVATE
   Vulkan::Vulkan
   BindlessHeadlessAllocator
@@ -41,14 +43,12 @@ target_compile_options(BindlessHeadless PRIVATE
   $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Werror>
 )
 
-if (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" OR CMAKE_BUILD_TYPE STREQUAL "Release")
-	target_compile_definitions(BindlessHeadless PRIVATE IS_RELEASE=1)
-	else()
-	target_compile_definitions(BindlessHeadless PRIVATE IS_RELEASE=0)
-endif()
+target_compile_definitions(BindlessHeadless PRIVATE
+  IS_RELEASE=$<IF:$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>,1,0>
+)
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET BindlessHeadless PROPERTY CXX_STANDARD 23)
+    set_property(TARGET BindlessHeadless PROPERTY CXX_STANDARD 23)
 endif()
 
 add_custom_command(TARGET BindlessHeadless POST_BUILD
