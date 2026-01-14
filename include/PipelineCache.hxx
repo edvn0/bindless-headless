@@ -7,12 +7,11 @@
 #include <fstream>
 #include <vulkan/vulkan.h>
 
-inline auto pipeline_cache_path(std::int32_t argc, char** argv)
-    -> std::optional<std::filesystem::path>
-{
+inline auto pipeline_cache_path(std::int32_t argc, char **argv)
+    -> std::optional<std::filesystem::path> {
     if (argc > 1) return std::filesystem::path{argv[1]};
 
-    char* buf{};
+    char *buf{};
     size_t sz{};
     auto ok = _dupenv_s(&buf, &sz, "BH_PIPE_CACHE_PATH") == 0 && buf;
     if (!ok) return std::nullopt;
@@ -29,8 +28,7 @@ struct PipelineCache {
     bool has_path{false};
 
     PipelineCache(VkDevice d, std::optional<std::filesystem::path> opt)
-        : device{d}
-    {
+        : device{d} {
         if (opt && !opt->empty()) {
             cache_path = std::move(*opt);
             has_path = true;
@@ -50,21 +48,21 @@ struct PipelineCache {
         vk_check(vkCreatePipelineCache(device, &ci, nullptr, &cache));
     }
 
-    PipelineCache(PipelineCache const&) = delete;
-    auto operator=(PipelineCache const&) -> PipelineCache& = delete;
+    PipelineCache(PipelineCache const &) = delete;
 
-    PipelineCache(PipelineCache&& o) noexcept
+    auto operator=(PipelineCache const &) -> PipelineCache & = delete;
+
+    PipelineCache(PipelineCache &&o) noexcept
         : device{o.device},
           cache{o.cache},
           cache_path{std::move(o.cache_path)},
-          has_path{o.has_path}
-    {
+          has_path{o.has_path} {
         o.device = VK_NULL_HANDLE;
         o.cache = VK_NULL_HANDLE;
         o.has_path = false;
     }
 
-    auto operator=(PipelineCache&& o) noexcept -> PipelineCache& {
+    auto operator=(PipelineCache &&o) noexcept -> PipelineCache & {
         if (this == &o) return *this;
         destroy();
         device = o.device;
@@ -96,7 +94,7 @@ private:
         std::ifstream f{cache_path, std::ios::binary};
         if (!f) return {};
 
-        f.read(reinterpret_cast<char*>(buf.data()),
+        f.read(reinterpret_cast<char *>(buf.data()),
                static_cast<std::streamsize>(buf.size()));
         if (!f) return {};
 
@@ -120,11 +118,13 @@ private:
         r = vkGetPipelineCacheData(device, cache, &sz, buf.data());
         if (r != VK_SUCCESS) return;
 
-        std::ofstream f{cache_path,
-                        std::ios::binary | std::ios::out | std::ios::trunc};
+        std::ofstream f{
+            cache_path,
+            std::ios::binary | std::ios::out | std::ios::trunc
+        };
         if (!f) return;
 
-        f.write(reinterpret_cast<const char*>(buf.data()),
+        f.write(reinterpret_cast<const char *>(buf.data()),
                 static_cast<std::streamsize>(sz));
     }
 };

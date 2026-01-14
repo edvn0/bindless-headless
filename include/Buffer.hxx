@@ -17,7 +17,7 @@ struct BufferCreateError {
 
 struct Buffer {
     std::optional<u64> count;
-    u64 device_address {UINT64_MAX};
+    u64 device_address{UINT64_MAX};
     VkBuffer buffer{nullptr};
     VmaAllocation allocation{nullptr};
     VmaAllocationInfo allocation_info{};
@@ -53,11 +53,12 @@ struct Buffer {
         vmaGetAllocatorInfo(allocator, &info);
 
         VkBufferDeviceAddressInfo dba_info{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-        .pNext = nullptr,
-        .buffer = buffer.buffer,};
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .pNext = nullptr,
+            .buffer = buffer.buffer,
+        };
 
-        buffer.device_address= vkGetBufferDeviceAddress(info.device, &dba_info);
+        buffer.device_address = vkGetBufferDeviceAddress(info.device, &dba_info);
 
         const auto pointer = buffer.allocation_info.pMappedData;
         std::memcpy(pointer, slice.data(), slice.size_bytes());
@@ -66,5 +67,5 @@ struct Buffer {
     }
 
 private:
-    auto set_name(VmaAllocator&, std::string_view) -> void;
+    auto set_name(VmaAllocator &, std::string_view) const -> void;
 };

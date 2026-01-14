@@ -7,8 +7,8 @@ endif()
 
 project ("BindlessHeadless")
 
-add_executable (BindlessHeadless "BindlessHeadless.cpp" "Pool.cxx" "ImageOperations.cxx" "Buffer.cxx")
-add_library(BindlessHeadlessAllocator STATIC "allocator.cpp")
+add_executable (BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx")
+add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
 
@@ -32,8 +32,14 @@ target_link_libraries(BindlessHeadless PRIVATE
   ${SLANG_RT_LIBRARY}
 )
 
+option(HAS_RENDERDOC "Enable RenderDoc integration" OFF)
+
+if(HAS_RENDERDOC)
+    target_compile_options(BindlessHeadless PUBLIC HAS_RENDERDOC=1)
+endif()
+
 # Add Slang include directory
-target_include_directories(BindlessHeadless PRIVATE ${SLANG_INCLUDE_DIR})
+target_include_directories(BindlessHeadless PRIVATE ${SLANG_INCLUDE_DIR} ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 
 target_compile_definitions(BindlessHeadless PRIVATE _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1)
 target_compile_options(BindlessHeadless PRIVATE
