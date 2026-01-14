@@ -11,6 +11,8 @@
 
 #include <vma/vk_mem_alloc.h>
 
+#include "Buffer.hxx"
+
 
 struct DeferredDestroyQueue {
 	struct Item {
@@ -253,13 +255,24 @@ struct DestructionContext {
 	using TexturePool = Pool<TextureTag, OffscreenTarget>;
 
 	TexturePool textures{};
-	auto create_texture(OffscreenTarget&& target) -> TextureHandle;
+	auto create_texture(OffscreenTarget&& ) -> TextureHandle;
 
 	using SamplerHandle = Handle<struct SamplerTag>;
 	using SamplerPool = Pool<SamplerTag, VkSampler>;
 
 	SamplerPool samplers{};
-	auto create_sampler(VkSampler&& sampler) -> SamplerHandle;
+	auto create_sampler(VkSampler&& ) -> SamplerHandle;
+	auto create_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
+
+	using BufferHandle = Handle<struct BufferTag>;
+	using BufferPool = Pool<BufferTag, Buffer>;
+
+	BufferPool buffers{};
+	auto create_buffer(Buffer&&) -> BufferHandle;
+	auto device_address(BufferHandle) -> u64;
+
+private:
+	[[nodiscard]] auto get_device() const -> VkDevice;
 };
 
 auto destroy(DestructionContext& ctx,

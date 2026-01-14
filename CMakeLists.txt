@@ -7,7 +7,7 @@ endif()
 
 project ("BindlessHeadless")
 
-add_executable (BindlessHeadless "BindlessHeadless.cpp" "Pool.cxx" "ImageOperations.cxx")
+add_executable (BindlessHeadless "BindlessHeadless.cpp" "Pool.cxx" "ImageOperations.cxx" "Buffer.cxx")
 add_library(BindlessHeadlessAllocator STATIC "allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)

@@ -5,6 +5,8 @@
 #include "Pool.hxx"
 #include "PipelineCache.hxx"
 #include "Reflection.hxx"
+#include "Compiler.hxx"
+#include "Buffer.hxx"
 
 #include "3PP/PerlinNoise.hpp"
 
@@ -16,6 +18,7 @@
 #include <thread>
 #include <vector>
 
+
 auto generate_perlin(auto w, auto h) -> std::vector<std::uint8_t> {
     std::vector<std::uint8_t> data;
     data.resize(w * h);
@@ -23,11 +26,11 @@ auto generate_perlin(auto w, auto h) -> std::vector<std::uint8_t> {
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
     const siv::PerlinNoise pn{ seed };
 
-    auto z_offset = 0.0;
+        auto z_offset = 0.0;
     for (auto y = 0; y < h; ++y) {
-        auto row_z = z_offset + static_cast<double>(y) * 0.01;
+        const auto row_z = z_offset + static_cast<double>(y) * 0.01;
         for (auto x = 0; x < w; ++x) {
-            auto nx = static_cast<double>(x) / static_cast<double>(w);
+            const auto nx = static_cast<double>(x) / static_cast<double>(w);
             auto ny = static_cast<double>(y) / static_cast<double>(h);
             auto value = pn.noise3D(nx * 8.0, ny * 8.0, row_z);
             value = (value + 1.0) / 2.0;
@@ -35,6 +38,7 @@ auto generate_perlin(auto w, auto h) -> std::vector<std::uint8_t> {
                  static_cast<std::size_t>(x)] =
                 static_cast<std::uint8_t>(value * 255.0);
         }
+        z_offset+=0.0001;
     }
 
     return data;
@@ -193,8 +197,7 @@ if(HMODULE mod = GetModuleHandleA("renderdoc.dll"))
     auto handle = ctx.create_texture(create_offscreen_target(
         allocator, 1280u, 720u, VK_FORMAT_R8G8B8A8_UNORM, "offscreen"));
 
-    ctx.create_sampler(create_sampler(
-        allocator,
+    ctx.create_sampler(
         VkSamplerCreateInfo{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext = nullptr,
@@ -215,7 +218,7 @@ if(HMODULE mod = GetModuleHandleA("renderdoc.dll"))
             .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
             .unnormalizedCoordinates = VK_FALSE,
         },
-        "linear_repeat"));
+        "linear_repeat");
 
         auto perlin_sampler = ctx.create_sampler(create_sampler(allocator,
     VkSamplerCreateInfo{
@@ -242,11 +245,23 @@ if(HMODULE mod = GetModuleHandleA("renderdoc.dll"))
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    struct PointLight {
+        std::array<float, 4> position_radius;
+        std::array<float, 4> colour_intensity;
+    };
+
+    auto all_point_lights = std::vector<PointLight>(500);
+
+    auto point_light_handle =
+        ctx.buffers.create(Buffer::from_slice<PointLight>(allocator, VkBufferCreateInfo{
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, }, VmaAllocationCreateInfo{},all_point_lights, "point_light").value()
+    );
+
     for (i = 0; i < 6; ++i) {
         if(rdoc_api) rdoc_api->StartFrameCapture(RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(instance.instance), NULL);
         bindless.repopulate_if_needed(ctx.textures, ctx.samplers);
 
-        const std::uint32_t frame_index =
+        const auto frame_index =
             static_cast<std::uint32_t>(i % frames_in_flight);
         auto &fs = frames[frame_index];
 
@@ -373,8 +388,8 @@ if(HMODULE mod = GetModuleHandleA("renderdoc.dll"))
             gbuffer_val;
         fs.frame_done_value = gbuffer_val;
 
-        throttle(tl_compute, device);
-        throttle(tl_graphics, device);
+       // throttle(tl_compute, device);
+       // throttle(tl_graphics, device);
 
         const auto completed =
             std::min(tl_compute.completed, tl_graphics.completed);
