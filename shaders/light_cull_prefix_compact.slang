@@ -25,15 +25,12 @@ PushConstants g_push;
 
 bool sphere_in_frustum(float3 view_pos, float radius, float4 frustum_planes[6])
 {
-    // Test sphere against all 6 planes
     for (int i = 0; i < 6; ++i) {
         float3 normal = frustum_planes[i].xyz;
         float d = frustum_planes[i].w;
 
-        // Signed distance from sphere center to plane
         float dist = dot(normal, view_pos) + d;
 
-        // If sphere is completely outside any plane, it's culled
         if (dist < -radius)
             return false;
     }
@@ -46,7 +43,6 @@ bool light_in_frustum(PointLight l, float4x4 view, float4 frustum_planes[6])
     float3 world_pos = l.position_radius.xyz;
     float  radius    = l.position_radius.w;
 
-    // Transform to view space
     float4 view_pos4 = mul(view, float4(world_pos, 1.0f));
     float3 view_pos = view_pos4.xyz;
 

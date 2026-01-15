@@ -1,21 +1,28 @@
-cmake_minimum_required (VERSION 3.31)
+cmake_minimum_required(VERSION 3.31)
+
 # Enable Hot Reload for MSVC compilers if supported.
-if (POLICY CMP0141)
-    cmake_policy(SET CMP0141 NEW)
-    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
+if(POLICY CMP0141)
+  cmake_policy(SET CMP0141 NEW)
+  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
-project ("BindlessHeadless")
+project("BindlessHeadless")
 
 include(cmake/CPM.cmake)
 
 # CPMAddPackage("gh:nlohmann/json@3.10.5")
 CPMAddPackage(
-    URI "gh:g-truc/glm#1.0.3"
-    OPTIONS "GLM_ENABLE_CXX_20 ON" "GLM_ENABLE_SIMD_AVX2 ON" "GLM_ENABLE_SIMD_AVX ON" "GLM_ENABLE_SIMD_SSE4_2 ON" "GLM_ENABLE_SIMD_SSE2 ON"
+  URI "gh:g-truc/glm#1.0.3"
+  OPTIONS "GLM_ENABLE_CXX_20 ON" "GLM_ENABLE_SIMD_AVX2 ON" "GLM_ENABLE_SIMD_AVX ON" "GLM_ENABLE_SIMD_SSE4_2 ON" "GLM_ENABLE_SIMD_SSE2 ON"
 )
 
-add_executable (BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx")
+CPMAddPackage(
+  NAME CLI11
+  GITHUB_REPOSITORY CLIUtils/CLI11
+  VERSION 2.6.1
+)
+
+add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx")
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
@@ -40,14 +47,15 @@ target_link_libraries(BindlessHeadless PRIVATE
   ${SLANG_COMPILER_LIBRARY}
   ${SLANG_RT_LIBRARY}
   spdlog::spdlog
-    PUBLIC
-        glm::glm
+  PUBLIC
+  glm::glm
+  CLI11::CLI11
 )
 
 option(HAS_RENDERDOC "Enable RenderDoc integration" OFF)
 
 if(HAS_RENDERDOC)
-    target_compile_options(BindlessHeadless PUBLIC HAS_RENDERDOC=1)
+  target_compile_options(BindlessHeadless PUBLIC HAS_RENDERDOC=1)
 endif()
 
 # Add Slang include directory
@@ -64,13 +72,13 @@ target_compile_definitions(BindlessHeadless PRIVATE
   IS_RELEASE=$<IF:$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>,1,0>
 )
 
-if (CMAKE_VERSION VERSION_GREATER 3.12)
-    set_property(TARGET BindlessHeadless PROPERTY CXX_STANDARD 23)
+if(CMAKE_VERSION VERSION_GREATER 3.12)
+  set_property(TARGET BindlessHeadless PROPERTY CXX_STANDARD 23)
 endif()
 
 add_custom_command(TARGET BindlessHeadless POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_SOURCE_DIR}/shaders
-    $<TARGET_FILE_DIR:BindlessHeadless>/shaders
+  ${CMAKE_SOURCE_DIR}/shaders
+  $<TARGET_FILE_DIR:BindlessHeadless>/shaders
   COMMENT "Copying shaders directory to output"
 )

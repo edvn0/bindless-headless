@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include "Logger.hxx"
 #include "Pool.hxx"
 #include "Forward.hxx"
 #include "Types.hxx"
@@ -173,7 +174,7 @@ auto create_instance_with_debug(auto &callback, bool is_release) -> InstanceWith
 
     has_debug_utils &= !is_release;
 
-    std::println("Validation layers status: '{}'", has_debug_utils ? "Enabled" : "Disabled");
+    info("Validation layers status: '{}'", has_debug_utils ? "Enabled" : "Disabled");
 
     std::vector<const char *> enabled_extensions;
 
@@ -237,6 +238,14 @@ using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32>;
 
 auto pick_physical_device(VkInstance instance)
     -> std::expected<DeviceChoice, PhysicalDeviceChoice> ;
+
+    enum class GpuStamp : u32 {
+    Begin = 0,
+    End = 1,
+    Count = 2
+};
+
+inline constexpr u32 query_count = static_cast<u32>(GpuStamp::Count);
 
 auto create_device(
     VkPhysicalDevice pd,

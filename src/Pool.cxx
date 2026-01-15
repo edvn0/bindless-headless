@@ -31,9 +31,10 @@ auto DestructionContext::create_sampler(const VkSamplerCreateInfo info, const st
     return create_sampler(::create_sampler(allocator, ci, name));
 }
 
-auto DestructionContext::create_buffer(Buffer &&buffer) -> BufferHandle {
-    bindless_set->need_repopulate = true;
-    return buffers.create(std::move(buffer));
+auto DestructionContext::create_buffer(Buffer &&buffer) -> BufferHandle { return buffers.create(std::move(buffer)); }
+
+auto DestructionContext::create_query_pool(QueryPoolState &&state) -> QueryPoolHandle {
+    return query_pools.create(std::move(state));
 }
 
 auto DestructionContext::device_address(BufferHandle handle) -> DeviceAddress {
@@ -44,9 +45,7 @@ auto DestructionContext::device_address(BufferHandle handle) -> DeviceAddress {
 }
 
 
-auto destroy(DestructionContext &ctx,
-             DestructionContext::TextureHandle handle,
-             u64 retire_value) -> void {
+auto destroy(DestructionContext &ctx, DestructionContext::TextureHandle handle, u64 retire_value) -> void {
     auto impl = ctx.textures.take(handle);
     if (!impl) {
         return;
@@ -55,15 +54,16 @@ auto destroy(DestructionContext &ctx,
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, img = std::move(*impl)]() {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
-        if (img.storage_view) vkDestroyImageView(info.device, img.storage_view, nullptr);
-        if (img.sampled_view) vkDestroyImageView(info.device, img.sampled_view, nullptr);
-        if (img.image) vmaDestroyImage(alloc, img.image, img.allocation);
+        if (img.storage_view)
+            vkDestroyImageView(info.device, img.storage_view, nullptr);
+        if (img.sampled_view)
+            vkDestroyImageView(info.device, img.sampled_view, nullptr);
+        if (img.image)
+            vmaDestroyImage(alloc, img.image, img.allocation);
     });
 }
 
-auto destroy(DestructionContext &ctx,
-             DestructionContext::SamplerHandle handle,
-             u64 retire_value) -> void {
+auto destroy(DestructionContext &ctx, DestructionContext::SamplerHandle handle, u64 retire_value) -> void {
     auto impl = ctx.samplers.take(handle);
     if (!impl) {
         return;
@@ -76,9 +76,7 @@ auto destroy(DestructionContext &ctx,
     });
 }
 
-auto destroy(DestructionContext &ctx,
-             DestructionContext::BufferHandle handle,
-             u64 retire_value) -> void {
+auto destroy(DestructionContext &ctx, DestructionContext::BufferHandle handle, u64 retire_value) -> void {
     auto impl = ctx.buffers.take(handle);
     if (!impl) {
         return;
@@ -87,6 +85,20 @@ auto destroy(DestructionContext &ctx,
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, buf = std::move(*impl)]() {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
-        if (buf.buffer) vmaDestroyBuffer(alloc, buf.buffer, buf.allocation);
+        if (buf.buffer)
+            vmaDestroyBuffer(alloc, buf.buffer, buf.allocation);
+    });
+}
+
+auto destroy(DestructionContext &ctx, DestructionContext::QueryPoolHandle handle, u64 retire_value) -> void {
+    auto impl = ctx.query_pools.take(handle);
+    if (!impl) {
+        return;
+    }
+
+    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, pool = std::move(*impl)]() {
+        VmaAllocatorInfo info{};
+        vmaGetAllocatorInfo(alloc, &info);
+        vkDestroyQueryPool(info.device, pool.pool, nullptr);
     });
 }

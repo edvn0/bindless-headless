@@ -245,6 +245,12 @@ private:
     }
 };
 
+struct QueryPoolState {
+    VkQueryPool pool = VK_NULL_HANDLE;
+    u32 query_count = 0;
+    double timestamp_period_ns = 1.0; // from VkPhysicalDeviceLimits::timestampPeriod
+};
+
 struct DestructionContext {
     VmaAllocator &allocator;
     DeferredDestroyQueue destroy_queue{};
@@ -254,24 +260,26 @@ struct DestructionContext {
     using TexturePool = Pool<TextureTag, OffscreenTarget>;
 
     TexturePool textures{};
-
     auto create_texture(OffscreenTarget &&) -> TextureHandle;
 
     using SamplerHandle = Handle<struct SamplerTag>;
     using SamplerPool = Pool<SamplerTag, VkSampler>;
 
     SamplerPool samplers{};
-
     auto create_sampler(VkSampler &&) -> SamplerHandle;
-
     auto create_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
 
     using BufferHandle = Handle<struct BufferTag>;
     using BufferPool = Pool<BufferTag, Buffer>;
 
     BufferPool buffers{};
-
     auto create_buffer(Buffer &&) -> BufferHandle;
+
+using QueryPoolHandle = Handle<struct QueryPoolTag>;
+    using QueryPoolPool   = Pool<QueryPoolTag, QueryPoolState>;
+    QueryPoolPool query_pools{};
+    auto create_query_pool(QueryPoolState &&) -> QueryPoolHandle;
+
 
     auto device_address(BufferHandle) -> DeviceAddress;
 
@@ -289,4 +297,8 @@ auto destroy(DestructionContext &ctx,
 
 auto destroy(DestructionContext &ctx,
              DestructionContext::BufferHandle handle,
+             u64 retire_value = UINT64_MAX) -> void;
+
+             auto destroy(DestructionContext &ctx,
+             DestructionContext::QueryPoolHandle handle,
              u64 retire_value = UINT64_MAX) -> void;
