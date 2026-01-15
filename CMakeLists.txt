@@ -7,12 +7,21 @@ endif()
 
 project ("BindlessHeadless")
 
-add_executable (BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx")
+include(cmake/CPM.cmake)
+
+# CPMAddPackage("gh:nlohmann/json@3.10.5")
+CPMAddPackage(
+    URI "gh:g-truc/glm#1.0.3"
+    OPTIONS "GLM_ENABLE_CXX_20 ON" "GLM_ENABLE_SIMD_AVX2 ON" "GLM_ENABLE_SIMD_AVX ON" "GLM_ENABLE_SIMD_SSE4_2 ON" "GLM_ENABLE_SIMD_SSE2 ON"
+)
+
+add_executable (BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx")
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
 
 find_package(Vulkan REQUIRED)
+find_package(spdlog REQUIRED)
 
 # Add Slang libraries manually
 set(SLANG_LIB_DIR "${Vulkan_INCLUDE_DIR}/../Lib")
@@ -30,6 +39,9 @@ target_link_libraries(BindlessHeadless PRIVATE
   ${SLANG_LIBRARY}
   ${SLANG_COMPILER_LIBRARY}
   ${SLANG_RT_LIBRARY}
+  spdlog::spdlog
+    PUBLIC
+        glm::glm
 )
 
 option(HAS_RENDERDOC "Enable RenderDoc integration" OFF)
@@ -42,6 +54,7 @@ endif()
 target_include_directories(BindlessHeadless PRIVATE ${SLANG_INCLUDE_DIR} ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 
 target_compile_definitions(BindlessHeadless PRIVATE _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1)
+target_compile_definitions(BindlessHeadless PUBLIC GLM_FORCE_LEFT_HANDED GLM_FORCE_DEPTH_ZERO_TO_ONE)
 target_compile_options(BindlessHeadless PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX>
   $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Werror>

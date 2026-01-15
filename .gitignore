@@ -7,3 +7,6 @@ out
 *.png
 compile_commands.json
 .idea
+logs
+.logs
+app_logs

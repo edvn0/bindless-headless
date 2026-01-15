@@ -15,9 +15,13 @@ struct BufferCreateError {
     Type type{};
 };
 
+enum class DeviceAddress: std::uint64_t {
+    Invalid = 0,
+};
+
 struct Buffer {
     std::optional<u64> count;
-    u64 device_address{UINT64_MAX};
+    DeviceAddress device_address{UINT64_MAX};
     VkBuffer buffer{nullptr};
     VmaAllocation allocation{nullptr};
     VmaAllocationInfo allocation_info{};
@@ -35,10 +39,10 @@ struct Buffer {
         ci.size = size;
         ci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-        ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        ai.usage        = VMA_MEMORY_USAGE_AUTO;
+        ai.flags        = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                          VMA_ALLOCATION_CREATE_MAPPED_BIT;
         ai.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
-
 
         Buffer buffer{};
         if (const auto could = vmaCreateBuffer(allocator, &ci, &ai, &buffer.buffer, &buffer.allocation,
@@ -58,7 +62,7 @@ struct Buffer {
             .buffer = buffer.buffer,
         };
 
-        buffer.device_address = vkGetBufferDeviceAddress(info.device, &dba_info);
+        buffer.device_address = static_cast<DeviceAddress>(vkGetBufferDeviceAddress(info.device, &dba_info));
 
         const auto pointer = buffer.allocation_info.pMappedData;
         std::memcpy(pointer, slice.data(), slice.size_bytes());

@@ -1,4 +1,5 @@
 #pragma once
+#include "Logger.hxx"
 
 struct CompilerSession {
     Slang::ComPtr<slang::IGlobalSession> global;
@@ -15,11 +16,20 @@ struct CompilerSession {
         desc.targets = &target;
         desc.targetCount = 1;
 
-        std::array<slang::CompilerOptionEntry, 1> opts = {
+        std::array opts = {
             slang::CompilerOptionEntry{
                 slang::CompilerOptionName::EmitSpirvDirectly,
                 {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}
+            },
+            slang::CompilerOptionEntry{
+                slang::CompilerOptionName::VulkanUseEntryPointName,
+                {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr}
+            },
+            slang::CompilerOptionEntry{
+                slang::CompilerOptionName::Optimization,
+                {slang::CompilerOptionValueKind::Int, SLANG_OPTIMIZATION_LEVEL_HIGH, 0, nullptr, nullptr}
             }
+            //
         };
 
         desc.compilerOptionEntries = opts.data();
@@ -44,7 +54,7 @@ struct CompilerSession {
         );
 
         if (diagnostics) {
-            std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
         }
 
         if (!module) {
@@ -71,7 +81,7 @@ struct CompilerSession {
         );
 
         if (diagnostics) {
-            std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
         }
         if (!module) {
             std::abort();
@@ -106,8 +116,8 @@ struct CompilerSession {
     // previous compute-only helpers can forward to this if you wish
     auto compile_compute_from_file(
         std::string_view path,
-        std::string_view entry) -> std::vector<std::uint32_t> {
-        return compile_entry_from_file(path, entry, nullptr);
+        std::string_view entry, ReflectionData* data= nullptr) -> std::vector<std::uint32_t> {
+        return compile_entry_from_file(path, entry, data);
     }
 
 private:
@@ -118,7 +128,7 @@ private:
             Slang::ComPtr<slang::IBlob> diagnostics;
             module->findEntryPointByName(entry.data(), ep.writeRef());
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (!ep) {
                 std::abort();
@@ -139,7 +149,7 @@ private:
                 diagnostics.writeRef()
             );
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (SLANG_FAILED(result)) {
                 std::abort();
@@ -150,7 +160,7 @@ private:
             Slang::ComPtr<slang::IBlob> diagnostics;
             auto result = composed->link(linked.writeRef(), diagnostics.writeRef());
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (SLANG_FAILED(result)) {
                 std::abort();
@@ -161,7 +171,7 @@ private:
             Slang::ComPtr<slang::IBlob> diagnostics;
             auto result = linked->getEntryPointCode(0, 0, spirv.writeRef(), diagnostics.writeRef());
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (SLANG_FAILED(result)) {
                 std::abort();
@@ -179,11 +189,12 @@ private:
         Slang::ComPtr<slang::IModule> const &module,
         std::string_view entry,
         ReflectionData *out_reflection) -> std::vector<std::uint32_t> {
-        Slang::ComPtr<slang::IEntryPoint> ep; {
+        Slang::ComPtr<slang::IEntryPoint> ep;
+        {
             Slang::ComPtr<slang::IBlob> diagnostics;
             module->findEntryPointByName(entry.data(), ep.writeRef());
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (!ep) {
                 std::abort();
@@ -204,7 +215,7 @@ private:
                 diagnostics.writeRef()
             );
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (SLANG_FAILED(result)) {
                 std::abort();
@@ -215,7 +226,7 @@ private:
             Slang::ComPtr<slang::IBlob> diagnostics;
             auto result = composed->link(linked.writeRef(), diagnostics.writeRef());
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (SLANG_FAILED(result)) {
                 std::abort();
@@ -230,7 +241,7 @@ private:
             Slang::ComPtr<slang::IBlob> diagnostics;
             auto result = linked->getEntryPointCode(0, 0, spirv.writeRef(), diagnostics.writeRef());
             if (diagnostics) {
-                std::cerr << static_cast<const char *>(diagnostics->getBufferPointer());
+            warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
             }
             if (SLANG_FAILED(result)) {
                 std::abort();

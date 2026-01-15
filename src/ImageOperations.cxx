@@ -1,6 +1,8 @@
 #include "../include/ImageOperations.hxx"
 #include <cstring>
 
+#include "Logger.hxx"
+
 namespace image_operations {
     namespace {
         auto write_bmp_headers(std::ofstream &output, u32 width, u32 height) -> void {
@@ -118,13 +120,13 @@ namespace image_operations {
         std::string_view filename) -> void {
         auto output = std::ofstream{filename.data(), std::ios::binary};
         if (!output) {
-            std::cerr << "Failed to open output file: " << filename << "\n";
+            error("Failed to open output file for writing {}", filename);
             return;
         }
 
         auto resolved = textures.get(texture);
         if (!resolved) {
-            std::cerr << "Invalid texture handle for writing to disk.\n";
+            error("Invalid texture handle for writing to disk");
             return;
         }
 
@@ -146,8 +148,7 @@ namespace image_operations {
                 pixel_size = 1u;
                 break;
             default:
-                std::cerr << "Unsupported format for writing to disk: "
-                        << static_cast<u32>(tex.format) << "\n";
+                error("Unsupported format for writing to disk: {}", string_VkFormat(tex.format));
                 return;
         }
 
@@ -176,7 +177,7 @@ namespace image_operations {
         auto result = vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info,
                                       &staging_buffer, &staging_allocation, &staging_alloc_info);
         if (result != VK_SUCCESS) {
-            std::cerr << "Failed to create staging buffer: " << result << "\n";
+            error("Failed to create staging buffer: {}", string_VkResult(result));
             return;
         }
 
@@ -188,7 +189,7 @@ namespace image_operations {
         };
         result = vkCreateCommandPool(allocator_info.device, &command_pool_create_info, nullptr, &command_pool);
         if (result != VK_SUCCESS) {
-            std::cerr << "Failed to create command pool: " << result << "\n";
+            error("Failed to create command pool: {}", string_VkResult(result));
             vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
             return;
         }
@@ -202,7 +203,7 @@ namespace image_operations {
         };
         result = vkAllocateCommandBuffers(allocator_info.device, &command_buffer_alloc_info, &command_buffer);
         if (result != VK_SUCCESS) {
-            std::cerr << "Failed to allocate command buffer: " << result << "\n";
+            error("Failed to allocate command buffer: {}", string_VkResult(result));
             vkDestroyCommandPool(allocator_info.device, command_pool, nullptr);
             vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
             return;

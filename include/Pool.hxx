@@ -40,7 +40,7 @@ struct DeferredDestroyQueue {
 };
 
 
-template<typename ObjectType>
+template<typename>
 class Handle final {
 public:
     Handle() = default;
@@ -273,7 +273,7 @@ struct DestructionContext {
 
     auto create_buffer(Buffer &&) -> BufferHandle;
 
-    auto device_address(BufferHandle) -> u64;
+    auto device_address(BufferHandle) -> DeviceAddress;
 
 private:
     [[nodiscard]] auto get_device() const -> VkDevice;

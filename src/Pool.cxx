@@ -36,11 +36,11 @@ auto DestructionContext::create_buffer(Buffer &&buffer) -> BufferHandle {
     return buffers.create(std::move(buffer));
 }
 
-auto DestructionContext::device_address(BufferHandle handle) -> u64 {
-    if (auto *buf = buffers.get(handle)) {
+auto DestructionContext::device_address(BufferHandle handle) -> DeviceAddress {
+    if (const auto *buf = buffers.get(handle)) {
         return buf->device_address;
     }
-    return UINT64_MAX;
+    return DeviceAddress::Invalid;
 }
 
 
