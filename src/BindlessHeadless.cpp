@@ -291,8 +291,7 @@ auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat for
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-            VK_IMAGE_USAGE_STORAGE_BIT |
-                 VK_IMAGE_USAGE_SAMPLED_BIT,  // Optional: if you want to sample depth
+                 VK_IMAGE_USAGE_SAMPLED_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0,
         .pQueueFamilyIndices = nullptr,
@@ -336,9 +335,7 @@ auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat for
     };
     vk_check(vkCreateImageView(info.device, &depth_vci, nullptr, &t.sampled_view));
 
-    // For depth targets, we typically don't need a separate storage view
-    // But if you want to read depth in compute shaders, you can create one
-    t.storage_view = t.sampled_view;  // Reuse the same view
+    t.storage_view = VK_NULL_HANDLE;
 
     // Set debug names
     auto depth_view_name = std::format("{}_depth_view", name);
@@ -723,9 +720,11 @@ auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device)
 }
 
 auto throttle(TimelineCompute &tl, VkDevice device) -> void {
-    if (tl.value <= tl.completed + max_in_flight) {
-        return;
-    }
+    u64 current = 0;
+    vk_check(vkGetSemaphoreCounterValue(device, tl.timeline, &current));
+    tl.completed = current;
+
+    if (tl.value <= tl.completed + max_in_flight) return;
 
     const u64 wait_val = tl.value - max_in_flight;
 

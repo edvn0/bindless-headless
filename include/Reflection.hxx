@@ -304,8 +304,8 @@ inline auto reflect_entry_point(
     e.stage_name = stage_key;
     e.stage_flags.insert(stage_key);
 
-    const int param_count = entry_point->getParameterCount();
-    for (int i = 0; i < param_count; ++i) {
+    const u32 param_count = entry_point->getParameterCount();
+    for (auto i = 0U; i < param_count; ++i) {
         auto *param_layout = entry_point->getParameterByIndex(i);
         reflect_parameter_into_entry(e, param_layout);
     }

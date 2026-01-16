@@ -112,10 +112,12 @@ struct TimelineCompute {
     u64 value{};
     u64 completed{};
 
-    static constexpr u32 buffered = 3;
+    static constexpr u32 submits_per_frame = 2;
+    static constexpr u32 buffered = submits_per_frame*frames_in_flight;
 
     VkCommandPool pool{};
     std::array<VkCommandBuffer, buffered> cmds{};
+    std::array<u64, buffered> slot_last_signal{};
 
     auto destroy(VkDevice device) -> void {
         if (timeline) vkDestroySemaphore(device, timeline, nullptr);
@@ -271,10 +273,10 @@ auto create_allocator(
 template<typename RecordFn>
 auto submit_stage(
     TimelineCompute &tl,
-    VkDevice,
+    VkDevice device,
     RecordFn &&record,
     std::span<const VkSemaphore> wait_semaphores,
-    std::span<const u64> wait_values) -> u64 {
+    std::span<const u64> wait_values) -> u64  {
     if (wait_semaphores.size() != wait_values.size()) {
         std::abort();
     }
@@ -282,6 +284,21 @@ auto submit_stage(
     const u32 index =
             static_cast<u32>(tl.value % TimelineCompute::buffered);
     VkCommandBuffer cmd = tl.cmds[index];
+
+    const u64 last = tl.slot_last_signal[index];
+    if (last != 0) {
+        VkSemaphoreWaitInfo wi{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .semaphoreCount = 1,
+            .pSemaphores = &tl.timeline,
+            .pValues = &last
+        };
+        vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
+        tl.completed = std::max(tl.completed, last);
+    }
+
 
     vk_check(vkResetCommandBuffer(cmd, 0));
 
@@ -308,10 +325,7 @@ auto submit_stage(
         .pSignalSemaphoreValues = &signal_val
     };
 
-    std::vector<VkPipelineStageFlags> wait_stages(wait_semaphores.size());
-    for (std::size_t i = 0; i < wait_semaphores.size(); ++i) {
-        wait_stages[i] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    }
+    std::vector<VkPipelineStageFlags> wait_stages(wait_semaphores.size(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
     VkSubmitInfo si{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -326,6 +340,10 @@ auto submit_stage(
     };
 
     vk_check(vkQueueSubmit(tl.queue, 1, &si, VK_NULL_HANDLE));
+
+    // NEW: remember which timeline value this slot corresponds to
+    tl.slot_last_signal[index] = signal_val;
+
     tl.value = signal_val;
     return signal_val;
 }
@@ -338,5 +356,14 @@ namespace destruction {
     auto bindless_set(VkDevice device, BindlessSet &bs) -> void;
     auto allocator(VmaAllocator &alloc) -> void ;
     auto timeline_compute(VkDevice device, TimelineCompute &comp) -> void ;
+
+    template<typename T> concept PipelineProvider = requires (T t) {
+        {t.pipeline} -> std::same_as<VkPipeline&>;
+        {t.layout} -> std::same_as<VkPipelineLayout&>;
+    };
     auto pipeline(VkDevice dev, VkPipeline& p, VkPipelineLayout& l) -> void ;
+    auto pipeline(VkDevice dev, PipelineProvider auto& val) {
+        destruction::pipeline(dev, val.pipeline, val.layout);
+    }
+
 }

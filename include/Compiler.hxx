@@ -4,6 +4,8 @@
 #include "Forward.hxx"
 #include "Types.hxx"
 
+#include <vector>
+
 #include <slang/slang.h>
 #include <slang/slang-com-ptr.h>
 #include <slang/slang-com-helper.h>
@@ -37,6 +39,19 @@ struct CompilerSession {
         std::string_view path,
         std::string_view entry, ReflectionData *data = nullptr) -> std::vector<std::uint32_t>;
 
+    template<std::size_t N>
+    auto compile_from_file(std::string_view path, const std::span<const std::string_view, N> entries, const std::span<ReflectionData, N> reflection_data) {
+        std::array<std::vector<std::uint32_t>, N> spirv_data{};
+        auto shader_source = load_shader_file(path);
+
+        for (std::size_t i = 0; i < N; ++i) {
+            std::filesystem::path entry_path(path);
+            info("Shader key: {}", entry_path.string());
+            spirv_data[i] = compile_entry_from_string(entry_path.filename().string(), path, shader_source, entries[i], &reflection_data[i]);
+        }
+        return spirv_data;
+    }
+
 private:
     auto compile_compute_module(
         Slang::ComPtr<slang::IModule> const &module,
@@ -46,4 +61,6 @@ private:
         Slang::ComPtr<slang::IModule> const &module,
         std::string_view entry,
         ReflectionData *out_reflection) -> std::vector<std::uint32_t>;
+
+    auto load_shader_file(std::string_view) -> std::string;
 };

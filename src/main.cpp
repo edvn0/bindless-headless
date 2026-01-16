@@ -10,6 +10,8 @@
 #include "Pool.hxx"
 #include "Reflection.hxx"
 
+#include <iostream>
+#include <ranges>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -139,9 +141,39 @@ static VkBool32 debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT mess
     return VK_FALSE;
 }
 
+struct CompiledPipeline {
+    VkPipeline pipeline {VK_NULL_HANDLE};
+    VkPipelineLayout layout {VK_NULL_HANDLE};
+};
+
+auto create_compute_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout ,
+                             const std::vector<u32> &,  std::string_view )
+    ->CompiledPipeline;
+
+template<std::size_t N>
+auto create_compute_pipelines(
+    VkDevice device,
+    PipelineCache& cache,
+    VkDescriptorSetLayout layout,
+    std::span<std::vector<u32>, N> codes,
+    std::span<const std::string_view, N> names)
+    -> std::array<CompiledPipeline, N>
+{
+    std::array<CompiledPipeline, N> out{};
+
+    auto rng = std::views::zip(codes, names)
+             | std::views::transform([&](auto&& zipped) {
+                   auto&& [code, name] = zipped;
+                   return create_compute_pipeline(device, cache, layout, code, name);
+               });
+
+    std::ranges::copy(rng, out.begin());
+    return out;
+}
+
 auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
                              const std::vector<u32> &code, const std::string_view entry_name)
-    -> std::pair<VkPipeline, VkPipelineLayout> {
+    ->CompiledPipeline {
     VkShaderModule compute_shader{};
     VkShaderModuleCreateInfo create_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -192,7 +224,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     vk_check(vkCreateComputePipelines(device, cache, 1, &cpci, nullptr, &pipeline));
 
     vkDestroyShaderModule(device, compute_shader, nullptr);
-    return std::make_pair(pipeline, pi_layout);
+    return {pipeline, pi_layout};
 }
 
 auto create_predepth_pipeline(
@@ -766,14 +798,12 @@ auto execute(int argc, char **argv) -> int {
 
     auto command_context = create_global_cmd_context(device, graphics_queue, graphics_index);
 
-    auto flags_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightFlagsCS");
-    auto scan_local_code =
-            compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightScanLocalCS");
-    auto scan_groups_code =
-            compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightScanGroupsCS");
-    auto compact_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightCompactCS");
-    auto setup_indirect_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang",
-                                                                  "SetupIndirectCS");
+    std::array< const std::string_view, 5> names = {"LightFlagsCS"
+,"LightScanLocalCS"
+,"LightScanGroupsCS"
+,"LightCompactCS","SetupIndirectCS"};
+    std::array<ReflectionData, 5> reflection_data = {};
+    auto culling_code = compiler.compile_from_file("shaders/light_cull_prefix_compact.slang", std::span(names),std::span(reflection_data));
 
     auto point_light_mesh = compiler.compile_entry_from_file("shaders/point_light.slang", "main_ms");
     auto point_light_task = compiler.compile_entry_from_file("shaders/point_light.slang", "main_ts");
@@ -793,16 +823,8 @@ auto execute(int argc, char **argv) -> int {
 
     bindless.grow_if_needed(300u, 40u, 32u, 8u);
 
-    auto &&[flags_pipeline, flags_layout] =
-            create_compute_pipeline(device, *pipeline_cache, bindless.layout, flags_code, "LightFlagsCS");
-    auto &&[scan_local_pipeline, scan_local_layout] =
-            create_compute_pipeline(device, *pipeline_cache, bindless.layout, scan_local_code, "LightScanLocalCS");
-    auto &&[scan_groups_pipeline, scan_groups_layout] =
-            create_compute_pipeline(device, *pipeline_cache, bindless.layout, scan_groups_code, "LightScanGroupsCS");
-    auto &&[compact_pipeline, compact_layout] =
-            create_compute_pipeline(device, *pipeline_cache, bindless.layout, compact_code, "LightCompactCS");
-    auto &&[setup_indirect_pipeline, setup_indirect_layout] =
-            create_compute_pipeline(device, *pipeline_cache, bindless.layout, setup_indirect_code, "SetupIndirectCS");
+    auto&& [flags, scan_local, scan_groups, compact, setup_indirect] = create_compute_pipelines(device, *pipeline_cache, bindless.layout, std::span(culling_code), std::span(names));
+
     auto &&[point_light_pipeline, point_light_layout] =
             create_mesh_pipeline(device, *pipeline_cache, bindless.layout,
                                  point_light_mesh, point_light_task, point_light_frag,
@@ -918,7 +940,7 @@ auto execute(int argc, char **argv) -> int {
 
     constexpr auto world_size = 200.F;
 
-    auto rng = std::default_random_engine{};
+    auto rng = std::default_random_engine{static_cast<u32>(std::chrono::high_resolution_clock::now().time_since_epoch().count())};
     auto distrib = std::uniform_real_distribution{-world_size, world_size};
 
     for (u32 idx = 0; idx < light_count; ++idx) {
@@ -1335,13 +1357,13 @@ auto execute(int argc, char **argv) -> int {
                     .group_count = group_count,
                 };
 
-                auto bind_and_dispatch = [&](VkPipeline pipeline, VkPipelineLayout layout, u32 groups_x) {
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &bindless.set, 0,
+                auto bind_and_dispatch = [&](auto& pl, u32 groups_x) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.layout, 0, 1, &bindless.set, 0,
                                             nullptr);
 
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.pipeline);
 
-                    vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(GpuPushConstants), &pc);
+                    vkCmdPushConstants(cmd, pl.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(GpuPushConstants), &pc);
 
                     vkCmdDispatch(cmd, groups_x, 1u, 1u);
                 };
@@ -1354,28 +1376,28 @@ auto execute(int argc, char **argv) -> int {
                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
                 };
 
-                bind_and_dispatch(flags_pipeline, flags_layout, group_count);
+                bind_and_dispatch(flags, group_count);
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
                                      nullptr);
 
-                bind_and_dispatch(scan_local_pipeline, scan_local_layout, group_count);
+                bind_and_dispatch(scan_local, group_count);
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
                                      nullptr);
 
-                bind_and_dispatch(scan_groups_pipeline, scan_groups_layout, group_count);
+                bind_and_dispatch(scan_groups, group_count);
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
                                      nullptr);
 
-                bind_and_dispatch(compact_pipeline, compact_layout, group_count);
+                bind_and_dispatch(compact, group_count);
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
                                      nullptr);
 
                 // 2. Dispatch Setup: One thread to rule them all
-                bind_and_dispatch(setup_indirect_pipeline, setup_indirect_layout, 1u);
+                bind_and_dispatch(setup_indirect, 1u);
 
                 std::array<VkBufferMemoryBarrier, 2> indirect_barrier{
                     VkBufferMemoryBarrier{
@@ -1571,12 +1593,8 @@ auto execute(int argc, char **argv) -> int {
 
     ctx.destroy_queue.retire(UINT64_MAX);
 
-    destruction::pipeline(device, flags_pipeline, flags_layout);
-    destruction::pipeline(device, scan_local_pipeline, scan_local_layout);
-    destruction::pipeline(device, scan_groups_pipeline, scan_groups_layout);
-    destruction::pipeline(device, compact_pipeline, compact_layout);
+    destruction::pipeline(device, flags);
     destruction::pipeline(device, point_light_pipeline, point_light_layout);
-    destruction::pipeline(device, setup_indirect_pipeline, setup_indirect_layout);
     destruction::pipeline(device, predepth_pipeline, predepth_layout);
     destruction::global_command_context(command_context);
     destruction::bindless_set(device, bindless);

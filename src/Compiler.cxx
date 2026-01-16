@@ -2,6 +2,17 @@
 
 #include "Reflection.hxx"
 
+namespace {
+
+    auto load_file_to_string = [](std::filesystem::path const &p) {
+        const std::ifstream ifs(p);
+        if (!ifs) std::abort();
+        std::ostringstream oss;
+        oss << ifs.rdbuf();
+        return oss.str();
+    };
+}
+
 CompilerSession::CompilerSession() {
     createGlobalSession(global.writeRef());
 
@@ -91,13 +102,6 @@ auto CompilerSession::compile_entry_from_file(std::string_view path, std::string
         return p.filename().string();
     };
 
-    auto load_file_to_string = [](std::filesystem::path const &p) {
-        const std::ifstream ifs(p);
-        if (!ifs) std::abort();
-        std::ostringstream oss;
-        oss << ifs.rdbuf();
-        return oss.str();
-    };
 
     std::filesystem::path p{path};
     const auto name = extract_module_name(p);
@@ -236,4 +240,8 @@ auto CompilerSession::compile_entry_module(Slang::ComPtr<slang::IModule> const &
     std::memcpy(code.data(), spirv->getBufferPointer(), bytes);
 
     return code;
+}
+
+auto CompilerSession::load_shader_file(std::string_view path) -> std::string {
+    return load_file_to_string(path);
 }
