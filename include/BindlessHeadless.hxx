@@ -28,7 +28,9 @@ constexpr u32 max_in_flight = 2; // GPU submit throttle depth
 
 
 namespace detail {
+    auto initialise_debug_name_func(VkInstance) -> void;
     auto set_debug_name_impl(VmaAllocator &, VkObjectType, u64, std::string_view) -> void;
+    auto set_debug_name_impl(VkDevice &, VkObjectType, u64, std::string_view) -> void;
 
     auto submit_and_wait(
         VkDevice device,
@@ -80,13 +82,18 @@ template<typename T> requires std::is_pointer_v<T>
 auto set_debug_name(VmaAllocator &alloc, VkObjectType t, const T &obj, std::string_view name) -> void {
     detail::set_debug_name_impl(alloc, t, reinterpret_cast<u64>(obj), name);
 }
+template<typename T> requires std::is_pointer_v<T>
+auto set_debug_name(VkDevice &dev, VkObjectType t, const T &obj, std::string_view name) -> void {
+    detail::set_debug_name_impl(dev, t, reinterpret_cast<u64>(obj), name);
+}
 
 enum class Stage : u32 {
     LightCulling = 0,
     GBuffer = 1,
+    Predepth = 2,
 };
 
-constexpr auto stage_count = static_cast<u32>(Stage::GBuffer) + 1;
+constexpr auto stage_count = static_cast<u32>(Stage::Predepth) + 1;
 
 struct FrameState {
     std::array<u64, stage_count> timeline_values{};
@@ -223,6 +230,8 @@ auto create_instance_with_debug(auto &callback, bool is_release) -> InstanceWith
             vk_check(create_debug(result.instance, &debug_ci, nullptr, &result.messenger));
         }
     }
+
+    detail::initialise_debug_name_func(result.instance);
 
     return result;
 }

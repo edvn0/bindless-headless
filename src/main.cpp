@@ -33,10 +33,18 @@ struct GpuPushConstants {
     const DeviceAddress group_sums;
     const DeviceAddress group_offsets;
     const DeviceAddress compact;
-    const DeviceAddress indirect_cube;
+    const DeviceAddress indirect_point_light;
+    const DeviceAddress indirect_meshlet;
     const u32 image_index;
     const u32 light_count;
     const u32 group_count;
+};
+
+struct PredepthPushConstants {
+    const DeviceAddress ubo;
+    const DeviceAddress compact;
+    const DeviceAddress indirect_point_light;
+    const DeviceAddress indirect_meshlet;
 };
 
 struct RenderingPushConstants {
@@ -44,7 +52,8 @@ struct RenderingPushConstants {
     const DeviceAddress compact;
     const DeviceAddress cube_vertices;
     const DeviceAddress cube_indices;
-    const DeviceAddress indirect_cube;
+    const DeviceAddress indirect_point_light;
+    const DeviceAddress indirect_meshlet;
 };
 
 struct FrustumPlane {
@@ -55,7 +64,7 @@ auto extract_frustum_planes = [](const glm::mat4 &inv_proj) -> std::array<Frustu
     // 1. Correct NDC Corners for ZO (0 to 1)
     constexpr std::array<glm::vec4, 8> ndc_corners = {
         glm::vec4{-1, -1, 0, 1}, {1, -1, 0, 1}, {-1, 1, 0, 1}, {1, 1, 0, 1}, // Near (0-3)
-        glm::vec4{-1, -1, 1, 1}, {1, -1, 1, 1}, {-1, 1, 1, 1}, {1, 1, 1, 1}  // Far  (4-7)
+        glm::vec4{-1, -1, 1, 1}, {1, -1, 1, 1}, {-1, 1, 1, 1}, {1, 1, 1, 1} // Far  (4-7)
     };
 
     glm::vec3 v[8];
@@ -132,49 +141,53 @@ static VkBool32 debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT mess
 
 auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
                              const std::vector<u32> &code, const std::string_view entry_name)
-        -> std::pair<VkPipeline, VkPipelineLayout> {
+    -> std::pair<VkPipeline, VkPipelineLayout> {
     VkShaderModule compute_shader{};
-    VkShaderModuleCreateInfo create_info{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                                         .pNext = nullptr,
-                                         .flags = 0,
-                                         .codeSize = code.size() * sizeof(u32),
-                                         .pCode = code.data()};
+    VkShaderModuleCreateInfo create_info{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = code.size() * sizeof(u32),
+        .pCode = code.data()
+    };
     vk_check(vkCreateShaderModule(device, &create_info, nullptr, &compute_shader));
 
     VkPushConstantRange push_constant_range{
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            .offset = 0,
-            .size = sizeof(GpuPushConstants),
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        .offset = 0,
+        .size = sizeof(GpuPushConstants),
     };
 
     VkPipelineLayout pi_layout{};
     VkPipelineLayoutCreateInfo plci{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .setLayoutCount = 1,
-            .pSetLayouts = &layout,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &push_constant_range,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .setLayoutCount = 1,
+        .pSetLayouts = &layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant_range,
     };
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
 
-    VkComputePipelineCreateInfo cpci{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-                                     .pNext = nullptr,
-                                     .flags = 0,
-                                     .stage =
-                                             VkPipelineShaderStageCreateInfo{
-                                                     .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                                                     .pNext = nullptr,
-                                                     .flags = 0,
-                                                     .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                     .module = compute_shader,
-                                                     .pName = entry_name.data(),
-                                                     .pSpecializationInfo = nullptr,
-                                             },
-                                     .layout = pi_layout,
-                                     .basePipelineHandle = VK_NULL_HANDLE,
-                                     .basePipelineIndex = -1};
+    VkComputePipelineCreateInfo cpci{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .stage =
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = compute_shader,
+            .pName = entry_name.data(),
+            .pSpecializationInfo = nullptr,
+        },
+        .layout = pi_layout,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = -1
+    };
     VkPipeline pipeline{};
     vk_check(vkCreateComputePipelines(device, cache, 1, &cpci, nullptr, &pipeline));
 
@@ -182,203 +195,523 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     return std::make_pair(pipeline, pi_layout);
 }
 
+auto create_predepth_pipeline(
+    VkDevice device,
+    VkPipelineCache cache,
+    VkDescriptorSetLayout bindless_layout,
+    const std::vector<uint32_t> &task_code,
+    const std::vector<uint32_t> &mesh_spirv,
+    VkFormat depth_format) -> std::pair<VkPipeline, VkPipelineLayout> {
+    VkShaderModule task_module{};
+    VkShaderModuleCreateInfo create_info{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = task_code.size() * sizeof(u32),
+        .pCode = task_code.data()
+    };
+    vk_check(vkCreateShaderModule(device, &create_info, nullptr, &task_module));
+
+    VkShaderModule mesh_module{};
+    create_info = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = mesh_spirv.size() * sizeof(u32),
+        .pCode = mesh_spirv.data()
+    };
+    vk_check(vkCreateShaderModule(device, &create_info, nullptr, &mesh_module));
+
+    std::array stages = {
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_TASK_BIT_EXT,
+            .module = task_module,
+            .pName = "main_ts"
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_MESH_BIT_EXT,
+            .module = mesh_module,
+            .pName = "main_ms"
+        }
+    };
+
+    // 2. Pipeline Layout (Inherit bindless + push constants)
+    VkPushConstantRange push_range{
+        .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT,
+        .offset = 0,
+        .size = sizeof(PredepthPushConstants)
+    };
+
+    VkPipelineLayoutCreateInfo layout_ci{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &bindless_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_range
+    };
+    VkPipelineLayout layout;
+    vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
+
+    // 3. Specialized Depth State
+    VkPipelineDepthStencilStateCreateInfo ds{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_GREATER, // Reverse-Z: Near is 1.0, Far is 0.0
+    };
+
+    // 4. No Color Attachments (The secret to Pre-Depth speed)
+    VkPipelineColorBlendStateCreateInfo cb{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = 0,
+        .pAttachments = nullptr
+    };
+
+    // 5. Rasterization (Ensure Back-Face Culling is ON)
+    VkPipelineRasterizationStateCreateInfo rs{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .lineWidth = 1.0f
+    };
+
+    // 6. Dynamic Rendering Info
+    VkPipelineRenderingCreateInfo rendering_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+        .colorAttachmentCount = 0,
+        .depthAttachmentFormat = depth_format
+    };
+
+    // Viewport/Scissor setup (Standard)
+    VkPipelineViewportStateCreateInfo vp{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1
+    };
+    VkPipelineMultisampleStateCreateInfo ms{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
+    };
+    std::array dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dy{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2,
+        .pDynamicStates = dynamic_states.data()
+    };
+
+    VkGraphicsPipelineCreateInfo ci{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &rendering_info,
+        .stageCount = static_cast<uint32_t>(stages.size()),
+        .pStages = stages.data(),
+        .pViewportState = &vp,
+        .pRasterizationState = &rs,
+        .pMultisampleState = &ms,
+        .pDepthStencilState = &ds,
+        .pColorBlendState = &cb,
+        .pDynamicState = &dy,
+        .layout = layout,
+    };
+
+    VkPipeline pipeline;
+    vkCreateGraphicsPipelines(device, cache, 1, &ci, nullptr, &pipeline);
+
+    // Cleanup local modules
+    vkDestroyShaderModule(device, task_module, nullptr);
+    vkDestroyShaderModule(device, mesh_module, nullptr);
+
+    return {pipeline, layout};
+}
+
+auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
+                          const std::vector<u32> &mesh_code,
+                          const std::vector<u32> &task_code,
+                          const std::vector<u32> &frag_code, VkFormat color_format) {
+    VkShaderModule mesh_module{};
+    VkShaderModuleCreateInfo mesh_create_info{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = mesh_code.size() * sizeof(u32),
+        .pCode = mesh_code.data()
+    };
+    vk_check(vkCreateShaderModule(device, &mesh_create_info, nullptr, &mesh_module));
+
+    VkShaderModule task_module{};
+    VkShaderModuleCreateInfo task_create_info{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = task_code.size() * sizeof(u32),
+        .pCode = task_code.data()
+    };
+    vk_check(vkCreateShaderModule(device, &task_create_info, nullptr, &task_module));
+
+    VkShaderModule frag_module{};
+    VkShaderModuleCreateInfo frag_create_info{
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = frag_code.size() * sizeof(u32),
+        .pCode = frag_code.data()
+    };
+    vk_check(vkCreateShaderModule(device, &frag_create_info, nullptr, &frag_module));
+
+    VkPushConstantRange push_constant_range{
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT,
+        .offset = 0,
+        .size = sizeof(RenderingPushConstants),
+    };
+
+    VkPipelineLayout pipeline_layout{};
+    VkPipelineLayoutCreateInfo plci{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .setLayoutCount = 1,
+        .pSetLayouts = &layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant_range,
+    };
+    vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pipeline_layout));
+
+    std::vector<VkPipelineShaderStageCreateInfo> stages = {
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_TASK_BIT_EXT,
+            .module = task_module, .pName = "main_ts"
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_MESH_BIT_EXT,
+            .module = mesh_module, .pName = "main_ms"
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_module, .pName = "debug_fs"
+        }
+    };
+
+    VkPipelineViewportStateCreateInfo viewport_state{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = nullptr, // dynamic
+        .scissorCount = 1,
+        .pScissors = nullptr, // dynamic
+    };
+
+    VkPipelineRasterizationStateCreateInfo rasterization{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.0f,
+        .depthBiasClamp = 0.0f,
+        .depthBiasSlopeFactor = 0.0f,
+        .lineWidth = 1.0f,
+    };
+
+    VkPipelineMultisampleStateCreateInfo multisample{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = VK_FALSE,
+        .minSampleShading = 1.0f,
+        .pSampleMask = nullptr,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE,
+    };
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_GREATER,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .front = {},
+        .back = {},
+        .minDepthBounds = 1.0f,
+        .maxDepthBounds = 0.0f,
+    };
+
+    VkPipelineColorBlendAttachmentState color_blend_attachment{
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+
+    VkPipelineColorBlendStateCreateInfo color_blend{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment,
+        .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
+    };
+
+    std::array dynamic_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_state{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
+        .pDynamicStates = dynamic_states.data(),
+    };
+
+    VkPipelineRenderingCreateInfo rendering_info{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+        .pNext = nullptr,
+        .viewMask = 0,
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = &color_format,
+        .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
+        .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+    };
+
+    VkGraphicsPipelineCreateInfo pipeline_info{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &rendering_info,
+        .flags = 0,
+        .stageCount = static_cast<u32>(stages.size()),
+        .pStages = stages.data(),
+        .pVertexInputState = nullptr,
+        .pInputAssemblyState = nullptr,
+        .pTessellationState = nullptr,
+        .pViewportState = &viewport_state,
+        .pRasterizationState = &rasterization,
+        .pMultisampleState = &multisample,
+        .pDepthStencilState = &depth_stencil,
+        .pColorBlendState = &color_blend,
+        .pDynamicState = &dynamic_state,
+        .layout = pipeline_layout,
+        .renderPass = VK_NULL_HANDLE,
+        .subpass = 0,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = -1,
+    };
+
+    VkPipeline pipeline{};
+    vk_check(vkCreateGraphicsPipelines(device, cache, 1, &pipeline_info, nullptr, &pipeline));
+
+    vkDestroyShaderModule(device, mesh_module, nullptr);
+    vkDestroyShaderModule(device, task_module, nullptr);
+    vkDestroyShaderModule(device, frag_module, nullptr);
+
+    return std::make_pair(pipeline, pipeline_layout);
+}
+
 auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
                               const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                               const std::string_view vert_entry, const std::string_view frag_entry,
                               VkFormat color_format)
-        -> std::pair<VkPipeline, VkPipelineLayout> {
+    -> std::pair<VkPipeline, VkPipelineLayout> {
     VkShaderModule vert_shader{};
     VkShaderModuleCreateInfo vert_create_info{
-            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .codeSize = vert_code.size() * sizeof(u32),
-            .pCode = vert_code.data()
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = vert_code.size() * sizeof(u32),
+        .pCode = vert_code.data()
     };
     vk_check(vkCreateShaderModule(device, &vert_create_info, nullptr, &vert_shader));
 
     VkShaderModule frag_shader{};
     VkShaderModuleCreateInfo frag_create_info{
-            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .codeSize = frag_code.size() * sizeof(u32),
-            .pCode = frag_code.data()
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .codeSize = frag_code.size() * sizeof(u32),
+        .pCode = frag_code.data()
     };
     vk_check(vkCreateShaderModule(device, &frag_create_info, nullptr, &frag_shader));
 
     VkPushConstantRange push_constant_range{
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .offset = 0,
-            .size = sizeof(RenderingPushConstants),
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(RenderingPushConstants),
     };
 
     VkPipelineLayout pipeline_layout{};
     VkPipelineLayoutCreateInfo plci{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .setLayoutCount = 1,
-            .pSetLayouts = &layout,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &push_constant_range,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .setLayoutCount = 1,
+        .pSetLayouts = &layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant_range,
     };
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pipeline_layout));
 
     std::array shader_stages{
-            VkPipelineShaderStageCreateInfo{
-                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                    .pNext = nullptr,
-                    .flags = 0,
-                    .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                    .module = vert_shader,
-                    .pName = vert_entry.data(),
-                    .pSpecializationInfo = nullptr,
-            },
-            VkPipelineShaderStageCreateInfo{
-                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                    .pNext = nullptr,
-                    .flags = 0,
-                    .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                    .module = frag_shader,
-                    .pName = frag_entry.data(),
-                    .pSpecializationInfo = nullptr,
-            }
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vert_shader,
+            .pName = vert_entry.data(),
+            .pSpecializationInfo = nullptr,
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_shader,
+            .pName = frag_entry.data(),
+            .pSpecializationInfo = nullptr,
+        }
     };
 
     VkPipelineVertexInputStateCreateInfo vertex_input{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .vertexBindingDescriptionCount = 0,
-            .pVertexBindingDescriptions = nullptr,
-            .vertexAttributeDescriptionCount = 0,
-            .pVertexAttributeDescriptions = nullptr,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 0,
+        .pVertexBindingDescriptions = nullptr,
+        .vertexAttributeDescriptionCount = 0,
+        .pVertexAttributeDescriptions = nullptr,
     };
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            .primitiveRestartEnable = VK_FALSE,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE,
     };
 
     VkPipelineViewportStateCreateInfo viewport_state{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .viewportCount = 1,
-            .pViewports = nullptr, // dynamic
-            .scissorCount = 1,
-            .pScissors = nullptr, // dynamic
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = nullptr, // dynamic
+        .scissorCount = 1,
+        .pScissors = nullptr, // dynamic
     };
 
     VkPipelineRasterizationStateCreateInfo rasterization{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .depthClampEnable = VK_FALSE,
-            .rasterizerDiscardEnable = VK_FALSE,
-            .polygonMode = VK_POLYGON_MODE_FILL,
-            .cullMode = VK_CULL_MODE_NONE,
-            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-            .depthBiasEnable = VK_FALSE,
-            .depthBiasConstantFactor = 0.0f,
-            .depthBiasClamp = 0.0f,
-            .depthBiasSlopeFactor = 0.0f,
-            .lineWidth = 1.0f,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.0f,
+        .depthBiasClamp = 0.0f,
+        .depthBiasSlopeFactor = 0.0f,
+        .lineWidth = 1.0f,
     };
 
     VkPipelineMultisampleStateCreateInfo multisample{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-            .sampleShadingEnable = VK_FALSE,
-            .minSampleShading = 1.0f,
-            .pSampleMask = nullptr,
-            .alphaToCoverageEnable = VK_FALSE,
-            .alphaToOneEnable = VK_FALSE,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .sampleShadingEnable = VK_FALSE,
+        .minSampleShading = 1.0f,
+        .pSampleMask = nullptr,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE,
     };
 
     VkPipelineDepthStencilStateCreateInfo depth_stencil{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = VK_TRUE,
-            .depthCompareOp = VK_COMPARE_OP_GREATER,
-            .depthBoundsTestEnable = VK_FALSE,
-            .stencilTestEnable = VK_FALSE,
-            .front = {},
-            .back = {},
-            .minDepthBounds = 1.0f,
-            .maxDepthBounds = 0.0f,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp = VK_COMPARE_OP_GREATER,
+        .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
+        .front = {},
+        .back = {},
+        .minDepthBounds = 1.0f,
+        .maxDepthBounds = 0.0f,
     };
 
     VkPipelineColorBlendAttachmentState color_blend_attachment{
-            .blendEnable = VK_TRUE,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
-            .colorBlendOp = VK_BLEND_OP_ADD,
-            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-            .alphaBlendOp = VK_BLEND_OP_ADD,
-            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
     };
 
     VkPipelineColorBlendStateCreateInfo color_blend{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .logicOpEnable = VK_FALSE,
-            .logicOp = VK_LOGIC_OP_COPY,
-            .attachmentCount = 1,
-            .pAttachments = &color_blend_attachment,
-            .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &color_blend_attachment,
+        .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
     };
 
     std::array dynamic_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic_state{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
-            .pDynamicStates = dynamic_states.data(),
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
+        .pDynamicStates = dynamic_states.data(),
     };
 
     VkPipelineRenderingCreateInfo rendering_info{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-            .pNext = nullptr,
-            .viewMask = 0,
-            .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &color_format,
-            .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
-            .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+        .pNext = nullptr,
+        .viewMask = 0,
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = &color_format,
+        .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
+        .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
     };
 
     VkGraphicsPipelineCreateInfo pipeline_info{
-            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = &rendering_info,
-            .flags = 0,
-            .stageCount = static_cast<u32>(shader_stages.size()),
-            .pStages = shader_stages.data(),
-            .pVertexInputState = &vertex_input,
-            .pInputAssemblyState = &input_assembly,
-            .pTessellationState = nullptr,
-            .pViewportState = &viewport_state,
-            .pRasterizationState = &rasterization,
-            .pMultisampleState = &multisample,
-            .pDepthStencilState = &depth_stencil,
-            .pColorBlendState = &color_blend,
-            .pDynamicState = &dynamic_state,
-            .layout = pipeline_layout,
-            .renderPass = VK_NULL_HANDLE,
-            .subpass = 0,
-            .basePipelineHandle = VK_NULL_HANDLE,
-            .basePipelineIndex = -1,
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &rendering_info,
+        .flags = 0,
+        .stageCount = static_cast<u32>(shader_stages.size()),
+        .pStages = shader_stages.data(),
+        .pVertexInputState = &vertex_input,
+        .pInputAssemblyState = &input_assembly,
+        .pTessellationState = nullptr,
+        .pViewportState = &viewport_state,
+        .pRasterizationState = &rasterization,
+        .pMultisampleState = &multisample,
+        .pDepthStencilState = &depth_stencil,
+        .pColorBlendState = &color_blend,
+        .pDynamicState = &dynamic_state,
+        .layout = pipeline_layout,
+        .renderPass = VK_NULL_HANDLE,
+        .subpass = 0,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = -1,
     };
 
     VkPipeline pipeline{};
@@ -390,8 +723,11 @@ auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     return std::make_pair(pipeline, pipeline_layout);
 }
 
-auto execute(int argc, char** argv) -> int {
-    #ifdef HAS_RENDERDOC
+static PFN_vkCmdDrawMeshTasksIndirectEXT draw_mesh = nullptr;
+
+
+auto execute(int argc, char **argv) -> int {
+#ifdef HAS_RENDERDOC
     RENDERDOC_API_1_6_0 *rdoc_api = nullptr;
     if (HMODULE mod = GetModuleHandleA("renderdoc.dll")) {
         auto RENDERDOC_GetAPI = reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(mod, "RENDERDOC_GetAPI"));
@@ -416,10 +752,14 @@ auto execute(int argc, char** argv) -> int {
         return 1;
     }
 
+    if (auto name = vkGetInstanceProcAddr(instance.instance, "vkCmdDrawMeshTasksIndirectEXT");
+        name && draw_mesh == nullptr) {
+        draw_mesh = reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(name);
+    }
+
     auto &&[physical_device, graphics_index, compute_index] = *could_choose;
-
-
     auto &&[device, graphics_queue, compute_queue] = create_device(physical_device, graphics_index, compute_index);
+
 
     auto cache_path = pipeline_cache_path(argc, argv);
     auto pipeline_cache = std::make_unique<PipelineCache>(device, opts.pipeline_cache_dir);
@@ -432,10 +772,15 @@ auto execute(int argc, char** argv) -> int {
     auto scan_groups_code =
             compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightScanGroupsCS");
     auto compact_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightCompactCS");
-    auto setup_indirect_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "SetupIndirectCS");
+    auto setup_indirect_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang",
+                                                                  "SetupIndirectCS");
 
-    auto point_light_vert = compiler.compile_entry_from_file("shaders/point_light.slang", "main_vs");
-    auto point_light_frag = compiler.compile_entry_from_file("shaders/point_light.slang", "heat_fs");
+    auto point_light_mesh = compiler.compile_entry_from_file("shaders/point_light.slang", "main_ms");
+    auto point_light_task = compiler.compile_entry_from_file("shaders/point_light.slang", "main_ts");
+    auto point_light_frag = compiler.compile_entry_from_file("shaders/point_light.slang", "debug_fs");
+
+    auto predepth_task_code = compiler.compile_entry_from_file("shaders/predepth.slang", "main_ts");
+    auto predepth_mesh_code = compiler.compile_entry_from_file("shaders/predepth.slang", "main_ms");
 
     auto allocator = create_allocator(instance.instance, physical_device, device);
 
@@ -457,42 +802,46 @@ auto execute(int argc, char** argv) -> int {
     auto &&[compact_pipeline, compact_layout] =
             create_compute_pipeline(device, *pipeline_cache, bindless.layout, compact_code, "LightCompactCS");
     auto &&[setup_indirect_pipeline, setup_indirect_layout] =
-        create_compute_pipeline(device, *pipeline_cache, bindless.layout, setup_indirect_code, "SetupIndirectCS");
+            create_compute_pipeline(device, *pipeline_cache, bindless.layout, setup_indirect_code, "SetupIndirectCS");
     auto &&[point_light_pipeline, point_light_layout] =
-    create_graphics_pipeline(device, *pipeline_cache, bindless.layout,
-                            point_light_vert, point_light_frag,
-                            "main_vs", "heat_fs",
-                            VK_FORMAT_R8G8B8A8_UNORM);
+            create_mesh_pipeline(device, *pipeline_cache, bindless.layout,
+                                 point_light_mesh, point_light_task, point_light_frag,
+                                 VK_FORMAT_R8G8B8A8_UNORM);
+    auto &&[predepth_pipeline, predepth_layout] = create_predepth_pipeline(
+        device, *pipeline_cache, bindless.layout, predepth_task_code, predepth_mesh_code, VK_FORMAT_D32_SFLOAT);
 
     DestructionContext ctx{
-            .allocator = allocator,
-            .bindless_set = &bindless,
+        .allocator = allocator,
+        .bindless_set = &bindless,
     };
 
     std::array<DestructionContext::QueryPoolHandle, frames_in_flight> compute_query_pool{};
-    std::array<DestructionContext::QueryPoolHandle, frames_in_flight> graphics_query_pool{};
-    {
+    std::array<DestructionContext::QueryPoolHandle, frames_in_flight> graphics_query_pool{}; {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physical_device, &props);
         const auto timestamp_period_ns = static_cast<double>(props.limits.timestampPeriod);
 
         for (u32 fi = 0; fi < frames_in_flight; ++fi) {
-            VkQueryPoolCreateInfo qpci{.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-                                       .pNext = nullptr,
-                                       .flags = 0,
-                                       .queryType = VK_QUERY_TYPE_TIMESTAMP,
-                                       .queryCount = query_count,
-                                       .pipelineStatistics = 0};
+            VkQueryPoolCreateInfo qpci{
+                .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                .queryCount = query_count,
+                .pipelineStatistics = 0
+            };
 
             VkQueryPool qpc = VK_NULL_HANDLE;
             vk_check(vkCreateQueryPool(device, &qpci, nullptr, &qpc));
             compute_query_pool[fi] = ctx.create_query_pool(QueryPoolState{
-                    .pool = qpc, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns});
+                .pool = qpc, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns
+            });
 
             VkQueryPool qpg = VK_NULL_HANDLE;
             vk_check(vkCreateQueryPool(device, &qpci, nullptr, &qpg));
             graphics_query_pool[fi] = ctx.create_query_pool(QueryPoolState{
-                    .pool = qpg, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns});
+                .pool = qpg, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns
+            });
         }
     }
 
@@ -501,54 +850,55 @@ auto execute(int argc, char** argv) -> int {
 
     const auto noise = generate_perlin(2048, 2048);
     auto perlin_handle = ctx.create_texture(create_image_from_span_v2(
-            allocator, command_context, 2048u, 2048u, VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
+        allocator, command_context, 2048u, 2048u, VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
 
     auto offscreen_target_handle =
-            ctx.create_texture(create_offscreen_target(allocator, width, height, VK_FORMAT_R8G8B8A8_UNORM, "offscreen"));
+            ctx.create_texture(
+                create_offscreen_target(allocator, width, height, VK_FORMAT_R8G8B8A8_UNORM, "offscreen"));
 
     auto offscreen_depth_target_handle =
-        ctx.create_texture(create_depth_target(allocator, width, height, VK_FORMAT_D32_SFLOAT, "offscreen_depth"));
+            ctx.create_texture(create_depth_target(allocator, width, height, VK_FORMAT_D32_SFLOAT, "offscreen_depth"));
 
     ctx.create_sampler(
-            VkSamplerCreateInfo{
-                    .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                    .pNext = nullptr,
-                    .flags = 0,
-                    .magFilter = VK_FILTER_LINEAR,
-                    .minFilter = VK_FILTER_LINEAR,
-                    .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                    .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                    .mipLodBias = 0.0f,
-                    .anisotropyEnable = VK_FALSE,
-                    .maxAnisotropy = 1.0f,
-                    .compareEnable = VK_FALSE,
-                    .compareOp = VK_COMPARE_OP_ALWAYS,
-                    .minLod = 0.0f,
-                    .maxLod = VK_LOD_CLAMP_NONE,
-                    .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-                    .unnormalizedCoordinates = VK_FALSE,
-            },
-            "linear_repeat");
+        VkSamplerCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .magFilter = VK_FILTER_LINEAR,
+            .minFilter = VK_FILTER_LINEAR,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .mipLodBias = 0.0f,
+            .anisotropyEnable = VK_FALSE,
+            .maxAnisotropy = 1.0f,
+            .compareEnable = VK_FALSE,
+            .compareOp = VK_COMPARE_OP_ALWAYS,
+            .minLod = 0.0f,
+            .maxLod = VK_LOD_CLAMP_NONE,
+            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = VK_FALSE,
+        },
+        "linear_repeat");
 
     ctx.create_sampler(create_sampler(allocator,
-                                                            VkSamplerCreateInfo{
-                                                                    .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-                                                                    .magFilter = VK_FILTER_LINEAR,
-                                                                    .minFilter = VK_FILTER_LINEAR,
-                                                                    .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-                                                                    .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                                                                    .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                                                                    .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-                                                                    .mipLodBias = 0.0f,
-                                                                    .anisotropyEnable = false,
-                                                                    .compareEnable = false,
-                                                                    .minLod = 0.0f,
-                                                                    .maxLod = VK_LOD_CLAMP_NONE,
-                                                                    .unnormalizedCoordinates = false,
-                                                            },
-                                                            "noise_sampler"));
+                                      VkSamplerCreateInfo{
+                                          .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                                          .magFilter = VK_FILTER_LINEAR,
+                                          .minFilter = VK_FILTER_LINEAR,
+                                          .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                                          .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                          .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                          .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                                          .mipLodBias = 0.0f,
+                                          .anisotropyEnable = false,
+                                          .compareEnable = false,
+                                          .minLod = 0.0f,
+                                          .maxLod = VK_LOD_CLAMP_NONE,
+                                          .unnormalizedCoordinates = false,
+                                      },
+                                      "noise_sampler"));
 
     bindless.repopulate_if_needed(ctx.textures, ctx.samplers);
 
@@ -579,60 +929,79 @@ auto execute(int argc, char** argv) -> int {
         colour_intensity = {t, 1.0f - t, 0.5f, 1.0f};
     }
 
+    auto cubes = std::vector<PointLight>(opts.light_count / 10);
+    for (u32 idx = 0; idx < cubes.size(); ++idx) {
+        auto t = static_cast<float>(idx) / static_cast<float>(cubes.size());
+        auto &[position_radius, colour_intensity] = cubes[idx];
+
+        position_radius = {distrib(rng), distrib(rng), distrib(rng), 5.0F};
+        colour_intensity = {t, 1.0f - t, 0.5f, 1.0f};
+    }
+
     auto point_light_handle = ctx.buffers.create(
-            Buffer::from_slice<PointLight>(allocator,
-                                           VkBufferCreateInfo{
-                                                   .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                           },
-                                           VmaAllocationCreateInfo{}, all_point_lights, "point_light")
-                    .value());
+        Buffer::from_slice<PointLight>(allocator,
+                                       VkBufferCreateInfo{
+                                           .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                       },
+                                       VmaAllocationCreateInfo{}, all_point_lights, "point_light")
+        .value());
+
+    auto cubes_handle = ctx.buffers.create(
+    Buffer::from_slice<PointLight>(allocator,
+                                   VkBufferCreateInfo{
+                                       .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                   },
+                                   VmaAllocationCreateInfo{}, cubes, "cubes")
+    .value());
 
     std::vector zeros_lights(light_count, 0u);
     std::vector zeros_groups(group_count, 0u);
     auto flags_handle =
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
                                                        VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                           .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                        },
                                                        VmaAllocationCreateInfo{}, zeros_lights, "light_flags")
-                                       .value());
+                .value());
     auto prefix_handle =
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
                                                        VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                           .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                        },
                                                        VmaAllocationCreateInfo{}, zeros_lights, "light_prefix")
-                                       .value());
+                .value());
     auto group_sums_handle =
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
                                                        VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                           .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                        },
                                                        VmaAllocationCreateInfo{}, zeros_groups, "group_sums")
-                                       .value());
+                .value());
     auto group_offsets_handle =
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
                                                        VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                           .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                        },
                                                        VmaAllocationCreateInfo{}, zeros_groups, "group_offsets")
-                                       .value());
+                .value());
     auto compact_lights_handle = ctx.buffers.create(
-            Buffer::from_slice<PointLight>(
-                    allocator,
-                    VkBufferCreateInfo{
-                            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    },
-                    VmaAllocationCreateInfo{}, all_point_lights_zero, "compact_lights")
-                    .value());
+        Buffer::from_slice<PointLight>(
+            allocator,
+            VkBufferCreateInfo{
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            },
+            VmaAllocationCreateInfo{}, all_point_lights_zero, "compact_lights")
+        .value());
 
-    VkDrawIndexedIndirectCommand indirect_cmd = {
+    VkDrawIndexedIndirectCommand indirect_cmd{
         .indexCount = 36,
         .instanceCount = 0,
         .firstIndex = 0,
@@ -654,6 +1023,26 @@ auto execute(int argc, char** argv) -> int {
         ).value()
     );
 
+    VkDrawMeshTasksIndirectCommandEXT meshlet_cmd{
+        .groupCountX = 0,
+        .groupCountY = 0,
+        .groupCountZ = 0
+    };
+
+    auto meshlet_indirect_buffer_handle = ctx.buffers.create(
+        Buffer::from_slice<VkDrawMeshTasksIndirectCommandEXT>(
+            allocator,
+            VkBufferCreateInfo{
+                .usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            },
+            VmaAllocationCreateInfo{},
+            std::span{&meshlet_cmd, 1},
+            "light_draw_indirect_meshlet"
+        ).value()
+    );
+
     struct Vert {
         glm::vec3 pos;
     };
@@ -662,15 +1051,15 @@ auto execute(int argc, char** argv) -> int {
         std::array<Vert, 8> verts;
     };
 
-   constexpr Cube cube = {
+    constexpr Cube cube = {
         glm::vec3{-0.5f, -0.5f, -0.5f},
-        glm::vec3{ 0.5f, -0.5f, -0.5f},
-        glm::vec3{ 0.5f,  0.5f, -0.5f},
-        glm::vec3{-0.5f,  0.5f, -0.5f},
-        glm::vec3{-0.5f, -0.5f,  0.5f},
-        glm::vec3{ 0.5f, -0.5f,  0.5f},
-        glm::vec3{ 0.5f,  0.5f,  0.5f},
-        glm::vec3{-0.5f,  0.5f,  0.5f},
+        glm::vec3{0.5f, -0.5f, -0.5f},
+        glm::vec3{0.5f, 0.5f, -0.5f},
+        glm::vec3{-0.5f, 0.5f, -0.5f},
+        glm::vec3{-0.5f, -0.5f, 0.5f},
+        glm::vec3{0.5f, -0.5f, 0.5f},
+        glm::vec3{0.5f, 0.5f, 0.5f},
+        glm::vec3{-0.5f, 0.5f, 0.5f},
     };
 
     constexpr std::array<u32, 36> cube_indices = {
@@ -697,27 +1086,27 @@ auto execute(int argc, char** argv) -> int {
         Buffer::from_slice<Cube>(
             allocator,
             VkBufferCreateInfo{
-                .usage =  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             },
             VmaAllocationCreateInfo{},
-            std::span {&cube, 1},
+            std::span{&cube, 1},
             "light_draw_indirect"
         ).value()
     );
 
     auto cube_indices_handle = ctx.buffers.create(
-    Buffer::from_slice<u32>(
-        allocator,
-        VkBufferCreateInfo{
-            .usage =  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        },
-        VmaAllocationCreateInfo{},
-        std::span {cube_indices.data(), cube_indices.size()},
-        "light_draw_indirect"
-    ).value()
-);
+        Buffer::from_slice<u32>(
+            allocator,
+            VkBufferCreateInfo{
+                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            },
+            VmaAllocationCreateInfo{},
+            std::span{cube_indices.data(), cube_indices.size()},
+            "light_draw_indirect"
+        ).value()
+    );
 
     glm::vec3 camera_pos = glm::vec3(0, 50, -100);
     glm::vec3 camera_target = glm::vec3(0.0f, 0.0f, 0.0f);
@@ -734,27 +1123,29 @@ auto execute(int argc, char** argv) -> int {
     auto frustum_planes = extract_frustum_planes(inv_proj);
 
     FrameUBO ubo_data{
-            .view = view,
-            .projection = projection,
-            .view_projection = projection * view,
-            .inv_projection = inv_proj,
-            .camera_position = glm::vec4(camera_pos, 1.0f),
-            .frustum_planes = {frustum_planes[0], frustum_planes[1], frustum_planes[2], frustum_planes[3],
-                               frustum_planes[4], frustum_planes[5]},
-            .time = 0.0f,
-            .delta_time = 0.0f,
+        .view = view,
+        .projection = projection,
+        .view_projection = projection * view,
+        .inv_projection = inv_proj,
+        .camera_position = glm::vec4(camera_pos, 1.0f),
+        .frustum_planes = {
+            frustum_planes[0], frustum_planes[1], frustum_planes[2], frustum_planes[3],
+            frustum_planes[4], frustum_planes[5]
+        },
+        .time = 0.0f,
+        .delta_time = 0.0f,
     };
 
     // Create the UBO buffer
     auto frame_ubo_handle = ctx.buffers.create(
-            Buffer::from_slice<FrameUBO>(allocator,
-                                         VkBufferCreateInfo{
-                                                 .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                         },
-                                         VmaAllocationCreateInfo{}, std::span{&ubo_data, 1}, "frame_ubo")
-                    .value());
+        Buffer::from_slice<FrameUBO>(allocator,
+                                     VkBufferCreateInfo{
+                                         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                  VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                     },
+                                     VmaAllocationCreateInfo{}, std::span{&ubo_data, 1}, "frame_ubo")
+        .value());
 
     auto frame_ubo = ctx.device_address(frame_ubo_handle);
 
@@ -764,10 +1155,12 @@ auto execute(int argc, char** argv) -> int {
     auto group_sums_addr = ctx.device_address(group_sums_handle);
     auto group_offsets_addr = ctx.device_address(group_offsets_handle);
     auto compact_addr = ctx.device_address(compact_lights_handle);
-    auto indirect_addr = ctx.device_address(indirect_buffer_handle);
+    auto indirect_point_light_addr = ctx.device_address(indirect_buffer_handle);
+    auto indirect_meshlet_addr = ctx.device_address(meshlet_indirect_buffer_handle);
     auto cube_vertices_addr = ctx.device_address(cube_vertices_handle);
     auto cube_indices_addr = ctx.device_address(cube_indices_handle);
     auto indirect_buf = ctx.buffers.get(indirect_buffer_handle)->buffer();
+    auto indirect_meshlet_buf = ctx.buffers.get(meshlet_indirect_buffer_handle)->buffer();
 
     auto stats = FrameStats{};
     FrameStats gpu_compute_ms{};
@@ -780,7 +1173,7 @@ auto execute(int argc, char** argv) -> int {
 
         u64 stamps[2] = {};
         const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 2, sizeof(stamps), stamps, sizeof(u64),
-                                           VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                                             VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
         if (r != VK_SUCCESS)
             return std::nullopt;
 
@@ -803,12 +1196,14 @@ auto execute(int argc, char** argv) -> int {
         auto &fs = frames[frame_index];
 
         if (fs.frame_done_value > 0) {
-            VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                                   .pNext = nullptr,
-                                   .flags = 0,
-                                   .semaphoreCount = 1,
-                                   .pSemaphores = &tl_graphics.timeline,
-                                   .pValues = &fs.frame_done_value};
+            VkSemaphoreWaitInfo wi{
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .semaphoreCount = 1,
+                .pSemaphores = &tl_graphics.timeline,
+                .pValues = &fs.frame_done_value
+            };
             vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
 
             if (auto ms = read_timestamp_ms(compute_query_pool[frame_index])) {
@@ -819,73 +1214,171 @@ auto execute(int argc, char** argv) -> int {
             }
         }
 
-        std::array<VkSemaphore, 0> no_wait_sems{};
-        std::array<std::uint64_t, 0> no_wait_vals{};
+        auto predepth_val = submit_stage(
+            tl_graphics, device,
+            [&](VkCommandBuffer cmd) {
+                auto &&depth = ctx.textures.get(offscreen_depth_target_handle);
 
+                if (!depth->initialized) {
+                    VkImageMemoryBarrier depth_barrier{
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .pNext = nullptr,
+                        .srcAccessMask = 0,
+                        .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image = depth->image,
+                        .subresourceRange = {
+                            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1
+                        }
+                    };
+
+                    vkCmdPipelineBarrier(
+                        cmd,
+                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                        0,
+                        0, nullptr,
+                        0, nullptr,
+                        1, &depth_barrier
+                    );
+
+                    depth->initialized = true;
+                }
+
+                VkRenderingAttachmentInfo depth_attachment{
+                    .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                    .imageView = depth->sampled_view,
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .clearValue = {.depthStencil = {0.0f, 0}}, // Reverse-Z
+                };
+
+                VkRenderingInfo rendering_info{
+                    .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                    .renderArea = {.offset = {0, 0}, .extent = {width, height}},
+                    .layerCount = 1,
+                    .pDepthAttachment = &depth_attachment,
+                };
+
+                vkCmdBeginRendering(cmd, &rendering_info);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth_pipeline);
+
+                PredepthPushConstants pc = {
+                    .ubo = frame_ubo,
+                    .compact = compact_addr,
+                    .indirect_point_light = indirect_point_light_addr,
+                    .indirect_meshlet = indirect_meshlet_addr,
+                };
+
+                const auto w = static_cast<float>(width);
+                const auto h = static_cast<float>(height);
+                VkViewport vp{
+                    .x = 0,
+                    .y = h,
+                    .width = w,
+                    .height = -h,
+                    .minDepth = 1.0f,
+                    .maxDepth = 0.0f,
+                };
+
+                VkRect2D sc{
+                    .offset = {0, 0},
+                    .extent = {width, height}
+                };
+                vkCmdSetViewport(cmd, 0, 1, &vp);
+                vkCmdSetScissor(cmd, 0, 1, &sc);
+                vkCmdPushConstants(cmd, predepth_layout, VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT, 0,
+                                   sizeof(pc), &pc);
+
+                // Execute via Mesh Indirect
+                draw_mesh(cmd, indirect_meshlet_buf, 0, 1, sizeof(VkDrawMeshTasksIndirectCommandEXT));
+
+                vkCmdEndRendering(cmd);
+            },
+            {}, {} // No waits, start immediately
+        );
+        fs.timeline_values[stage_index(Stage::Predepth)] = predepth_val;
+
+        // --- STAGE 2: LIGHT CULLING (Compute) ---
+        // Now we wait for Pre-Depth to finish if we want to use the Depth Buffer for Culling
+        std::array culling_wait_sems{tl_graphics.timeline};
+        std::array culling_wait_vals{fs.timeline_values[stage_index(Stage::Predepth)]};
         auto light_val = submit_stage(
-                tl_compute, device,
-                [&](VkCommandBuffer cmd) {
-                    const auto *cqs = ctx.query_pools.get(compute_query_pool[frame_index]);
-                    const auto& cqp = cqs->pool;
+            tl_compute, device,
+            [&](VkCommandBuffer cmd) {
+                const auto *cqs = ctx.query_pools.get(compute_query_pool[frame_index]);
+                const auto &cqp = cqs->pool;
 
-                    vkCmdResetQueryPool(cmd, cqp, 0, cqs->query_count);
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
-                                        static_cast<u32>(GpuStamp::Begin));
-                    const GpuPushConstants pc{
-                            .ubo = frame_ubo,
-                            .lights = light_addr,
-                            .flags = flags_addr,
-                            .prefix = prefix_addr,
-                            .group_sums = group_sums_addr,
-                            .group_offsets = group_offsets_addr,
-                            .compact = compact_addr,
-                        .indirect_cube = indirect_addr,
-                            .image_index = offscreen_target_handle.index(),
-                            .light_count = light_count,
-                            .group_count = group_count,
-                    };
+                vkCmdResetQueryPool(cmd, cqp, 0, cqs->query_count);
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
+                                    static_cast<u32>(GpuStamp::Begin));
+                const GpuPushConstants pc{
+                    .ubo = frame_ubo,
+                    .lights = light_addr,
+                    .flags = flags_addr,
+                    .prefix = prefix_addr,
+                    .group_sums = group_sums_addr,
+                    .group_offsets = group_offsets_addr,
+                    .compact = compact_addr,
+                    .indirect_point_light = indirect_point_light_addr,
+                    .indirect_meshlet = indirect_meshlet_addr,
+                    .image_index = offscreen_target_handle.index(),
+                    .light_count = light_count,
+                    .group_count = group_count,
+                };
 
-                    auto bind_and_dispatch = [&](VkPipeline pipeline, VkPipelineLayout layout, u32 groups_x) {
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &bindless.set, 0,
-                                                nullptr);
+                auto bind_and_dispatch = [&](VkPipeline pipeline, VkPipelineLayout layout, u32 groups_x) {
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &bindless.set, 0,
+                                            nullptr);
 
-                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
-                        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(GpuPushConstants), &pc);
+                    vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(GpuPushConstants), &pc);
 
-                        vkCmdDispatch(cmd, groups_x, 1u, 1u);
-                    };
+                    vkCmdDispatch(cmd, groups_x, 1u, 1u);
+                };
 
-                    VkMemoryBarrier mem_barrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                                                .pNext = nullptr,
-                                                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                                                .dstAccessMask =
-                                                        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+                VkMemoryBarrier mem_barrier{
+                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                    .dstAccessMask =
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT
+                };
 
-                    bind_and_dispatch(flags_pipeline, flags_layout, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                bind_and_dispatch(flags_pipeline, flags_layout, group_count);
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
+                                     nullptr);
 
-                    bind_and_dispatch(scan_local_pipeline, scan_local_layout, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                bind_and_dispatch(scan_local_pipeline, scan_local_layout, group_count);
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
+                                     nullptr);
 
-                    bind_and_dispatch(scan_groups_pipeline, scan_groups_layout, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                bind_and_dispatch(scan_groups_pipeline, scan_groups_layout, group_count);
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
+                                     nullptr);
 
-                    bind_and_dispatch(compact_pipeline, compact_layout, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                bind_and_dispatch(compact_pipeline, compact_layout, group_count);
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
+                                     nullptr);
 
-                    // 2. Dispatch Setup: One thread to rule them all
-                    bind_and_dispatch(setup_indirect_pipeline, setup_indirect_layout, 1u);
+                // 2. Dispatch Setup: One thread to rule them all
+                bind_and_dispatch(setup_indirect_pipeline, setup_indirect_layout, 1u);
 
-                    VkBufferMemoryBarrier indirect_barrier{
+                std::array<VkBufferMemoryBarrier, 2> indirect_barrier{
+                    VkBufferMemoryBarrier{
                         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
                         .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
                         .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT, // Essential for DrawIndirect
@@ -894,166 +1387,149 @@ auto execute(int argc, char** argv) -> int {
                         .buffer = indirect_buf,
                         .offset = 0,
                         .size = VK_WHOLE_SIZE
-                    };
+                    },
+                    VkBufferMemoryBarrier{
+                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                        .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT, // Essential for DrawIndirect
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .buffer = indirect_meshlet_buf,
+                        .offset = 0,
+                        .size = VK_WHOLE_SIZE
+                    }
+                };
 
-                    vkCmdPipelineBarrier(cmd,
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,      // Source: Your setup shader
-                        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,       // Destination: The Indirect command processor
-                        0, 0, nullptr, 1, &indirect_barrier, 0, nullptr);
+                vkCmdPipelineBarrier(cmd,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, // Source: Your setup shader
+                                     VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, // Destination: The Indirect command processor
+                                     0, 0, nullptr, 2, indirect_barrier.data(), 0, nullptr);
 
 
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
-                                        static_cast<u32>(GpuStamp::End));
-                },
-                std::span{no_wait_sems}, std::span{no_wait_vals});
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
+                                    static_cast<u32>(GpuStamp::End));
+            },
+            std::span{culling_wait_sems}, std::span{culling_wait_vals});
 
         fs.timeline_values[stage_index(Stage::LightCulling)] = light_val;
 
         std::array gbuffer_wait_sems{tl_compute.timeline};
         std::array gbuffer_wait_vals{fs.timeline_values[stage_index(Stage::LightCulling)]};
 
-       auto gbuffer_val = submit_stage(
-        tl_graphics, device,
-        [&](VkCommandBuffer cmd) {
-            const auto *gqs = ctx.query_pools.get(graphics_query_pool[frame_index]);
-            auto&& [offscreen, depth] = ctx.textures.get_multiple(offscreen_target_handle, offscreen_depth_target_handle);
-            const VkQueryPool& gqp = gqs->pool;
+        auto gbuffer_val = submit_stage(
+            tl_graphics, device,
+            [&](VkCommandBuffer cmd) {
+                const auto *gqs = ctx.query_pools.get(graphics_query_pool[frame_index]);
+                auto &&[offscreen, depth] = ctx.textures.get_multiple(offscreen_target_handle,
+                                                                      offscreen_depth_target_handle);
+                const VkQueryPool &gqp = gqs->pool;
 
-            vkCmdResetQueryPool(cmd, gqp, 0, gqs->query_count);
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, gqp, 0);
+                vkCmdResetQueryPool(cmd, gqp, 0, gqs->query_count);
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, gqp, 0);
 
-            // Only transition on first use
-            if (!offscreen->initialized) {
-                VkImageMemoryBarrier color_barrier{
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .pNext = nullptr,
-                    .srcAccessMask = 0,
-                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = offscreen->image,
-                    .subresourceRange = {
-                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 1
-                    }
+                // Only transition on first use
+                if (!offscreen->initialized) {
+                    VkImageMemoryBarrier color_barrier{
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                        .pNext = nullptr,
+                        .srcAccessMask = 0,
+                        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image = offscreen->image,
+                        .subresourceRange = {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1
+                        }
+                    };
+
+                    vkCmdPipelineBarrier(
+                        cmd,
+                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        0,
+                        0, nullptr,
+                        0, nullptr,
+                        1, &color_barrier
+                    );
+
+                    offscreen->initialized = true;
+                }
+
+                VkRenderingAttachmentInfo color_attachment{
+                    .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                    .imageView = offscreen->sampled_view,
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .clearValue = {.color = {0.0f, 0.0f, 0.0f, 1.0f}},
                 };
 
-                vkCmdPipelineBarrier(
-                    cmd,
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    0,
-                    0, nullptr,
-                    0, nullptr,
-                    1, &color_barrier
-                );
-
-                offscreen->initialized = true;
-            }
-
-            if (!depth->initialized) {
-                VkImageMemoryBarrier depth_barrier{
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .pNext = nullptr,
-                    .srcAccessMask = 0,
-                    .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = depth->image,
-                    .subresourceRange = {
-                        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 1
-                    }
+                VkRenderingAttachmentInfo depth_attachment{
+                    .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                    .imageView = depth->sampled_view,
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                 };
 
-                vkCmdPipelineBarrier(
-                    cmd,
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                    0,
-                    0, nullptr,
-                    0, nullptr,
-                    1, &depth_barrier
-                );
+                VkRenderingInfo rendering_info{
+                    .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                    .renderArea = {.offset = {0, 0}, .extent = {width, height}},
+                    .layerCount = 1,
+                    .colorAttachmentCount = 1,
+                    .pColorAttachments = &color_attachment,
+                    .pDepthAttachment = &depth_attachment,
+                };
 
-                depth->initialized = true;
-            }
+                vkCmdBeginRendering(cmd, &rendering_info);
 
-            VkRenderingAttachmentInfo color_attachment{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = offscreen->sampled_view,
-                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .clearValue = {.color = {0.0f, 0.0f, 0.0f, 1.0f}},
-            };
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline);
 
-            VkRenderingAttachmentInfo depth_attachment{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = depth->sampled_view,
-                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .clearValue = {.depthStencil = {0.0f, 0}},
-            };
+                const RenderingPushConstants pc{
+                    .ubo = frame_ubo,
+                    .compact = compact_addr,
+                    .cube_vertices = cube_vertices_addr,
+                    .cube_indices = cube_indices_addr,
+                    .indirect_point_light = indirect_point_light_addr,
+                    .indirect_meshlet = indirect_meshlet_addr,
+                };
 
-            VkRenderingInfo rendering_info{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea = {.offset = {0, 0}, .extent = {width, height}},
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &color_attachment,
-                .pDepthAttachment = &depth_attachment,
-            };
+                const auto w = static_cast<float>(width);
+                const auto h = static_cast<float>(height);
+                VkViewport vp{
+                    .x = 0,
+                    .y = h,
+                    .width = w,
+                    .height = -h,
+                    .minDepth = 1.0f,
+                    .maxDepth = 0.0f,
+                };
 
-            vkCmdBeginRendering(cmd, &rendering_info);
+                VkRect2D sc{
+                    .offset = {0, 0},
+                    .extent = {width, height}
+                };
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline);
+                vkCmdSetViewport(cmd, 0, 1, &vp);
+                vkCmdSetScissor(cmd, 0, 1, &sc);
+                vkCmdPushConstants(cmd, point_light_layout,
+                                   VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_MESH_BIT_EXT |
+                                   VK_SHADER_STAGE_TASK_BIT_EXT, 0, sizeof(pc), &pc);
+                // vkCmdDrawIndirect(cmd, indirect_buf, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
 
-            const RenderingPushConstants pc {
-                .ubo = frame_ubo,
-                .compact = compact_addr,
-                .cube_vertices = cube_vertices_addr,
-                .cube_indices = cube_indices_addr,
-                .indirect_cube = indirect_addr,
-            };
+                draw_mesh(cmd, indirect_meshlet_buf, 0, 1, sizeof(VkDrawMeshTasksIndirectCommandEXT));
 
-            const auto w = static_cast<float>(width);
-            const auto h = static_cast<float>(height);
-            VkViewport vp {
-                .x = 0,
-                .y = h,
-                .width = w,
-                .height = -h,
-                .minDepth = 1.0f,
-                .maxDepth = 0.0f,
-            };
+                vkCmdEndRendering(cmd);
 
-            VkRect2D sc {
-                .offset = {0, 0},
-                .extent = {width, height}
-            };
-
-            vkCmdSetViewport(cmd, 0, 1, &vp);
-            vkCmdSetScissor(cmd, 0, 1, &sc);
-            vkCmdPushConstants(cmd, point_light_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
-            vkCmdDrawIndirect(cmd, indirect_buf, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
-
-            vkCmdEndRendering(cmd);
-
-            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, gqp, 1);
-        },
-        std::span{gbuffer_wait_sems}, std::span{gbuffer_wait_vals});
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, gqp, 1);
+            },
+            std::span{gbuffer_wait_sems}, std::span{gbuffer_wait_vals});
 
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
         fs.frame_done_value = gbuffer_val;
@@ -1068,7 +1544,8 @@ auto execute(int argc, char** argv) -> int {
             rdoc_api->EndFrameCapture(RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(instance.instance), NULL);
 #endif
         auto frame_end = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(frame_end - start_time).count();
+        auto ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli> >(frame_end - start_time).
+                count();
         stats.add_sample(ms);
     }
 
@@ -1085,9 +1562,9 @@ auto execute(int argc, char** argv) -> int {
     info("GPU graphics mean:  {:.3f} ms", gpu_graphics_ms.avg());
     info("GPU graphics p95:   {:.3f} ms", gpu_graphics_ms.p95());
 
-        const auto&& [oth, ph] = ctx.textures.get_multiple(offscreen_target_handle, perlin_handle);
-       image_operations::write_to_disk(oth, allocator, "output.bmp");
-        image_operations::write_to_disk(ph, allocator, "perlin.bmp");
+    const auto &&[oth, ph] = ctx.textures.get_multiple(offscreen_target_handle, perlin_handle);
+    image_operations::write_to_disk(oth, allocator, "output.bmp");
+    image_operations::write_to_disk(ph, allocator, "perlin.bmp");
 
     pipeline_cache.reset();
     ctx.clear_all();
@@ -1100,12 +1577,13 @@ auto execute(int argc, char** argv) -> int {
     destruction::pipeline(device, compact_pipeline, compact_layout);
     destruction::pipeline(device, point_light_pipeline, point_light_layout);
     destruction::pipeline(device, setup_indirect_pipeline, setup_indirect_layout);
+    destruction::pipeline(device, predepth_pipeline, predepth_layout);
     destruction::global_command_context(command_context);
     destruction::bindless_set(device, bindless);
     destruction::timeline_compute(device, tl_graphics);
     destruction::timeline_compute(device, tl_compute);
     destruction::allocator(allocator);
-        vkDeviceWaitIdle(device);
+    vkDeviceWaitIdle(device);
     destruction::device(device);
     destruction::instance(instance);
 
@@ -1113,7 +1591,7 @@ auto execute(int argc, char** argv) -> int {
 }
 
 
-auto main(int argc , char ** argv) -> int {
+auto main(int argc, char **argv) -> int {
     execute(argc, argv);
 
     info("Bindless headless setup and teardown completed successfully.");

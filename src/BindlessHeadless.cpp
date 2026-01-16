@@ -83,27 +83,22 @@ namespace destruction {
 } // namespace destruction
 
 namespace detail {
-    auto set_debug_name_impl(VmaAllocator &alloc,
-                             VkObjectType object_type,
-                             std::uint64_t object_handle,
-                             std::string_view name) -> void {
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(alloc, &info);
-
-        static PFN_vkSetDebugUtilsObjectNameEXT set_debug_name_func =
+         PFN_vkSetDebugUtilsObjectNameEXT set_debug_name_func =
                 nullptr;
+    auto initialise_debug_name_func(VkInstance inst) -> void {
         if (set_debug_name_func == nullptr) {
             set_debug_name_func =
                     reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
                         vkGetInstanceProcAddr(
-                            info.instance,
+                            inst,
                             "vkSetDebugUtilsObjectNameEXT"));
         }
+    }
 
-        if (set_debug_name_func == nullptr) {
-            return;
-        }
-
+    auto set_debug_name_impl(VkDevice& dev,
+                                 VkObjectType object_type,
+                                 std::uint64_t object_handle,
+                                 std::string_view name) -> void {
         VkDebugUtilsObjectNameInfoEXT name_info{
             .sType =
             VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
@@ -112,8 +107,19 @@ namespace detail {
             .objectHandle = object_handle,
             .pObjectName = name.data()
         };
-        vk_check(set_debug_name_func(info.device, &name_info));
+        vk_check(set_debug_name_func(dev, &name_info));
     }
+
+    auto set_debug_name_impl(VmaAllocator &alloc,
+                             VkObjectType object_type,
+                             std::uint64_t object_handle,
+                             std::string_view name) -> void {
+        VmaAllocatorInfo info{};
+        vmaGetAllocatorInfo(alloc, &info);
+        set_debug_name_impl(info.device, object_type, object_handle, name);
+    }
+
+
 } // namespace detail
 
 auto create_timeline(VkDevice device, VkQueue queue, u32 family_index) -> TimelineCompute {
@@ -567,9 +573,26 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index,
         enabled_exts.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
     }
 
+    enabled_exts.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features_khr {
+    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
+    .pNext = nullptr,
+    .pipelineFragmentShadingRate = VK_TRUE,
+    .primitiveFragmentShadingRate = VK_TRUE ,
+    .attachmentFragmentShadingRate = VK_TRUE
+    };
+
+    VkPhysicalDeviceMeshShaderFeaturesEXT mesh_features = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
+        .pNext = &shading_rate_features_khr,
+        .taskShader = VK_TRUE, // Optional, but recommended for culling
+        .meshShader = VK_TRUE,
+        .primitiveFragmentShadingRateMeshShader = VK_TRUE,
+    };
     VkPhysicalDeviceAccelerationStructureFeaturesKHR accel_features{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
-        .pNext = nullptr
+        .pNext = &mesh_features,
     };
 
     VkPhysicalDeviceVulkan11Features features11{
@@ -591,6 +614,8 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index,
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
         .pNext = &features13,
     };
+
+
     vkGetPhysicalDeviceFeatures2(pd, &features2);
     features2.features.robustBufferAccess = VK_TRUE;
 

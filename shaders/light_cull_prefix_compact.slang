@@ -1,7 +1,5 @@
-// shaders/light_cull_prefix_compact.slang
-// Pointer-based typed access with device addresses passed via push constants.
-
 import common;
+import maths;
 
 static const uint THREADS_PER_GROUP       = 64;
 static const uint MAX_WAVES_PER_GROUP     = 4;
@@ -16,6 +14,7 @@ struct PushConstants
     uint*       group_offsets;
     PointLight* compact;
     IndirectCommand* indirect;
+    IndirectMeshCommand* indirect_mesh;
     uint        image_index;
     uint        light_count;
     uint        group_count;
@@ -23,32 +22,6 @@ struct PushConstants
 
 [[vk::push_constant]]
 PushConstants g_push;
-
-bool sphere_in_frustum(float3 view_pos, float radius, float4 frustum_planes[6])
-{
-    for (int i = 0; i < 6; ++i) {
-        float3 normal = frustum_planes[i].xyz;
-        float d = frustum_planes[i].w;
-
-        float dist = dot(normal, view_pos) + d;
-
-        if (dist < -radius)
-            return false;
-    }
-
-    return true;
-}
-
-bool light_in_frustum(PointLight l, float4x4 view, float4 frustum_planes[6])
-{
-    float3 world_pos = l.position_radius.xyz;
-    float  radius    = l.position_radius.w;
-
-    float4 view_pos4 = mul(view, float4(world_pos, 1.0f));
-    float3 view_pos = view_pos4.xyz;
-
-    return sphere_in_frustum(view_pos, radius, frustum_planes);
-}
 
 // -----------------------------------------------------------------------------
 // Pass 1: compute flags[i] ∈ {0,1}
@@ -157,16 +130,6 @@ void LightCompactCS(uint3 dtid : SV_DispatchThreadID,
                     uint3 gid  : SV_GroupID,
                     uint  gidx : SV_GroupIndex)
 {
-/*if (gid.x == g_push.group_count - 1u && gidx == 0u)
-    {
-        uint last_group    = g_push.group_count - 1u;
-        uint last_offset   = g_push.group_offsets[last_group];
-        uint last_sum      = g_push.group_sums[last_group];
-        uint compact_count = last_offset + last_sum;
-
-        g_push.indirect->instance_count = compact_count;
-    }*/
-
     uint global_idx = dtid.x;
     if (global_idx >= g_push.light_count)
         return;
@@ -175,14 +138,11 @@ void LightCompactCS(uint3 dtid : SV_DispatchThreadID,
     if (flag == 0u)
         return;
 
-    // Read the inclusive prefix and group offset
     uint local_inclusive = g_push.prefix[global_idx];
     uint base_offset     = g_push.group_offsets[gid.x];
 
-    // Compute destination index (convert inclusive to zero-based)
     uint dst = base_offset + local_inclusive - 1u;
 
-    // Write the light
     PointLight l = g_push.lights[global_idx];
     g_push.compact[dst].position_radius = l.position_radius;
     g_push.compact[dst].colour_intensity = l.colour_intensity;
@@ -193,17 +153,18 @@ void LightCompactCS(uint3 dtid : SV_DispatchThreadID,
 [numthreads(1, 1, 1)]
 void SetupIndirectCS()
 {
-    // 1. Calculate final count from the very last elements of your prefix sum
     uint last_group    = g_push.group_count - 1u;
     uint last_offset   = g_push.group_offsets[last_group];
     uint last_sum      = g_push.group_sums[last_group];
     uint total_compact = last_offset + last_sum;
 
-    // 2. Fill the VkDrawIndirectCommand structure
-    // This matches the layout of the buffer used in vkCmdDrawIndexedIndirect
     g_push.indirect->index_count    = 36;            // Cube indices
     g_push.indirect->instance_count = total_compact; // Our culled light count
     g_push.indirect->first_index    = 0;
     g_push.indirect->vertex_offset  = 0;
     g_push.indirect->first_instance = 0;
+
+    g_push.indirect_mesh->wgx =(total_compact + 15u) / 16u;
+    g_push.indirect_mesh->wgy = 1;
+    g_push.indirect_mesh->wgz = 1;
 }

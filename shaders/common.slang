@@ -24,6 +24,12 @@ struct IndirectCommand {
     uint first_instance;
 };
 
+struct IndirectMeshCommand {
+    uint wgx;
+    uint wgy;
+    uint wgz;
+};
+
 [[vk::binding(0, 0)]]
 Texture2D<float> sampled_images[];
 
