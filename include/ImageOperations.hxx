@@ -11,9 +11,7 @@
 #include <string_view>
 
 namespace image_operations {
-    auto write_to_disk(
-        DestructionContext::TexturePool &textures,
-        DestructionContext::TextureHandle texture,
+    auto write_to_disk(const OffscreenTarget*,
         VmaAllocator &allocator,
         std::string_view filename) -> void;
 }

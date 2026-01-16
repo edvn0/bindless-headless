@@ -16,6 +16,14 @@ struct UBO {
     float2 _padding;
 };
 
+struct IndirectCommand {
+    uint index_count;
+    uint instance_count;
+    uint first_index;
+    int vertex_offset;
+    uint first_instance;
+};
+
 [[vk::binding(0, 0)]]
 Texture2D<float> sampled_images[];
 

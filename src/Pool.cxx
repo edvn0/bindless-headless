@@ -39,9 +39,16 @@ auto DestructionContext::create_query_pool(QueryPoolState &&state) -> QueryPoolH
 
 auto DestructionContext::device_address(BufferHandle handle) -> DeviceAddress {
     if (const auto *buf = buffers.get(handle)) {
-        return buf->device_address;
+        return buf->device_address();
     }
     return DeviceAddress::Invalid;
+}
+
+auto DestructionContext::clear_all() -> void {
+    textures.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
+    samplers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
+    buffers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
+    query_pools.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
 }
 
 
@@ -54,10 +61,14 @@ auto destroy(DestructionContext &ctx, DestructionContext::TextureHandle handle, 
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, img = std::move(*impl)]() {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
+        if (img.storage_view == img.sampled_view && (img.sampled_view != VK_NULL_HANDLE && img.sampled_view != VK_NULL_HANDLE)) {
+            vkDestroyImageView(info.device, img.sampled_view, nullptr);
+        } else {
         if (img.storage_view)
             vkDestroyImageView(info.device, img.storage_view, nullptr);
         if (img.sampled_view)
             vkDestroyImageView(info.device, img.sampled_view, nullptr);
+        }
         if (img.image)
             vmaDestroyImage(alloc, img.image, img.allocation);
     });
@@ -85,8 +96,8 @@ auto destroy(DestructionContext &ctx, DestructionContext::BufferHandle handle, u
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, buf = std::move(*impl)]() {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
-        if (buf.buffer)
-            vmaDestroyBuffer(alloc, buf.buffer, buf.allocation);
+        if (buf.buffer())
+            vmaDestroyBuffer(alloc, buf.buffer(), buf.allocation());
     });
 }
 

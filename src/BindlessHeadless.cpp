@@ -266,6 +266,84 @@ auto create_offscreen_target(VmaAllocator alloc, u32 width, u32 height, VkFormat
     return t;
 }
 
+auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format,
+                        std::string_view name) -> OffscreenTarget {
+    OffscreenTarget t{};
+    t.width = width;
+    t.height = height;
+    t.format = format;
+
+    VkImageCreateInfo ici{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = {width, height, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+            VK_IMAGE_USAGE_STORAGE_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT,  // Optional: if you want to sample depth
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = nullptr,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
+    };
+
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    vk_check(vmaCreateImage(alloc, &ici, &aci, &t.image, &t.allocation, nullptr));
+
+    VmaAllocatorInfo info{};
+    vmaGetAllocatorInfo(alloc, &info);
+
+    // Determine aspect mask based on format
+    VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT) {
+        aspect_mask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+
+    // Create depth view (for use as depth attachment)
+    VkImageViewCreateInfo depth_vci{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = t.image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY
+        },
+        .subresourceRange = {
+            .aspectMask = aspect_mask,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        }
+    };
+    vk_check(vkCreateImageView(info.device, &depth_vci, nullptr, &t.sampled_view));
+
+    // For depth targets, we typically don't need a separate storage view
+    // But if you want to read depth in compute shaders, you can create one
+    t.storage_view = t.sampled_view;  // Reuse the same view
+
+    // Set debug names
+    auto depth_view_name = std::format("{}_depth_view", name);
+
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, depth_view_name);
+    vmaSetAllocationName(alloc, t.allocation, name.data());
+
+    return t;
+}
+
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
                                std::string_view name) -> OffscreenTarget {
@@ -494,9 +572,14 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index,
         .pNext = nullptr
     };
 
+    VkPhysicalDeviceVulkan11Features features11{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+        .pNext = &accel_features
+    };
+
     VkPhysicalDeviceVulkan12Features features12{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-        .pNext = &accel_features
+        .pNext = &features11
     };
 
     VkPhysicalDeviceVulkan13Features features13{
@@ -510,6 +593,17 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index,
     };
     vkGetPhysicalDeviceFeatures2(pd, &features2);
     features2.features.robustBufferAccess = VK_TRUE;
+
+    features11.storageBuffer16BitAccess = VK_TRUE;
+    features11.uniformAndStorageBuffer16BitAccess = VK_TRUE;
+    features11.multiview = VK_TRUE;
+    features11.multiviewGeometryShader = VK_TRUE;
+    features11.multiviewTessellationShader = VK_TRUE;
+    features11.variablePointersStorageBuffer = VK_TRUE;
+    features11.variablePointers = VK_TRUE;
+    features11.protectedMemory = VK_FALSE;
+    features11.samplerYcbcrConversion = VK_TRUE;
+    features11.shaderDrawParameters = VK_TRUE;
 
     features12.bufferDeviceAddress = VK_TRUE;
     features12.bufferDeviceAddressCaptureReplay = VK_TRUE;
@@ -536,10 +630,7 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index,
         accel_features.accelerationStructure = VK_TRUE;
         accel_features.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
         accel_features.accelerationStructureCaptureReplay = VK_TRUE;
-        // accel_features.accelerationStructureHostCommands = VK_TRUE;
-        // accel_features.accelerationStructureIndirectBuild = VK_TRUE;
     }
-
 
     float priority_graphics = 1.0f;
     VkDeviceQueueCreateInfo qci_graphics{

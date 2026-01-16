@@ -15,6 +15,7 @@
 
 #include "3PP/PerlinNoise.hpp"
 
+#define HAS_RENDERDOC
 #ifdef HAS_RENDERDOC
 #include "3PP/renderdoc_app.h"
 #endif
@@ -32,9 +33,18 @@ struct GpuPushConstants {
     const DeviceAddress group_sums;
     const DeviceAddress group_offsets;
     const DeviceAddress compact;
+    const DeviceAddress indirect_cube;
     const u32 image_index;
     const u32 light_count;
     const u32 group_count;
+};
+
+struct RenderingPushConstants {
+    const DeviceAddress ubo;
+    const DeviceAddress compact;
+    const DeviceAddress cube_vertices;
+    const DeviceAddress cube_indices;
+    const DeviceAddress indirect_cube;
 };
 
 struct FrustumPlane {
@@ -42,53 +52,31 @@ struct FrustumPlane {
 };
 
 auto extract_frustum_planes = [](const glm::mat4 &inv_proj) -> std::array<FrustumPlane, 6> {
+    // 1. Correct NDC Corners for ZO (0 to 1)
     constexpr std::array<glm::vec4, 8> ndc_corners = {
-            glm::vec4{-1, -1, -1, 1}, {1, -1, -1, 1}, {-1, 1, -1, 1}, {1, 1, -1, 1},
-            {-1, -1, 1, 1},           {1, -1, 1, 1},  {-1, 1, 1, 1},  {1, 1, 1, 1}};
+        glm::vec4{-1, -1, 0, 1}, {1, -1, 0, 1}, {-1, 1, 0, 1}, {1, 1, 0, 1}, // Near (0-3)
+        glm::vec4{-1, -1, 1, 1}, {1, -1, 1, 1}, {-1, 1, 1, 1}, {1, 1, 1, 1}  // Far  (4-7)
+    };
 
-    glm::vec3 view_corners[8];
+    glm::vec3 v[8];
     for (int i = 0; i < 8; ++i) {
-        glm::vec4 v = inv_proj * ndc_corners[i];
-        view_corners[i] = glm::vec3(v) / v.w;
+        glm::vec4 p = inv_proj * ndc_corners[i];
+        v[i] = glm::vec3(p) / p.w;
     }
 
+    auto compute_plane = [](glm::vec3 a, glm::vec3 b, glm::vec3 c) {
+        // This order ensures the normal points INSIDE the frustum
+        glm::vec3 normal = glm::normalize(glm::cross(c - a, b - a));
+        return glm::vec4(normal, -glm::dot(normal, a));
+    };
+
     std::array<FrustumPlane, 6> planes;
-
-    // Left plane: from corners 0,2,4
-    glm::vec3 v0 = view_corners[2] - view_corners[0];
-    glm::vec3 v1 = view_corners[4] - view_corners[0];
-    glm::vec3 normal = glm::normalize(glm::cross(v0, v1)); // ← SWAPPED
-    planes[0].plane = glm::vec4(normal, -glm::dot(normal, view_corners[0]));
-
-    // Right plane: from corners 1,5,3
-    v0 = view_corners[5] - view_corners[1];
-    v1 = view_corners[3] - view_corners[1];
-    normal = glm::normalize(glm::cross(v0, v1)); // ← SWAPPED
-    planes[1].plane = glm::vec4(normal, -glm::dot(normal, view_corners[1]));
-
-    // Bottom plane: from corners 0,4,1
-    v0 = view_corners[4] - view_corners[0];
-    v1 = view_corners[1] - view_corners[0];
-    normal = glm::normalize(glm::cross(v0, v1)); // ← SWAPPED
-    planes[2].plane = glm::vec4(normal, -glm::dot(normal, view_corners[0]));
-
-    // Top plane: from corners 2,3,6
-    v0 = view_corners[3] - view_corners[2];
-    v1 = view_corners[6] - view_corners[2];
-    normal = glm::normalize(glm::cross(v0, v1)); // ← SWAPPED
-    planes[3].plane = glm::vec4(normal, -glm::dot(normal, view_corners[2]));
-
-    // Near plane: from corners 0,1,2
-    v0 = view_corners[1] - view_corners[0];
-    v1 = view_corners[2] - view_corners[0];
-    normal = glm::normalize(glm::cross(v0, v1)); // ← SWAPPED
-    planes[4].plane = glm::vec4(normal, -glm::dot(normal, view_corners[0]));
-
-    // Far plane: from corners 4,6,5
-    v0 = view_corners[6] - view_corners[4];
-    v1 = view_corners[5] - view_corners[4];
-    normal = glm::normalize(glm::cross(v0, v1)); // ← SWAPPED
-    planes[5].plane = glm::vec4(normal, -glm::dot(normal, view_corners[4]));
+    planes[0].plane = compute_plane(v[0], v[2], v[4]); // Left
+    planes[1].plane = compute_plane(v[1], v[5], v[3]); // Right
+    planes[2].plane = compute_plane(v[0], v[4], v[1]); // Bottom
+    planes[3].plane = compute_plane(v[2], v[3], v[6]); // Top
+    planes[4].plane = compute_plane(v[0], v[1], v[2]); // Near
+    planes[5].plane = compute_plane(v[4], v[6], v[5]); // Far
 
     return planes;
 };
@@ -194,9 +182,216 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     return std::make_pair(pipeline, pi_layout);
 }
 
+auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
+                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
+                              const std::string_view vert_entry, const std::string_view frag_entry,
+                              VkFormat color_format)
+        -> std::pair<VkPipeline, VkPipelineLayout> {
+    VkShaderModule vert_shader{};
+    VkShaderModuleCreateInfo vert_create_info{
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .codeSize = vert_code.size() * sizeof(u32),
+            .pCode = vert_code.data()
+    };
+    vk_check(vkCreateShaderModule(device, &vert_create_info, nullptr, &vert_shader));
 
-auto main(int argc, char **argv) -> int {
-#ifdef HAS_RENDERDOC
+    VkShaderModule frag_shader{};
+    VkShaderModuleCreateInfo frag_create_info{
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .codeSize = frag_code.size() * sizeof(u32),
+            .pCode = frag_code.data()
+    };
+    vk_check(vkCreateShaderModule(device, &frag_create_info, nullptr, &frag_shader));
+
+    VkPushConstantRange push_constant_range{
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0,
+            .size = sizeof(RenderingPushConstants),
+    };
+
+    VkPipelineLayout pipeline_layout{};
+    VkPipelineLayoutCreateInfo plci{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
+    };
+    vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pipeline_layout));
+
+    std::array shader_stages{
+            VkPipelineShaderStageCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vert_shader,
+                    .pName = vert_entry.data(),
+                    .pSpecializationInfo = nullptr,
+            },
+            VkPipelineShaderStageCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = frag_shader,
+                    .pName = frag_entry.data(),
+                    .pSpecializationInfo = nullptr,
+            }
+    };
+
+    VkPipelineVertexInputStateCreateInfo vertex_input{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 0,
+            .pVertexBindingDescriptions = nullptr,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions = nullptr,
+    };
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = VK_FALSE,
+    };
+
+    VkPipelineViewportStateCreateInfo viewport_state{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = nullptr, // dynamic
+            .scissorCount = 1,
+            .pScissors = nullptr, // dynamic
+    };
+
+    VkPipelineRasterizationStateCreateInfo rasterization{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .depthClampEnable = VK_FALSE,
+            .rasterizerDiscardEnable = VK_FALSE,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .cullMode = VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = VK_FALSE,
+            .depthBiasConstantFactor = 0.0f,
+            .depthBiasClamp = 0.0f,
+            .depthBiasSlopeFactor = 0.0f,
+            .lineWidth = 1.0f,
+    };
+
+    VkPipelineMultisampleStateCreateInfo multisample{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = VK_FALSE,
+            .minSampleShading = 1.0f,
+            .pSampleMask = nullptr,
+            .alphaToCoverageEnable = VK_FALSE,
+            .alphaToOneEnable = VK_FALSE,
+    };
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_GREATER,
+            .depthBoundsTestEnable = VK_FALSE,
+            .stencilTestEnable = VK_FALSE,
+            .front = {},
+            .back = {},
+            .minDepthBounds = 1.0f,
+            .maxDepthBounds = 0.0f,
+    };
+
+    VkPipelineColorBlendAttachmentState color_blend_attachment{
+            .blendEnable = VK_TRUE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+            .colorBlendOp = VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = VK_BLEND_OP_ADD,
+            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+
+    VkPipelineColorBlendStateCreateInfo color_blend{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .logicOpEnable = VK_FALSE,
+            .logicOp = VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment,
+            .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
+    };
+
+    std::array dynamic_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_state{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
+            .pDynamicStates = dynamic_states.data(),
+    };
+
+    VkPipelineRenderingCreateInfo rendering_info{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .pNext = nullptr,
+            .viewMask = 0,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &color_format,
+            .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
+            .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
+    };
+
+    VkGraphicsPipelineCreateInfo pipeline_info{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &rendering_info,
+            .flags = 0,
+            .stageCount = static_cast<u32>(shader_stages.size()),
+            .pStages = shader_stages.data(),
+            .pVertexInputState = &vertex_input,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = nullptr,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterization,
+            .pMultisampleState = &multisample,
+            .pDepthStencilState = &depth_stencil,
+            .pColorBlendState = &color_blend,
+            .pDynamicState = &dynamic_state,
+            .layout = pipeline_layout,
+            .renderPass = VK_NULL_HANDLE,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = -1,
+    };
+
+    VkPipeline pipeline{};
+    vk_check(vkCreateGraphicsPipelines(device, cache, 1, &pipeline_info, nullptr, &pipeline));
+
+    vkDestroyShaderModule(device, vert_shader, nullptr);
+    vkDestroyShaderModule(device, frag_shader, nullptr);
+
+    return std::make_pair(pipeline, pipeline_layout);
+}
+
+auto execute(int argc, char** argv) -> int {
+    #ifdef HAS_RENDERDOC
     RENDERDOC_API_1_6_0 *rdoc_api = nullptr;
     if (HMODULE mod = GetModuleHandleA("renderdoc.dll")) {
         auto RENDERDOC_GetAPI = reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(mod, "RENDERDOC_GetAPI"));
@@ -205,6 +400,11 @@ auto main(int argc, char **argv) -> int {
     }
 #endif
     auto opts = parse_cli(argc, argv);
+
+    auto width = opts.width;
+    auto height = opts.height;
+    const auto aspect = static_cast<float>(width) / static_cast<float>(height);
+
 
     auto compiler = CompilerSession{};
 
@@ -226,18 +426,16 @@ auto main(int argc, char **argv) -> int {
 
     auto command_context = create_global_cmd_context(device, graphics_queue, graphics_index);
 
-
     auto flags_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightFlagsCS");
     auto scan_local_code =
             compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightScanLocalCS");
     auto scan_groups_code =
             compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightScanGroupsCS");
-    ReflectionData light_flags{};
-    auto compact_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightCompactCS",
-                                                           &light_flags);
-    auto debug_draw_code =
-            compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightDebugDrawCS");
+    auto compact_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "LightCompactCS");
+    auto setup_indirect_code = compiler.compile_compute_from_file("shaders/light_cull_prefix_compact.slang", "SetupIndirectCS");
 
+    auto point_light_vert = compiler.compile_entry_from_file("shaders/point_light.slang", "main_vs");
+    auto point_light_frag = compiler.compile_entry_from_file("shaders/point_light.slang", "heat_fs");
 
     auto allocator = create_allocator(instance.instance, physical_device, device);
 
@@ -250,7 +448,6 @@ auto main(int argc, char **argv) -> int {
 
     bindless.grow_if_needed(300u, 40u, 32u, 8u);
 
-
     auto &&[flags_pipeline, flags_layout] =
             create_compute_pipeline(device, *pipeline_cache, bindless.layout, flags_code, "LightFlagsCS");
     auto &&[scan_local_pipeline, scan_local_layout] =
@@ -259,9 +456,13 @@ auto main(int argc, char **argv) -> int {
             create_compute_pipeline(device, *pipeline_cache, bindless.layout, scan_groups_code, "LightScanGroupsCS");
     auto &&[compact_pipeline, compact_layout] =
             create_compute_pipeline(device, *pipeline_cache, bindless.layout, compact_code, "LightCompactCS");
-    auto &&[debug_draw_pipeline, debug_draw_layout] =
-            create_compute_pipeline(device, *pipeline_cache, bindless.layout, debug_draw_code, "LightDebugDrawCS");
-
+    auto &&[setup_indirect_pipeline, setup_indirect_layout] =
+        create_compute_pipeline(device, *pipeline_cache, bindless.layout, setup_indirect_code, "SetupIndirectCS");
+    auto &&[point_light_pipeline, point_light_layout] =
+    create_graphics_pipeline(device, *pipeline_cache, bindless.layout,
+                            point_light_vert, point_light_frag,
+                            "main_vs", "heat_fs",
+                            VK_FORMAT_R8G8B8A8_UNORM);
 
     DestructionContext ctx{
             .allocator = allocator,
@@ -295,15 +496,18 @@ auto main(int argc, char **argv) -> int {
         }
     }
 
-    ctx.create_texture(create_offscreen_target(allocator, 1280u, 720u, VK_FORMAT_R8G8B8A8_UNORM, "white-texture"));
-    ctx.create_texture(create_offscreen_target(allocator, 1280u, 720u, VK_FORMAT_R8G8B8A8_UNORM, "black-texture"));
+    ctx.create_texture(create_offscreen_target(allocator, width, height, VK_FORMAT_R8G8B8A8_UNORM, "white-texture"));
+    ctx.create_texture(create_offscreen_target(allocator, width, height, VK_FORMAT_R8G8B8A8_UNORM, "black-texture"));
 
     const auto noise = generate_perlin(2048, 2048);
     auto perlin_handle = ctx.create_texture(create_image_from_span_v2(
             allocator, command_context, 2048u, 2048u, VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
 
-    auto handle =
-            ctx.create_texture(create_offscreen_target(allocator, 1280u, 720u, VK_FORMAT_R8G8B8A8_UNORM, "offscreen"));
+    auto offscreen_target_handle =
+            ctx.create_texture(create_offscreen_target(allocator, width, height, VK_FORMAT_R8G8B8A8_UNORM, "offscreen"));
+
+    auto offscreen_depth_target_handle =
+        ctx.create_texture(create_depth_target(allocator, width, height, VK_FORMAT_D32_SFLOAT, "offscreen_depth"));
 
     ctx.create_sampler(
             VkSamplerCreateInfo{
@@ -328,7 +532,7 @@ auto main(int argc, char **argv) -> int {
             },
             "linear_repeat");
 
-    auto perlin_sampler = ctx.create_sampler(create_sampler(allocator,
+    ctx.create_sampler(create_sampler(allocator,
                                                             VkSamplerCreateInfo{
                                                                     .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
                                                                     .magFilter = VK_FILTER_LINEAR,
@@ -356,13 +560,13 @@ auto main(int argc, char **argv) -> int {
         std::array<float, 4> colour_intensity;
     };
 
-    auto all_point_lights = std::vector<PointLight>(500);
-    auto all_point_lights_zero = std::vector<PointLight>(500);
+    auto all_point_lights = std::vector<PointLight>(opts.light_count);
+    auto all_point_lights_zero = std::vector<PointLight>(opts.light_count);
     auto light_count = static_cast<u32>(all_point_lights.size());
     constexpr u32 threads_per_group = 64u;
     auto group_count = (light_count + threads_per_group - 1u) / threads_per_group;
 
-    constexpr auto world_size = 50.F;
+    constexpr auto world_size = 200.F;
 
     auto rng = std::default_random_engine{};
     auto distrib = std::uniform_real_distribution{-world_size, world_size};
@@ -385,8 +589,8 @@ auto main(int argc, char **argv) -> int {
                                            VmaAllocationCreateInfo{}, all_point_lights, "point_light")
                     .value());
 
-    std::vector<u32> zeros_lights(light_count, 0u);
-    std::vector<u32> zeros_groups(group_count, 0u);
+    std::vector zeros_lights(light_count, 0u);
+    std::vector zeros_groups(group_count, 0u);
     auto flags_handle =
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
                                                        VkBufferCreateInfo{
@@ -427,37 +631,107 @@ auto main(int argc, char **argv) -> int {
                     },
                     VmaAllocationCreateInfo{}, all_point_lights_zero, "compact_lights")
                     .value());
-    glm::vec3 camera_pos = glm::vec3(0.0f, 50.0f, -100.0f);
+
+    VkDrawIndexedIndirectCommand indirect_cmd = {
+        .indexCount = 36,
+        .instanceCount = 0,
+        .firstIndex = 0,
+        .vertexOffset = 0,
+        .firstInstance = 0,
+    };
+
+    auto indirect_buffer_handle = ctx.buffers.create(
+        Buffer::from_slice<VkDrawIndexedIndirectCommand>(
+            allocator,
+            VkBufferCreateInfo{
+                .usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            },
+            VmaAllocationCreateInfo{},
+            std::span{&indirect_cmd, 1},
+            "light_draw_indirect"
+        ).value()
+    );
+
+    struct Vert {
+        glm::vec3 pos;
+    };
+
+    struct Cube {
+        std::array<Vert, 8> verts;
+    };
+
+   constexpr Cube cube = {
+        glm::vec3{-0.5f, -0.5f, -0.5f},
+        glm::vec3{ 0.5f, -0.5f, -0.5f},
+        glm::vec3{ 0.5f,  0.5f, -0.5f},
+        glm::vec3{-0.5f,  0.5f, -0.5f},
+        glm::vec3{-0.5f, -0.5f,  0.5f},
+        glm::vec3{ 0.5f, -0.5f,  0.5f},
+        glm::vec3{ 0.5f,  0.5f,  0.5f},
+        glm::vec3{-0.5f,  0.5f,  0.5f},
+    };
+
+    constexpr std::array<u32, 36> cube_indices = {
+        // back (-Z)
+        2, 1, 0, 0, 3, 2,
+
+        // front (+Z)
+        4, 5, 6, 6, 7, 4,
+
+        // bottom (-Y)
+        0, 1, 5, 5, 4, 0,
+
+        // top (+Y)
+        3, 7, 6, 6, 2, 3,
+
+        // left (-X)
+        0, 4, 7, 7, 3, 0,
+
+        // right (+X)
+        1, 2, 6, 6, 5, 1,
+    };
+
+    auto cube_vertices_handle = ctx.buffers.create(
+        Buffer::from_slice<Cube>(
+            allocator,
+            VkBufferCreateInfo{
+                .usage =  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            },
+            VmaAllocationCreateInfo{},
+            std::span {&cube, 1},
+            "light_draw_indirect"
+        ).value()
+    );
+
+    auto cube_indices_handle = ctx.buffers.create(
+    Buffer::from_slice<u32>(
+        allocator,
+        VkBufferCreateInfo{
+            .usage =  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        },
+        VmaAllocationCreateInfo{},
+        std::span {cube_indices.data(), cube_indices.size()},
+        "light_draw_indirect"
+    ).value()
+);
+
+    glm::vec3 camera_pos = glm::vec3(0, 50, -100);
     glm::vec3 camera_target = glm::vec3(0.0f, 0.0f, 0.0f);
     glm::vec3 camera_up = glm::vec3(0.0f, 1.0f, 0.0f);
 
     glm::mat4 view = glm::lookAt(camera_pos, camera_target, camera_up);
-    glm::mat4 projection = glm::perspective(glm::radians(60.0f), // FOV
-                                            1280.0f / 720.0f, // aspect ratio
+    glm::mat4 projection = glm::perspective(glm::radians(90.0f), // FOV
+                                            aspect, // aspect ratio
                                             0.1f, // near plane
                                             1000.0f // far plane
     );
 
-
     glm::mat4 inv_proj = glm::inverse(projection);
     auto frustum_planes = extract_frustum_planes(inv_proj);
-#ifdef DEBUG_FRUSTA
-    glm::vec3 test_point_world = glm::vec3(0.0f, 0.0f, 0.0f); // Origin
-    glm::vec4 test_point_view4 = view * glm::vec4(test_point_world, 1.0f);
-    glm::vec3 test_point_view = glm::vec3(test_point_view4) / test_point_view4.w;
-
-    info("\n=== Frustum Plane Debug ===");
-    info("Test point (world): ({}, {}, {})", test_point_world.x, test_point_world.y, test_point_world.z);
-    info("Test point (view):  ({}, {}, {})", test_point_view.x, test_point_view.y, test_point_view.z);
-
-    const char *plane_names[] = {"Left", "Right", "Bottom", "Top", "Near", "Far"};
-    for (int x = 0; x < 6; ++x) {
-        auto &plane = frustum_planes[x].plane;
-        float dist = glm::dot(glm::vec3(plane), test_point_view) + plane.w;
-        info("{:6} plane: normal=({:+.3f}, {:+.3f}, {:+.3f}), d={:+.3f}, dist={:+.3f}", plane_names[x], plane.x,
-             plane.y, plane.z, plane.w, dist);
-    }
-#endif
 
     FrameUBO ubo_data{
             .view = view,
@@ -490,25 +764,30 @@ auto main(int argc, char **argv) -> int {
     auto group_sums_addr = ctx.device_address(group_sums_handle);
     auto group_offsets_addr = ctx.device_address(group_offsets_handle);
     auto compact_addr = ctx.device_address(compact_lights_handle);
+    auto indirect_addr = ctx.device_address(indirect_buffer_handle);
+    auto cube_vertices_addr = ctx.device_address(cube_vertices_handle);
+    auto cube_indices_addr = ctx.device_address(cube_indices_handle);
+    auto indirect_buf = ctx.buffers.get(indirect_buffer_handle)->buffer();
 
     auto stats = FrameStats{};
     FrameStats gpu_compute_ms{};
     FrameStats gpu_graphics_ms{};
 
-    auto read_timestamp_ms = [&](DestructionContext::QueryPoolHandle h) -> std::optional<double> {
-        auto *qs = ctx.query_pools.get(h);
+    auto read_timestamp_ms = [&](const auto h) -> std::optional<double> {
+        const auto *qs = ctx.query_pools.get(h);
         if (!qs)
             return std::nullopt;
 
         u64 stamps[2] = {};
-        VkResult r = vkGetQueryPoolResults(device, qs->pool, 0, 2, sizeof(stamps), stamps, sizeof(u64),
+        const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 2, sizeof(stamps), stamps, sizeof(u64),
                                            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
         if (r != VK_SUCCESS)
             return std::nullopt;
 
         const u64 dt_ticks = stamps[1] - stamps[0];
         const double dt_ns = static_cast<double>(dt_ticks) * qs->timestamp_period_ns;
-        return dt_ns * 1e-6; // ms
+        constexpr auto ns_to_ms_factor = 1e-6;
+        return dt_ns * ns_to_ms_factor;
     };
 
     for (i = 0; i < opts.iteration_count; ++i) {
@@ -546,36 +825,12 @@ auto main(int argc, char **argv) -> int {
         auto light_val = submit_stage(
                 tl_compute, device,
                 [&](VkCommandBuffer cmd) {
-                    auto &target = *ctx.textures.get(handle);
-                    auto *cqs = ctx.query_pools.get(compute_query_pool[frame_index]);
-                    VkQueryPool cqp = cqs->pool;
+                    const auto *cqs = ctx.query_pools.get(compute_query_pool[frame_index]);
+                    const auto& cqp = cqs->pool;
 
                     vkCmdResetQueryPool(cmd, cqp, 0, cqs->query_count);
                     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
                                         static_cast<u32>(GpuStamp::Begin));
-
-
-                    VkImageMemoryBarrier image_barrier{
-                            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                            .pNext = nullptr,
-                            .srcAccessMask = 0,
-                            .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                            .image = target.image,
-                            .subresourceRange = VkImageSubresourceRange{.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                                        .baseMipLevel = 0,
-                                                                        .levelCount = 1,
-                                                                        .baseArrayLayer = 0,
-                                                                        .layerCount = 1}};
-
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         0, 0, nullptr, 0, nullptr, 1, &image_barrier);
-
-                    target.initialized = true;
-
                     const GpuPushConstants pc{
                             .ubo = frame_ubo,
                             .lights = light_addr,
@@ -584,7 +839,8 @@ auto main(int argc, char **argv) -> int {
                             .group_sums = group_sums_addr,
                             .group_offsets = group_offsets_addr,
                             .compact = compact_addr,
-                            .image_index = handle.index(),
+                        .indirect_cube = indirect_addr,
+                            .image_index = offscreen_target_handle.index(),
                             .light_count = light_count,
                             .group_count = group_count,
                     };
@@ -616,7 +872,7 @@ auto main(int argc, char **argv) -> int {
                                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
                                          nullptr);
 
-                    bind_and_dispatch(scan_groups_pipeline, scan_groups_layout, 1u);
+                    bind_and_dispatch(scan_groups_pipeline, scan_groups_layout, group_count);
                     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
                                          nullptr);
@@ -626,7 +882,25 @@ auto main(int argc, char **argv) -> int {
                                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
                                          nullptr);
 
-                    bind_and_dispatch(debug_draw_pipeline, debug_draw_layout, group_count);
+                    // 2. Dispatch Setup: One thread to rule them all
+                    bind_and_dispatch(setup_indirect_pipeline, setup_indirect_layout, 1u);
+
+                    VkBufferMemoryBarrier indirect_barrier{
+                        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                        .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT, // Essential for DrawIndirect
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .buffer = indirect_buf,
+                        .offset = 0,
+                        .size = VK_WHOLE_SIZE
+                    };
+
+                    vkCmdPipelineBarrier(cmd,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,      // Source: Your setup shader
+                        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,       // Destination: The Indirect command processor
+                        0, 0, nullptr, 1, &indirect_barrier, 0, nullptr);
+
 
                     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
                                         static_cast<u32>(GpuStamp::End));
@@ -638,18 +912,148 @@ auto main(int argc, char **argv) -> int {
         std::array gbuffer_wait_sems{tl_compute.timeline};
         std::array gbuffer_wait_vals{fs.timeline_values[stage_index(Stage::LightCulling)]};
 
-        auto gbuffer_val = submit_stage(
-                tl_graphics, device,
-                [&](VkCommandBuffer cmd) {
-                    auto *gqs = ctx.query_pools.get(graphics_query_pool[frame_index]);
-                    VkQueryPool gqp = gqs->pool;
+       auto gbuffer_val = submit_stage(
+        tl_graphics, device,
+        [&](VkCommandBuffer cmd) {
+            const auto *gqs = ctx.query_pools.get(graphics_query_pool[frame_index]);
+            auto&& [offscreen, depth] = ctx.textures.get_multiple(offscreen_target_handle, offscreen_depth_target_handle);
+            const VkQueryPool& gqp = gqs->pool;
 
-                    vkCmdResetQueryPool(cmd, gqp, 0, gqs->query_count);
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, gqp, 0);
+            vkCmdResetQueryPool(cmd, gqp, 0, gqs->query_count);
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, gqp, 0);
 
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, gqp, 1);
-                },
-                std::span{gbuffer_wait_sems}, std::span{gbuffer_wait_vals});
+            // Only transition on first use
+            if (!offscreen->initialized) {
+                VkImageMemoryBarrier color_barrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = 0,
+                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = offscreen->image,
+                    .subresourceRange = {
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .baseMipLevel = 0,
+                        .levelCount = 1,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1
+                    }
+                };
+
+                vkCmdPipelineBarrier(
+                    cmd,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    0,
+                    0, nullptr,
+                    0, nullptr,
+                    1, &color_barrier
+                );
+
+                offscreen->initialized = true;
+            }
+
+            if (!depth->initialized) {
+                VkImageMemoryBarrier depth_barrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = 0,
+                    .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = depth->image,
+                    .subresourceRange = {
+                        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                        .baseMipLevel = 0,
+                        .levelCount = 1,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1
+                    }
+                };
+
+                vkCmdPipelineBarrier(
+                    cmd,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                    0,
+                    0, nullptr,
+                    0, nullptr,
+                    1, &depth_barrier
+                );
+
+                depth->initialized = true;
+            }
+
+            VkRenderingAttachmentInfo color_attachment{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = offscreen->sampled_view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .clearValue = {.color = {0.0f, 0.0f, 0.0f, 1.0f}},
+            };
+
+            VkRenderingAttachmentInfo depth_attachment{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = depth->sampled_view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .clearValue = {.depthStencil = {0.0f, 0}},
+            };
+
+            VkRenderingInfo rendering_info{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .renderArea = {.offset = {0, 0}, .extent = {width, height}},
+                .layerCount = 1,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &color_attachment,
+                .pDepthAttachment = &depth_attachment,
+            };
+
+            vkCmdBeginRendering(cmd, &rendering_info);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline);
+
+            const RenderingPushConstants pc {
+                .ubo = frame_ubo,
+                .compact = compact_addr,
+                .cube_vertices = cube_vertices_addr,
+                .cube_indices = cube_indices_addr,
+                .indirect_cube = indirect_addr,
+            };
+
+            const auto w = static_cast<float>(width);
+            const auto h = static_cast<float>(height);
+            VkViewport vp {
+                .x = 0,
+                .y = h,
+                .width = w,
+                .height = -h,
+                .minDepth = 1.0f,
+                .maxDepth = 0.0f,
+            };
+
+            VkRect2D sc {
+                .offset = {0, 0},
+                .extent = {width, height}
+            };
+
+            vkCmdSetViewport(cmd, 0, 1, &vp);
+            vkCmdSetScissor(cmd, 0, 1, &sc);
+            vkCmdPushConstants(cmd, point_light_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+            vkCmdDrawIndirect(cmd, indirect_buf, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
+
+            vkCmdEndRendering(cmd);
+
+            vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, gqp, 1);
+        },
+        std::span{gbuffer_wait_sems}, std::span{gbuffer_wait_vals});
 
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
         fs.frame_done_value = gbuffer_val;
@@ -668,6 +1072,7 @@ auto main(int argc, char **argv) -> int {
         stats.add_sample(ms);
     }
 
+    info("Light count {}", opts.light_count);
     info("frames: {}", stats.samples.size());
     info("mean:   {:.3f} ms", stats.mean);
     info("median: {:.3f} ms", stats.median());
@@ -680,19 +1085,12 @@ auto main(int argc, char **argv) -> int {
     info("GPU graphics mean:  {:.3f} ms", gpu_graphics_ms.avg());
     info("GPU graphics p95:   {:.3f} ms", gpu_graphics_ms.p95());
 
-    vkDeviceWaitIdle(device);
-    image_operations::write_to_disk(ctx.textures, handle, allocator, "output.bmp");
-    image_operations::write_to_disk(ctx.textures, perlin_handle, allocator, "perlin.bmp");
-    vkDeviceWaitIdle(device);
+        const auto&& [oth, ph] = ctx.textures.get_multiple(offscreen_target_handle, perlin_handle);
+       image_operations::write_to_disk(oth, allocator, "output.bmp");
+        image_operations::write_to_disk(ph, allocator, "perlin.bmp");
 
     pipeline_cache.reset();
-
-    ctx.textures.for_each_live([&](auto h, auto &) { destroy(ctx, h); });
-
-    ctx.samplers.for_each_live([&](auto h, auto &) { destroy(ctx, h); });
-
-    ctx.buffers.for_each_live([&](auto h, auto &) { destroy(ctx, h); });
-    ctx.query_pools.for_each_live([&](auto p, auto &) { destroy(ctx, p); });
+    ctx.clear_all();
 
     ctx.destroy_queue.retire(UINT64_MAX);
 
@@ -700,14 +1098,23 @@ auto main(int argc, char **argv) -> int {
     destruction::pipeline(device, scan_local_pipeline, scan_local_layout);
     destruction::pipeline(device, scan_groups_pipeline, scan_groups_layout);
     destruction::pipeline(device, compact_pipeline, compact_layout);
-    destruction::pipeline(device, debug_draw_pipeline, debug_draw_layout);
+    destruction::pipeline(device, point_light_pipeline, point_light_layout);
+    destruction::pipeline(device, setup_indirect_pipeline, setup_indirect_layout);
     destruction::global_command_context(command_context);
     destruction::bindless_set(device, bindless);
     destruction::timeline_compute(device, tl_graphics);
     destruction::timeline_compute(device, tl_compute);
     destruction::allocator(allocator);
+        vkDeviceWaitIdle(device);
     destruction::device(device);
     destruction::instance(instance);
+
+    return 0;
+}
+
+
+auto main(int argc , char ** argv) -> int {
+    execute(argc, argv);
 
     info("Bindless headless setup and teardown completed successfully.");
     return 0;

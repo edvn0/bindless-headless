@@ -106,7 +106,7 @@ namespace image_operations {
         }
     } // namespace
 
-    auto write_to_disk(DestructionContext::TexturePool &textures, DestructionContext::TextureHandle texture,
+    auto write_to_disk(const OffscreenTarget* texture,
                        VmaAllocator &allocator, std::string_view filename) -> void {
         auto output = std::ofstream{filename.data(), std::ios::binary};
         if (!output) {
@@ -114,13 +114,12 @@ namespace image_operations {
             return;
         }
 
-        auto resolved = textures.get(texture);
-        if (!resolved) {
-            error("Invalid texture handle for writing to disk");
+        if (!texture) {
+            error("Nullptr image, could maybe not resolve?");
             return;
         }
 
-        auto const &tex = *resolved;
+        auto const &tex = *texture;
 
         auto pixel_size = 0u;
         switch (tex.format) {

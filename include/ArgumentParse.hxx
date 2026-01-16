@@ -17,14 +17,17 @@ static auto env_pipeline_cache_dir() -> std::optional<std::filesystem::path> {
     return p;
 }
 
-struct cli_options {
+struct CLIOptions {
     std::optional<std::filesystem::path> pipeline_cache_dir;
     std::filesystem::path legacy_positional_dir{};
     std::uint32_t iteration_count = 5;
+    std::uint32_t width {1280};
+    std::uint32_t height {720};
+    std::uint32_t light_count {50000};
 };
 
-static auto parse_cli(int argc, char** argv) -> cli_options {
-    cli_options opt{};
+static auto parse_cli(int argc, char** argv) -> CLIOptions {
+    CLIOptions opt{};
 
     CLI::App app{"Bindless headless runner"};
 
@@ -42,6 +45,10 @@ static auto parse_cli(int argc, char** argv) -> cli_options {
     app.add_option("pipeline_cache_dir", opt.legacy_positional_dir,
                    "Legacy positional cache directory (used if no --pipeline-cache-path)")
         ->check(CLI::ExistingDirectory);
+
+    app.add_option("-l,--light_count", opt.light_count, "Light count");
+    app.add_option("--width", opt.width, "Width of 'window'")->default_val(1280);
+    app.add_option("--height", opt.height, "Height of 'window'")->default_val(720);
 
     // Let CLI11 handle -h/--help
     app.allow_extras(false);

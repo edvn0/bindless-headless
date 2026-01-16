@@ -6,6 +6,13 @@ if(POLICY CMP0141)
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
 
+include(CheckIPOSupported)
+check_ipo_supported(
+    RESULT ipo_supported
+    OUTPUT ipo_output
+    LANGUAGES CXX  
+)
+
 project("BindlessHeadless")
 
 include(cmake/CPM.cmake)
@@ -22,7 +29,7 @@ CPMAddPackage(
   VERSION 2.6.1
 )
 
-add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx")
+add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx" "src/Compiler.cxx")
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
@@ -52,6 +59,13 @@ target_link_libraries(BindlessHeadless PRIVATE
   CLI11::CLI11
 )
 
+if( supported )
+  message(STATUS "IPO / LTO enabled")
+  set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+  message(STATUS "IPO / LTO not supported: <${error}>")
+endif()
+
 option(HAS_RENDERDOC "Enable RenderDoc integration" OFF)
 
 if(HAS_RENDERDOC)
@@ -61,8 +75,7 @@ endif()
 # Add Slang include directory
 target_include_directories(BindlessHeadless PRIVATE ${SLANG_INCLUDE_DIR} ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 
-target_compile_definitions(BindlessHeadless PRIVATE _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1)
-target_compile_definitions(BindlessHeadless PUBLIC GLM_FORCE_LEFT_HANDED GLM_FORCE_DEPTH_ZERO_TO_ONE)
+target_compile_definitions(BindlessHeadless PRIVATE _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1 GLM_FORCE_DEPTH_ZERO_TO_ONE)
 target_compile_options(BindlessHeadless PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX>
   $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Werror>

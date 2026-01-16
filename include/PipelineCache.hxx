@@ -81,13 +81,13 @@ struct PipelineCache {
     operator VkPipelineCache() const noexcept { return cache; }
 
 private:
-    auto read_cache() -> std::vector<std::uint8_t> {
+    auto read_cache() const -> std::vector<std::uint8_t> {
         if (!has_path) return {};
 
         std::error_code ec{};
         if (!std::filesystem::exists(cache_path, ec)) return {};
 
-        auto sz = std::filesystem::file_size(cache_path, ec);
+        const auto sz = std::filesystem::file_size(cache_path, ec);
         if (ec || sz == 0U) return {};
 
         std::vector<std::uint8_t> buf(sz);
@@ -96,7 +96,8 @@ private:
 
         f.read(reinterpret_cast<char *>(buf.data()),
                static_cast<std::streamsize>(buf.size()));
-        if (!f) return {};
+
+        info("Read pipeline cache from {}, at {} bytes.", std::filesystem::absolute(cache_path).string(), sz);
 
         return buf;
     }

@@ -130,6 +130,8 @@ auto create_offscreen_target(
     u32 height,
     VkFormat format,
     std::string_view name = "Empty") -> OffscreenTarget ;
+auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format,
+                        std::string_view name) -> OffscreenTarget;
 
 auto create_image_from_span_v2(
     VmaAllocator alloc,

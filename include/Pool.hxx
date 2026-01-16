@@ -178,6 +178,15 @@ public:
         return &entries[index].object;
     }
 
+    [[nodiscard]] auto get_multiple(auto&&... handles) const
+    {
+        return std::make_tuple(get(handles)...);
+    }
+    [[nodiscard]] auto get_multiple(auto&&... handles)
+    {
+        return std::make_tuple(get(handles)...);
+    }
+
     [[nodiscard]] auto get(Handle<ObjectType> handle) -> ImplObjectType * {
         if (handle.empty()) {
             return nullptr;
@@ -258,30 +267,28 @@ struct DestructionContext {
 
     using TextureHandle = Handle<struct TextureTag>;
     using TexturePool = Pool<TextureTag, OffscreenTarget>;
+    using SamplerHandle = Handle<struct SamplerTag>;
+    using SamplerPool = Pool<SamplerTag, VkSampler>;
+    using BufferHandle = Handle<struct BufferTag>;
+    using BufferPool = Pool<BufferTag, Buffer>;
+    using QueryPoolHandle = Handle<struct QueryPoolTag>;
+    using QueryPoolPool   = Pool<QueryPoolTag, QueryPoolState>;
 
     TexturePool textures{};
     auto create_texture(OffscreenTarget &&) -> TextureHandle;
-
-    using SamplerHandle = Handle<struct SamplerTag>;
-    using SamplerPool = Pool<SamplerTag, VkSampler>;
 
     SamplerPool samplers{};
     auto create_sampler(VkSampler &&) -> SamplerHandle;
     auto create_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
 
-    using BufferHandle = Handle<struct BufferTag>;
-    using BufferPool = Pool<BufferTag, Buffer>;
-
     BufferPool buffers{};
     auto create_buffer(Buffer &&) -> BufferHandle;
 
-using QueryPoolHandle = Handle<struct QueryPoolTag>;
-    using QueryPoolPool   = Pool<QueryPoolTag, QueryPoolState>;
     QueryPoolPool query_pools{};
     auto create_query_pool(QueryPoolState &&) -> QueryPoolHandle;
 
-
     auto device_address(BufferHandle) -> DeviceAddress;
+    auto clear_all() -> void;
 
 private:
     [[nodiscard]] auto get_device() const -> VkDevice;

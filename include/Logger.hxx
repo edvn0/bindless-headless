@@ -14,7 +14,7 @@ namespace detail {
     public:
         static auto instance() -> Logger &;
 
-        auto log(std::string_view msg, Level level) -> void;
+        auto log(std::string_view msg, Level level) const -> void;
 
         template<typename... Args>
         auto log_formatted(Level level, std::format_string<Args...> fmt, Args &&...args) -> void {

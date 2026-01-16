@@ -86,10 +86,10 @@ namespace detail {
     Logger::~Logger() = default;
 
     auto Logger::instance() -> Logger & {
-        static Logger logger;
-        return logger;
+        static Logger instance;
+        return instance;
     }
 
-    auto Logger::log(std::string_view msg, Level level) -> void { impl_->log(msg, level); }
+    auto Logger::log(const std::string_view msg, const Level level) const -> void { impl_->log(msg, level); }
 
 } // namespace detail

@@ -15,6 +15,7 @@ struct PushConstants
     uint*       group_sums;
     uint*       group_offsets;
     PointLight* compact;
+    IndirectCommand* indirect;
     uint        image_index;
     uint        light_count;
     uint        group_count;
@@ -153,9 +154,20 @@ void LightScanGroupsCS(uint3 dtid : SV_DispatchThreadID)
 [numthreads(THREADS_PER_GROUP, 1, 1)]
 [shader("compute")]
 void LightCompactCS(uint3 dtid : SV_DispatchThreadID,
-                    uint3 gid  : SV_GroupID)
+                    uint3 gid  : SV_GroupID,
+                    uint  gidx : SV_GroupIndex)
 {
-   uint global_idx = dtid.x;
+/*if (gid.x == g_push.group_count - 1u && gidx == 0u)
+    {
+        uint last_group    = g_push.group_count - 1u;
+        uint last_offset   = g_push.group_offsets[last_group];
+        uint last_sum      = g_push.group_sums[last_group];
+        uint compact_count = last_offset + last_sum;
+
+        g_push.indirect->instance_count = compact_count;
+    }*/
+
+    uint global_idx = dtid.x;
     if (global_idx >= g_push.light_count)
         return;
 
@@ -173,62 +185,25 @@ void LightCompactCS(uint3 dtid : SV_DispatchThreadID,
     // Write the light
     PointLight l = g_push.lights[global_idx];
     g_push.compact[dst].position_radius = l.position_radius;
-g_push.compact[dst].colour_intensity = l.colour_intensity;
+    g_push.compact[dst].colour_intensity = l.colour_intensity;
+
 }
 
-// -----------------------------------------------------------------------------
-// Pass 5: debug draw – draw one pixel for each compacted light
-// -----------------------------------------------------------------------------
-[numthreads(THREADS_PER_GROUP, 1, 1)]
 [shader("compute")]
-void LightDebugDrawCS(uint3 dtid : SV_DispatchThreadID)
+[numthreads(1, 1, 1)]
+void SetupIndirectCS()
 {
-    uint idx = dtid.x;
-
-    if (g_push.group_count == 0u)
-        return;
-
+    // 1. Calculate final count from the very last elements of your prefix sum
     uint last_group    = g_push.group_count - 1u;
     uint last_offset   = g_push.group_offsets[last_group];
     uint last_sum      = g_push.group_sums[last_group];
-    uint compact_count = last_offset + last_sum;
+    uint total_compact = last_offset + last_sum;
 
-uint max_compact = min(compact_count, g_push.light_count);
-if (idx >= max_compact)
-    return;
-
-    uint image_idx = NonUniformResourceIndex(g_push.image_index);
-    RWTexture2D<float4> image = storage_images[image_idx];
-
-    uint width, height;
-    image.GetDimensions(width, height);
-
-    PointLight l = g_push.compact[idx];
-    float3 world_pos = l.position_radius.xyz;
-
-    // Use actual projection matrix - transform world to clip space
-    float4x4 view = g_push.frame_ubo->view;
-    float4x4 proj = g_push.frame_ubo->projection;
-
-    float4 view_pos = mul(view, float4(world_pos, 1.0f));
-    float4 clip_pos = mul(proj, view_pos);
-
-    if (clip_pos.w <= 0.0f)
-        return;
-
-    float3 ndc = clip_pos.xyz / clip_pos.w;
-
-    // Convert NDC [-1,1] to UV [0,1]
-    float2 uv;
-    uv.x = ndc.x * 0.5f + 0.5f;
-    uv.y = ndc.y * 0.5f + 0.5f;
-    uv = saturate(uv);
-
-    uint2 pixel = uint2(
-        uint(uv.x * float(width  - 1)),
-        uint(uv.y * float(height - 1))
-    );
-
-    float3 color = l.colour_intensity.xyz;
-    image[pixel] = float4(color, 1.0f);
+    // 2. Fill the VkDrawIndirectCommand structure
+    // This matches the layout of the buffer used in vkCmdDrawIndexedIndirect
+    g_push.indirect->index_count    = 36;            // Cube indices
+    g_push.indirect->instance_count = total_compact; // Our culled light count
+    g_push.indirect->first_index    = 0;
+    g_push.indirect->vertex_offset  = 0;
+    g_push.indirect->first_instance = 0;
 }
