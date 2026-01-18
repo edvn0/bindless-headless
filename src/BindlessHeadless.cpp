@@ -38,7 +38,7 @@ namespace destruction {
         vkDestroyInstance(inst.instance, nullptr);
     }
 
-    auto device(VkDevice&dev) -> void {
+    auto device(VkDevice &dev) -> void {
         if (dev) {
             vkDestroyDevice(dev, nullptr);
         }
@@ -57,7 +57,7 @@ namespace destruction {
         bs.set = VK_NULL_HANDLE;
     }
 
-    auto allocator(VmaAllocator&alloc) -> void {
+    auto allocator(VmaAllocator &alloc) -> void {
         if (alloc) {
             vmaDestroyAllocator(alloc);
         }
@@ -70,7 +70,7 @@ namespace destruction {
         comp = {};
     }
 
-    auto pipeline(VkDevice dev, VkPipeline&p, VkPipelineLayout&l) -> void {
+    auto pipeline(VkDevice dev, VkPipeline &p, VkPipelineLayout &l) -> void {
         if (p != VK_NULL_HANDLE) {
             vkDestroyPipeline(dev, p, nullptr);
         }
@@ -83,31 +83,33 @@ namespace destruction {
 } // namespace destruction
 
 namespace detail {
-         PFN_vkSetDebugUtilsObjectNameEXT set_debug_name_func =
-                nullptr;
+    MaybeNoOp<PFN_vkSetDebugUtilsObjectNameEXT> set_debug_name_func;
+
     auto initialise_debug_name_func(VkInstance inst) -> void {
-        if (set_debug_name_func == nullptr) {
-            set_debug_name_func =
+        auto &func = set_debug_name_func;
+        if (func.empty()) {
+            func =
                     reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-                        vkGetInstanceProcAddr(
-                            inst,
-                            "vkSetDebugUtilsObjectNameEXT"));
+                        vkGetInstanceProcAddr(inst, "vkSetDebugUtilsObjectNameEXT"));
         }
     }
 
-    auto set_debug_name_impl(VkDevice& dev,
-                                 VkObjectType object_type,
-                                 std::uint64_t object_handle,
-                                 std::string_view name) -> void {
+    auto set_debug_name_impl(VkDevice &dev,
+                             VkObjectType object_type,
+                             std::uint64_t object_handle,
+                             std::string_view name) -> void {
         VkDebugUtilsObjectNameInfoEXT name_info{
-            .sType =
-            VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
             .pNext = nullptr,
             .objectType = object_type,
             .objectHandle = object_handle,
             .pObjectName = name.data()
         };
-        vk_check(set_debug_name_func(dev, &name_info));
+
+        if (auto res = set_debug_name_func(dev, &name_info)) {
+            vk_check(*res); // function existed; check VkResult
+        }
+        // else: extension not present -> no-op
     }
 
     auto set_debug_name_impl(VmaAllocator &alloc,
@@ -118,8 +120,6 @@ namespace detail {
         vmaGetAllocatorInfo(alloc, &info);
         set_debug_name_impl(info.device, object_type, object_handle, name);
     }
-
-
 } // namespace detail
 
 auto create_timeline(VkDevice device, VkQueue queue, u32 family_index) -> TimelineCompute {
@@ -164,7 +164,7 @@ auto create_timeline(VkDevice device, VkQueue queue, u32 family_index) -> Timeli
     return t;
 }
 
-auto create_sampler(VmaAllocator&alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler {
+auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler {
     VkSampler sampler{};
     VmaAllocatorInfo info{};
     vmaGetAllocatorInfo(alloc, &info);
@@ -273,7 +273,7 @@ auto create_offscreen_target(VmaAllocator alloc, u32 width, u32 height, VkFormat
 }
 
 auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format,
-                        std::string_view name) -> OffscreenTarget {
+                         std::string_view name) -> OffscreenTarget {
     OffscreenTarget t{};
     t.width = width;
     t.height = height;
@@ -572,12 +572,12 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index,
 
     enabled_exts.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
 
-    VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features_khr {
-    .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
-    .pNext = nullptr,
-    .pipelineFragmentShadingRate = VK_TRUE,
-    .primitiveFragmentShadingRate = VK_TRUE ,
-    .attachmentFragmentShadingRate = VK_TRUE
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features_khr{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
+        .pNext = nullptr,
+        .pipelineFragmentShadingRate = VK_TRUE,
+        .primitiveFragmentShadingRate = VK_TRUE,
+        .attachmentFragmentShadingRate = VK_TRUE
     };
 
     VkPhysicalDeviceMeshShaderFeaturesEXT mesh_features = {

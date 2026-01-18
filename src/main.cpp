@@ -142,28 +142,27 @@ static VkBool32 debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT mess
 }
 
 struct CompiledPipeline {
-    VkPipeline pipeline {VK_NULL_HANDLE};
-    VkPipelineLayout layout {VK_NULL_HANDLE};
+    VkPipeline pipeline{VK_NULL_HANDLE};
+    VkPipelineLayout layout{VK_NULL_HANDLE};
 };
 
-auto create_compute_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout ,
-                             const std::vector<u32> &,  std::string_view )
-    ->CompiledPipeline;
+auto create_compute_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout,
+                             const std::vector<u32> &, std::string_view)
+    -> CompiledPipeline;
 
 template<std::size_t N>
 auto create_compute_pipelines(
     VkDevice device,
-    PipelineCache& cache,
+    PipelineCache &cache,
     VkDescriptorSetLayout layout,
     std::span<std::vector<u32>, N> codes,
     std::span<const std::string_view, N> names)
-    -> std::array<CompiledPipeline, N>
-{
+    -> std::array<CompiledPipeline, N> {
     std::array<CompiledPipeline, N> out{};
 
     auto rng = std::views::zip(codes, names)
-             | std::views::transform([&](auto&& zipped) {
-                   auto&& [code, name] = zipped;
+               | std::views::transform([&](auto &&zipped) {
+                   auto &&[code, name] = zipped;
                    return create_compute_pipeline(device, cache, layout, code, name);
                });
 
@@ -173,7 +172,7 @@ auto create_compute_pipelines(
 
 auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
                              const std::vector<u32> &code, const std::string_view entry_name)
-    ->CompiledPipeline {
+    -> CompiledPipeline {
     VkShaderModule compute_shader{};
     VkShaderModuleCreateInfo create_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -201,6 +200,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
         .pPushConstantRanges = &push_constant_range,
     };
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pi_layout, entry_name);
 
     VkComputePipelineCreateInfo cpci{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
@@ -222,6 +222,8 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     };
     VkPipeline pipeline{};
     vk_check(vkCreateComputePipelines(device, cache, 1, &cpci, nullptr, &pipeline));
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, entry_name);
+
 
     vkDestroyShaderModule(device, compute_shader, nullptr);
     return {pipeline, pi_layout};
@@ -233,7 +235,7 @@ auto create_predepth_pipeline(
     VkDescriptorSetLayout bindless_layout,
     const std::vector<uint32_t> &task_code,
     const std::vector<uint32_t> &mesh_spirv,
-    VkFormat depth_format) -> std::pair<VkPipeline, VkPipelineLayout> {
+    VkFormat depth_format) -> CompiledPipeline {
     VkShaderModule task_module{};
     VkShaderModuleCreateInfo create_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -285,6 +287,8 @@ auto create_predepth_pipeline(
     };
     VkPipelineLayout layout;
     vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, "predepth");
+
 
     // 3. Specialized Depth State
     VkPipelineDepthStencilStateCreateInfo ds{
@@ -345,6 +349,8 @@ auto create_predepth_pipeline(
 
     VkPipeline pipeline;
     vkCreateGraphicsPipelines(device, cache, 1, &ci, nullptr, &pipeline);
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "predepth");
+
 
     // Cleanup local modules
     vkDestroyShaderModule(device, task_module, nullptr);
@@ -356,7 +362,7 @@ auto create_predepth_pipeline(
 auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
                           const std::vector<u32> &mesh_code,
                           const std::vector<u32> &task_code,
-                          const std::vector<u32> &frag_code, VkFormat color_format) {
+                          const std::vector<u32> &frag_code, VkFormat color_format) -> CompiledPipeline {
     VkShaderModule mesh_module{};
     VkShaderModuleCreateInfo mesh_create_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -404,6 +410,8 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
         .pPushConstantRanges = &push_constant_range,
     };
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pipeline_layout));
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pipeline_layout, "mesh_primary");
+
 
     std::vector<VkPipelineShaderStageCreateInfo> stages = {
         {
@@ -539,19 +547,21 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
 
     VkPipeline pipeline{};
     vk_check(vkCreateGraphicsPipelines(device, cache, 1, &pipeline_info, nullptr, &pipeline));
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "mesh_primary");
+
 
     vkDestroyShaderModule(device, mesh_module, nullptr);
     vkDestroyShaderModule(device, task_module, nullptr);
     vkDestroyShaderModule(device, frag_module, nullptr);
 
-    return std::make_pair(pipeline, pipeline_layout);
+    return CompiledPipeline{pipeline, pipeline_layout};
 }
 
 auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
                               const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                               const std::string_view vert_entry, const std::string_view frag_entry,
                               VkFormat color_format)
-    -> std::pair<VkPipeline, VkPipelineLayout> {
+    -> CompiledPipeline {
     VkShaderModule vert_shader{};
     VkShaderModuleCreateInfo vert_create_info{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -752,7 +762,7 @@ auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     vkDestroyShaderModule(device, vert_shader, nullptr);
     vkDestroyShaderModule(device, frag_shader, nullptr);
 
-    return std::make_pair(pipeline, pipeline_layout);
+    return CompiledPipeline{pipeline, pipeline_layout};
 }
 
 static PFN_vkCmdDrawMeshTasksIndirectEXT draw_mesh = nullptr;
@@ -798,12 +808,12 @@ auto execute(int argc, char **argv) -> int {
 
     auto command_context = create_global_cmd_context(device, graphics_queue, graphics_index);
 
-    std::array< const std::string_view, 5> names = {"LightFlagsCS"
-,"LightScanLocalCS"
-,"LightScanGroupsCS"
-,"LightCompactCS","SetupIndirectCS"};
+    std::array<const std::string_view, 5> names = {
+        "LightFlagsCS", "LightScanLocalCS", "LightScanGroupsCS", "LightCompactCS", "SetupIndirectCS"
+    };
     std::array<ReflectionData, 5> reflection_data = {};
-    auto culling_code = compiler.compile_from_file("shaders/light_cull_prefix_compact.slang", std::span(names),std::span(reflection_data));
+    auto culling_code = compiler.compile_from_file("shaders/light_cull_prefix_compact.slang", std::span(names),
+                                                   std::span(reflection_data));
 
     auto point_light_mesh = compiler.compile_entry_from_file("shaders/point_light.slang", "main_ms");
     auto point_light_task = compiler.compile_entry_from_file("shaders/point_light.slang", "main_ts");
@@ -823,13 +833,14 @@ auto execute(int argc, char **argv) -> int {
 
     bindless.grow_if_needed(300u, 40u, 32u, 8u);
 
-    auto&& [flags, scan_local, scan_groups, compact, setup_indirect] = create_compute_pipelines(device, *pipeline_cache, bindless.layout, std::span(culling_code), std::span(names));
+    auto &&[flags, scan_local, scan_groups, compact, setup_indirect] = create_compute_pipelines(
+        device, *pipeline_cache, bindless.layout, std::span(culling_code), std::span(names));
 
-    auto &&[point_light_pipeline, point_light_layout] =
+    auto point_light_pipeline =
             create_mesh_pipeline(device, *pipeline_cache, bindless.layout,
                                  point_light_mesh, point_light_task, point_light_frag,
                                  VK_FORMAT_R8G8B8A8_UNORM);
-    auto &&[predepth_pipeline, predepth_layout] = create_predepth_pipeline(
+    auto predepth_pipeline = create_predepth_pipeline(
         device, *pipeline_cache, bindless.layout, predepth_task_code, predepth_mesh_code, VK_FORMAT_D32_SFLOAT);
 
     DestructionContext ctx{
@@ -940,7 +951,9 @@ auto execute(int argc, char **argv) -> int {
 
     constexpr auto world_size = 200.F;
 
-    auto rng = std::default_random_engine{static_cast<u32>(std::chrono::high_resolution_clock::now().time_since_epoch().count())};
+    auto rng = std::default_random_engine{
+        static_cast<u32>(std::chrono::high_resolution_clock::now().time_since_epoch().count())
+    };
     auto distrib = std::uniform_real_distribution{-world_size, world_size};
 
     for (u32 idx = 0; idx < light_count; ++idx) {
@@ -971,14 +984,14 @@ auto execute(int argc, char **argv) -> int {
         .value());
 
     auto cubes_handle = ctx.buffers.create(
-    Buffer::from_slice<PointLight>(allocator,
-                                   VkBufferCreateInfo{
-                                       .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                   },
-                                   VmaAllocationCreateInfo{}, cubes, "cubes")
-    .value());
+        Buffer::from_slice<PointLight>(allocator,
+                                       VkBufferCreateInfo{
+                                           .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                    VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                       },
+                                       VmaAllocationCreateInfo{}, cubes, "cubes")
+        .value());
 
     std::vector zeros_lights(light_count, 0u);
     std::vector zeros_groups(group_count, 0u);
@@ -1241,38 +1254,10 @@ auto execute(int argc, char **argv) -> int {
             [&](VkCommandBuffer cmd) {
                 auto &&depth = ctx.textures.get(offscreen_depth_target_handle);
 
-                if (!depth->initialized) {
-                    VkImageMemoryBarrier depth_barrier{
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                        .pNext = nullptr,
-                        .srcAccessMask = 0,
-                        .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = depth->image,
-                        .subresourceRange = {
-                            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-                            .baseMipLevel = 0,
-                            .levelCount = 1,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1
-                        }
-                    };
-
-                    vkCmdPipelineBarrier(
-                        cmd,
-                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-                        0,
-                        0, nullptr,
-                        0, nullptr,
-                        1, &depth_barrier
-                    );
-
-                    depth->initialized = true;
-                }
+                depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {
+                                                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT
+                                                     });
 
                 VkRenderingAttachmentInfo depth_attachment{
                     .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -1291,7 +1276,7 @@ auto execute(int argc, char **argv) -> int {
                 };
 
                 vkCmdBeginRendering(cmd, &rendering_info);
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth_pipeline);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth_pipeline.pipeline);
 
                 PredepthPushConstants pc = {
                     .ubo = frame_ubo,
@@ -1317,7 +1302,8 @@ auto execute(int argc, char **argv) -> int {
                 };
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &sc);
-                vkCmdPushConstants(cmd, predepth_layout, VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT, 0,
+                vkCmdPushConstants(cmd, predepth_pipeline.layout,
+                                   VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT, 0,
                                    sizeof(pc), &pc);
 
                 // Execute via Mesh Indirect
@@ -1325,14 +1311,18 @@ auto execute(int argc, char **argv) -> int {
 
                 vkCmdEndRendering(cmd);
             },
-            {}, {} // No waits, start immediately
+            no_waits
         );
         fs.timeline_values[stage_index(Stage::Predepth)] = predepth_val;
 
         // --- STAGE 2: LIGHT CULLING (Compute) ---
-        // Now we wait for Pre-Depth to finish if we want to use the Depth Buffer for Culling
-        std::array culling_wait_sems{tl_graphics.timeline};
-        std::array culling_wait_vals{fs.timeline_values[stage_index(Stage::Predepth)]};
+        const std::array culling_waits{
+            TimelineWait{
+                .value = fs.timeline_values[stage_index(Stage::Predepth)],
+                .semaphore = tl_graphics.timeline,
+                .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+            }
+        };
         auto light_val = submit_stage(
             tl_compute, device,
             [&](VkCommandBuffer cmd) {
@@ -1357,7 +1347,7 @@ auto execute(int argc, char **argv) -> int {
                     .group_count = group_count,
                 };
 
-                auto bind_and_dispatch = [&](auto& pl, u32 groups_x) {
+                auto bind_and_dispatch = [&](auto &pl, u32 groups_x) {
                     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.layout, 0, 1, &bindless.set, 0,
                                             nullptr);
 
@@ -1431,12 +1421,20 @@ auto execute(int argc, char **argv) -> int {
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
                                     static_cast<u32>(GpuStamp::End));
             },
-            std::span{culling_wait_sems}, std::span{culling_wait_vals});
+            SubmitSynchronisation{
+                .timeline_waits = culling_waits
+            }
+        );
 
         fs.timeline_values[stage_index(Stage::LightCulling)] = light_val;
 
-        std::array gbuffer_wait_sems{tl_compute.timeline};
-        std::array gbuffer_wait_vals{fs.timeline_values[stage_index(Stage::LightCulling)]};
+        const std::array gbuffer_waits{
+            TimelineWait{
+                .value = fs.timeline_values[stage_index(Stage::LightCulling)],
+                .semaphore = tl_compute.timeline,
+                .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT
+            }
+        };
 
         auto gbuffer_val = submit_stage(
             tl_graphics, device,
@@ -1449,39 +1447,10 @@ auto execute(int argc, char **argv) -> int {
                 vkCmdResetQueryPool(cmd, gqp, 0, gqs->query_count);
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, gqp, 0);
 
-                // Only transition on first use
-                if (!offscreen->initialized) {
-                    VkImageMemoryBarrier color_barrier{
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                        .pNext = nullptr,
-                        .srcAccessMask = 0,
-                        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = offscreen->image,
-                        .subresourceRange = {
-                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                            .baseMipLevel = 0,
-                            .levelCount = 1,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1
-                        }
-                    };
-
-                    vkCmdPipelineBarrier(
-                        cmd,
-                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        0,
-                        0, nullptr,
-                        0, nullptr,
-                        1, &color_barrier
-                    );
-
-                    offscreen->initialized = true;
-                }
+                offscreen->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {
+                                                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                                                         });
 
                 VkRenderingAttachmentInfo color_attachment{
                     .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -1511,7 +1480,7 @@ auto execute(int argc, char **argv) -> int {
 
                 vkCmdBeginRendering(cmd, &rendering_info);
 
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline.pipeline);
 
                 const RenderingPushConstants pc{
                     .ubo = frame_ubo,
@@ -1540,7 +1509,7 @@ auto execute(int argc, char **argv) -> int {
 
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &sc);
-                vkCmdPushConstants(cmd, point_light_layout,
+                vkCmdPushConstants(cmd, point_light_pipeline.layout,
                                    VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_MESH_BIT_EXT |
                                    VK_SHADER_STAGE_TASK_BIT_EXT, 0, sizeof(pc), &pc);
                 // vkCmdDrawIndirect(cmd, indirect_buf, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
@@ -1551,8 +1520,9 @@ auto execute(int argc, char **argv) -> int {
 
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, gqp, 1);
             },
-            std::span{gbuffer_wait_sems}, std::span{gbuffer_wait_vals});
-
+            SubmitSynchronisation{
+                .timeline_waits = gbuffer_waits
+            });
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
         fs.frame_done_value = gbuffer_val;
 
@@ -1593,9 +1563,8 @@ auto execute(int argc, char **argv) -> int {
 
     ctx.destroy_queue.retire(UINT64_MAX);
 
-    destruction::pipeline(device, flags);
-    destruction::pipeline(device, point_light_pipeline, point_light_layout);
-    destruction::pipeline(device, predepth_pipeline, predepth_layout);
+    destruction::pipeline(device, flags, scan_local, scan_groups, compact, setup_indirect, point_light_pipeline,
+                          predepth_pipeline);
     destruction::global_command_context(command_context);
     destruction::bindless_set(device, bindless);
     destruction::timeline_compute(device, tl_graphics);

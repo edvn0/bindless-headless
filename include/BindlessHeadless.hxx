@@ -29,6 +29,7 @@ constexpr u32 max_in_flight = 2; // GPU submit throttle depth
 
 namespace detail {
     auto initialise_debug_name_func(VkInstance) -> void;
+
     auto set_debug_name_impl(VmaAllocator &, VkObjectType, u64, std::string_view) -> void;
     auto set_debug_name_impl(VkDevice &, VkObjectType, u64, std::string_view) -> void;
 
@@ -82,6 +83,7 @@ template<typename T> requires std::is_pointer_v<T>
 auto set_debug_name(VmaAllocator &alloc, VkObjectType t, const T &obj, std::string_view name) -> void {
     detail::set_debug_name_impl(alloc, t, reinterpret_cast<u64>(obj), name);
 }
+
 template<typename T> requires std::is_pointer_v<T>
 auto set_debug_name(VkDevice &dev, VkObjectType t, const T &obj, std::string_view name) -> void {
     detail::set_debug_name_impl(dev, t, reinterpret_cast<u64>(obj), name);
@@ -113,7 +115,7 @@ struct TimelineCompute {
     u64 completed{};
 
     static constexpr u32 submits_per_frame = 2;
-    static constexpr u32 buffered = submits_per_frame*frames_in_flight;
+    static constexpr u32 buffered = submits_per_frame * frames_in_flight;
 
     VkCommandPool pool{};
     std::array<VkCommandBuffer, buffered> cmds{};
@@ -129,18 +131,19 @@ struct TimelineCompute {
 auto create_timeline(
     VkDevice device,
     VkQueue queue,
-    u32 family_index) -> TimelineCompute ;
+    u32 family_index) -> TimelineCompute;
 
-auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler ;
+auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler;
 
 auto create_offscreen_target(
     VmaAllocator alloc,
     u32 width,
     u32 height,
     VkFormat format,
-    std::string_view name = "Empty") -> OffscreenTarget ;
+    std::string_view name = "Empty") -> OffscreenTarget;
+
 auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format,
-                        std::string_view name) -> OffscreenTarget;
+                         std::string_view name) -> OffscreenTarget;
 
 auto create_image_from_span_v2(
     VmaAllocator alloc,
@@ -149,14 +152,14 @@ auto create_image_from_span_v2(
     std::uint32_t height,
     VkFormat format,
     std::span<const std::uint8_t> data,
-    std::string_view name) -> OffscreenTarget ;
+    std::string_view name) -> OffscreenTarget;
 
 struct InstanceWithDebug {
     VkInstance instance{VK_NULL_HANDLE};
     VkDebugUtilsMessengerEXT messenger{VK_NULL_HANDLE};
 };
 
-auto create_instance_with_debug(auto &callback, bool is_release) -> InstanceWithDebug  {
+auto create_instance_with_debug(auto &callback, bool is_release) -> InstanceWithDebug {
     VkApplicationInfo app_info{
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pNext = nullptr,
@@ -250,9 +253,9 @@ struct PhysicalDeviceChoice {
 using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32>;
 
 auto pick_physical_device(VkInstance instance)
-    -> std::expected<DeviceChoice, PhysicalDeviceChoice> ;
+    -> std::expected<DeviceChoice, PhysicalDeviceChoice>;
 
-    enum class GpuStamp : u32 {
+enum class GpuStamp : u32 {
     Begin = 0,
     End = 1,
     Count = 2
@@ -263,34 +266,44 @@ inline constexpr u32 query_count = static_cast<u32>(GpuStamp::Count);
 auto create_device(
     VkPhysicalDevice pd,
     u32 graphics_index,
-    u32 compute_index) -> std::tuple<VkDevice, VkQueue, VkQueue> ;
+    u32 compute_index) -> std::tuple<VkDevice, VkQueue, VkQueue>;
 
 auto create_allocator(
     VkInstance instance,
     VkPhysicalDevice pd,
-    VkDevice device) -> VmaAllocator ;
+    VkDevice device) -> VmaAllocator;
+
+struct TimelineWait {
+    u64 value = 0;
+    VkSemaphore semaphore {VK_NULL_HANDLE};
+    VkPipelineStageFlags stage {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+};
+
+struct BinaryWait {
+    VkSemaphore semaphore {VK_NULL_HANDLE};
+    VkPipelineStageFlags stage {VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
+} ;
+
+struct SubmitSynchronisation {
+    std::span<const TimelineWait> timeline_waits{};
+    std::span<const BinaryWait> binary_waits{};
+    std::span<const VkSemaphore> binary_signals{};
+};
+inline constexpr auto no_waits = SubmitSynchronisation {{},{},{}};
 
 template<typename RecordFn>
 auto submit_stage(
     TimelineCompute &tl,
     VkDevice device,
     RecordFn &&record,
-    std::span<const VkSemaphore> wait_semaphores,
-    std::span<const u64> wait_values) -> u64  {
-    if (wait_semaphores.size() != wait_values.size()) {
-        std::abort();
-    }
-
-    const u32 index =
-            static_cast<u32>(tl.value % TimelineCompute::buffered);
+    SubmitSynchronisation sync = {}) -> u64 {
+     const u32 index = static_cast<u32>(tl.value % TimelineCompute::buffered);
     VkCommandBuffer cmd = tl.cmds[index];
 
     const u64 last = tl.slot_last_signal[index];
     if (last != 0) {
         VkSemaphoreWaitInfo wi{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-            .pNext = nullptr,
-            .flags = 0,
             .semaphoreCount = 1,
             .pSemaphores = &tl.timeline,
             .pValues = &last
@@ -299,14 +312,11 @@ auto submit_stage(
         tl.completed = std::max(tl.completed, last);
     }
 
-
     vk_check(vkResetCommandBuffer(cmd, 0));
 
     VkCommandBufferBeginInfo bi{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .pInheritanceInfo = nullptr
+        .flags = 0
     };
     vk_check(vkBeginCommandBuffer(cmd, &bi));
 
@@ -316,54 +326,110 @@ auto submit_stage(
 
     const u64 signal_val = tl.value + 1;
 
+    // Build combined wait arrays (binary first, then timeline)
+    const u32 bwc = static_cast<u32>(sync.binary_waits.size());
+    const u32 twc = static_cast<u32>(sync.timeline_waits.size());
+    const u32 total_waits = bwc + twc;
+
+    std::vector<VkSemaphore> wait_sems;
+    std::vector<VkPipelineStageFlags> wait_stages;
+    std::vector<u64> timeline_wait_values;
+
+    wait_sems.reserve(total_waits);
+    wait_stages.reserve(total_waits);
+    timeline_wait_values.reserve(twc);
+
+    for ( auto&&[semaphore, stage] : sync.binary_waits) {
+        wait_sems.push_back(semaphore);
+        wait_stages.push_back(stage);
+    }
+    for (auto &&[value, semaphore, stage] : sync.timeline_waits) {
+        wait_sems.push_back(semaphore);
+        wait_stages.push_back(stage);
+        timeline_wait_values.push_back(value);
+    }
+
+    std::vector<VkSemaphore> signal_sems;
+    signal_sems.reserve(1 + sync.binary_signals.size());
+    signal_sems.push_back(tl.timeline);
+    for (VkSemaphore s : sync.binary_signals) signal_sems.push_back(s);
+
     VkTimelineSemaphoreSubmitInfo timeline_info{
         .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-        .pNext = nullptr,
-        .waitSemaphoreValueCount = static_cast<u32>(wait_values.size()),
-        .pWaitSemaphoreValues = wait_values.data(),
+        .waitSemaphoreValueCount = twc,
+        .pWaitSemaphoreValues = timeline_wait_values.empty() ? nullptr : timeline_wait_values.data(),
         .signalSemaphoreValueCount = 1,
         .pSignalSemaphoreValues = &signal_val
     };
 
-    std::vector<VkPipelineStageFlags> wait_stages(wait_semaphores.size(), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-
     VkSubmitInfo si{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .pNext = &timeline_info,
-        .waitSemaphoreCount = static_cast<u32>(wait_semaphores.size()),
-        .pWaitSemaphores = wait_semaphores.data(),
-        .pWaitDstStageMask = wait_semaphores.empty() ? nullptr : wait_stages.data(),
+        .waitSemaphoreCount = total_waits,
+        .pWaitSemaphores = wait_sems.empty() ? nullptr : wait_sems.data(),
+        .pWaitDstStageMask = wait_stages.empty() ? nullptr : wait_stages.data(),
         .commandBufferCount = 1,
         .pCommandBuffers = &cmd,
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &tl.timeline
+        .signalSemaphoreCount = static_cast<u32>(signal_sems.size()),
+        .pSignalSemaphores = signal_sems.data()
     };
 
     vk_check(vkQueueSubmit(tl.queue, 1, &si, VK_NULL_HANDLE));
 
-    // NEW: remember which timeline value this slot corresponds to
     tl.slot_last_signal[index] = signal_val;
-
     tl.value = signal_val;
     return signal_val;
 }
 
-auto throttle(TimelineCompute &tl, VkDevice device) -> void ;
+auto throttle(TimelineCompute &tl, VkDevice device) -> void;
 
 namespace destruction {
-    auto instance(InstanceWithDebug const &inst) -> void ;
-    auto device(VkDevice &dev) -> void ;
-    auto bindless_set(VkDevice device, BindlessSet &bs) -> void;
-    auto allocator(VmaAllocator &alloc) -> void ;
-    auto timeline_compute(VkDevice device, TimelineCompute &comp) -> void ;
+    auto instance(InstanceWithDebug const &inst) -> void;
 
-    template<typename T> concept PipelineProvider = requires (T t) {
-        {t.pipeline} -> std::same_as<VkPipeline&>;
-        {t.layout} -> std::same_as<VkPipelineLayout&>;
-    };
-    auto pipeline(VkDevice dev, VkPipeline& p, VkPipelineLayout& l) -> void ;
-    auto pipeline(VkDevice dev, PipelineProvider auto& val) {
-        destruction::pipeline(dev, val.pipeline, val.layout);
+    auto device(VkDevice &dev) -> void;
+
+    auto bindless_set(VkDevice device, BindlessSet &bs) -> void;
+
+    auto allocator(VmaAllocator &alloc) -> void;
+
+    auto timeline_compute(VkDevice device, TimelineCompute &comp) -> void;
+
+    template<typename T> concept PipelineProvider = requires(T t)
+                                                    {
+                                                        { t.pipeline } -> std::same_as<VkPipeline &>;
+                                                        { t.layout } -> std::same_as<VkPipelineLayout &>;
+                                                    } || requires(T t)
+                                                    {
+                                                        { std::get<0>(t) } -> std::same_as<VkPipeline &>;
+                                                        { std::get<1>(t) } -> std::same_as<VkPipelineLayout &>;
+                                                    };
+
+    template <PipelineProvider T>
+ auto as_pipeline_refs(T& t) -> std::pair<VkPipeline&, VkPipelineLayout&>
+    {
+        if constexpr (requires { t.pipeline; t.layout; }) {
+            return { t.pipeline, t.layout };
+        } else {
+            return { std::get<0>(t), std::get<1>(t) };
+        }
     }
 
+    auto pipeline(VkDevice dev, VkPipeline& , VkPipelineLayout& ) -> void;
+
+     auto pipeline(VkDevice dev, PipelineProvider auto& val) -> void
+    {
+        auto [p, l] = as_pipeline_refs(val);
+        destruction::pipeline(dev, p, l);
+    }
+
+    template <typename... Ts>
+        requires (PipelineProvider<std::remove_reference_t<Ts>> && ...)
+    auto pipeline(VkDevice dev, Ts&&... vals) -> void
+    {
+        ( [&] {
+            auto& v = static_cast<std::remove_reference_t<Ts>&>(vals);
+            auto [p, l] = as_pipeline_refs(v);
+            destruction::pipeline(dev, p, l);
+          }(), ... );
+    }
 }

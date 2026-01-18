@@ -42,11 +42,10 @@ struct CompilerSession {
     template<std::size_t N>
     auto compile_from_file(std::string_view path, const std::span<const std::string_view, N> entries, const std::span<ReflectionData, N> reflection_data) {
         std::array<std::vector<std::uint32_t>, N> spirv_data{};
-        auto shader_source = load_shader_file(path);
+        const auto shader_source = load_shader_file(path);
 
         for (std::size_t i = 0; i < N; ++i) {
             std::filesystem::path entry_path(path);
-            info("Shader key: {}", entry_path.string());
             spirv_data[i] = compile_entry_from_string(entry_path.filename().string(), path, shader_source, entries[i], &reflection_data[i]);
         }
         return spirv_data;

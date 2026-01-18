@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.31)
 
+set (CMAKE_CXX_STANDARD 23)
+
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141)
     cmake_policy(SET CMP0141 NEW)
@@ -29,7 +31,8 @@ CPMAddPackage(
         VERSION 2.6.1
 )
 
-add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp" "src/Pool.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx" "src/Compiler.cxx" "src/GlobalCommandContext.cxx")
+add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp"
+        "src/Pool.cxx" "src/Types.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx" "src/Compiler.cxx" "src/GlobalCommandContext.cxx")
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
@@ -84,10 +87,6 @@ target_compile_options(BindlessHeadless PRIVATE
 target_compile_definitions(BindlessHeadless PRIVATE
         IS_RELEASE=$<IF:$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>,$<CONFIG:MinSizeRel>>,1,0>
 )
-
-if (CMAKE_VERSION VERSION_GREATER 3.12)
-    set_property(TARGET BindlessHeadless PROPERTY CXX_STANDARD 23)
-endif ()
 
 add_custom_command(TARGET BindlessHeadless POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory

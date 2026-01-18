@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <numeric>
 #include <vulkan/vulkan.h>
 
@@ -24,6 +25,10 @@ struct OffscreenTarget {
     u32 width{};
     u32 height{};
     bool initialized{false};
+
+    auto is_depth() const -> bool;
+    auto is_stencil() const -> bool;
+    auto transition_if_not_initialised(VkCommandBuffer, VkImageLayout, std::pair<VkAccessFlagBits, VkPipelineStageFlagBits> destination_flags) -> void;
 };
 
 struct FrameStats {
@@ -119,7 +124,7 @@ public:
         ensure_sorted();
 
         const double x = p * static_cast<double>(count - 1);
-        const std::size_t i = static_cast<std::size_t>(std::floor(x));
+        const auto i = static_cast<std::size_t>(std::floor(x));
         const std::size_t j = std::min(i + 1, count - 1);
         const double t = x - static_cast<double>(i);
 
@@ -149,8 +154,119 @@ public:
     }
 };
 
+template <typename T>
+concept IsFunctionPointerLike =
+    std::is_pointer_v<std::remove_cvref_t<T>> &&
+    std::is_function_v<std::remove_pointer_t<std::remove_cvref_t<T>>>;
+/*
+template<IsFunctionPointerLike Fn>
+class MaybeNoOp {
+    mutable std::mutex access_mutex;
+    Fn f = nullptr;
+
+public:
+    explicit MaybeNoOp(Fn fn) : f(std::move(fn)) {}
+    explicit MaybeNoOp(std::nullptr_t) : f({}) {}
+    MaybeNoOp() = default;
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        std::lock_guard lock(access_mutex);
+        return f == nullptr;
+    }
+
+    explicit operator bool() const noexcept {
+        return !empty();
+    }
+
+    auto operator=(Fn fn) noexcept -> MaybeNoOp& {
+        std::lock_guard lock(access_mutex);
+        f = fn;
+        return *this;
+    }
+
+    auto operator=(std::nullptr_t) noexcept -> MaybeNoOp& {
+        std::lock_guard lock(access_mutex);
+        f = nullptr;
+        return *this;
+    }
+
+    template<typename... Args>
+    auto operator()(Args &&... args) const {
+        using r_t = std::invoke_result_t<Fn, Args...>;
+
+        std::unique_lock lock(access_mutex);  // Lock BEFORE checking f
+
+        if constexpr (std::is_void_v<r_t>) {
+            if (f) {
+                std::invoke(f, std::forward<Args>(args)...);
+                return true;
+            }
+            return false;
+        } else {
+            if (f) {
+                return std::optional<r_t>{std::invoke(f, std::forward<Args>(args)...)};
+            }
+            return std::optional<r_t>{};
+        }
+    }
+};
+*/
+
+template<IsFunctionPointerLike Fn>
+class MaybeNoOp {
+    std::atomic<Fn> f;
+
+public:
+    explicit MaybeNoOp(Fn fn) : f(fn) {}
+    explicit MaybeNoOp(std::nullptr_t) : f(nullptr) {}
+    MaybeNoOp() : f(nullptr) {}
+
+    [[nodiscard]] auto empty() const noexcept -> bool {
+        return f.load(std::memory_order_acquire) == nullptr;
+    }
+
+    explicit operator bool() const noexcept {
+        return !empty();
+    }
+
+    auto operator=(Fn fn) noexcept -> MaybeNoOp& {
+        f.store(fn, std::memory_order_release);
+        return *this;
+    }
+
+    auto operator=(std::nullptr_t) noexcept -> MaybeNoOp& {
+        f.store(nullptr, std::memory_order_release);
+        return *this;
+    }
+
+    template<typename... Args>
+    auto operator()(Args &&... args) const {
+        using r_t = std::invoke_result_t<Fn, Args...>;
+
+        // Load the function pointer atomically
+        Fn fn_copy = f.load(std::memory_order_acquire);
+
+        if constexpr (std::is_void_v<r_t>) {
+            if (fn_copy) {
+                std::invoke(fn_copy, std::forward<Args>(args)...);
+                return true;
+            }
+            return false;
+        } else {
+            if (fn_copy) {
+                return std::optional<r_t>{std::invoke(fn_copy, std::forward<Args>(args)...)};
+            }
+            return std::optional<r_t>{};
+        }
+    }
+};
+
+constexpr auto matches(const auto& needle, const auto&&... haystack) {
+    return ((needle == haystack) || ...);
+}
+
 namespace std {
-    template<> struct std::formatter<FrameStats::Quartiles> : std::formatter<double> {
+    template<> struct formatter<FrameStats::Quartiles> : formatter<double> {
         auto format(const FrameStats::Quartiles& q, auto& ctx) const {
             using std::format_to;
             format_to(ctx.out(), "Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, IQR: {:.3f}",
