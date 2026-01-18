@@ -138,7 +138,7 @@ struct BindlessSet {
                 image_infos.push_back({
                     .sampler = VK_NULL_HANDLE,
                     .imageView = texture.sampled_view,
-                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL
                 });
 
                 writes.push_back({
