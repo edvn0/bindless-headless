@@ -83,6 +83,15 @@ auto Swapchain::destroy_swapchain_resources() -> void {
     views.clear();
     images.clear();
 
+    
+    for (auto &s : render_finished_semaphores) {
+        if (s != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device, s, nullptr);
+            s = VK_NULL_HANDLE;
+        }
+    }
+    render_finished_semaphores.clear();
+
     if (swapchain != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(device, swapchain, nullptr);
         swapchain = VK_NULL_HANDLE;
@@ -95,24 +104,20 @@ auto Swapchain::destroy_swapchain_resources() -> void {
 
 auto Swapchain::destroy() -> void {
     if (device == VK_NULL_HANDLE) {
-        // nothing owns anything meaningful
         *this = Swapchain{};
         return;
     }
 
     destroy_swapchain_resources();
 
-    for (auto &s : sync) {
-        if (s.image_available != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device, s.image_available, nullptr);
-            s.image_available = VK_NULL_HANDLE;
-        }
-        if (s.render_finished != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device, s.render_finished, nullptr);
-            s.render_finished = VK_NULL_HANDLE;
+    
+    for (auto &s : acquire_semaphores) {
+        if (s != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device, s, nullptr);
+            s = VK_NULL_HANDLE;
         }
     }
-    sync.clear();
+    acquire_semaphores.clear();
 
     device = VK_NULL_HANDLE;
     physical_device = VK_NULL_HANDLE;
@@ -120,7 +125,7 @@ auto Swapchain::destroy() -> void {
     graphics_family = 0;
 
     vsync = true;
-    preferred_format = VK_FORMAT_B8G8R8A8_UNORM;
+    preferred_format = VK_FORMAT_B8G8R8A8_SRGB;
     preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 }
 
@@ -234,6 +239,31 @@ auto Swapchain::create_swapchain_resources(
         }
     }
 
+    
+    for (auto &s : render_finished_semaphores) {
+        if (s != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device, s, nullptr);
+        }
+    }
+    render_finished_semaphores.resize(swap_image_count);
+
+    VkSemaphoreCreateInfo sem_ci{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
+    };
+
+    for (u32 i = 0; i < swap_image_count; ++i) {
+        res = vkCreateSemaphore(device, &sem_ci, nullptr, &render_finished_semaphores[i]);
+        if (res != VK_SUCCESS) {
+            for (auto v : new_views) {
+                if (v != VK_NULL_HANDLE) {
+                    vkDestroyImageView(device, v, nullptr);
+                }
+            }
+            vkDestroySwapchainKHR(device, new_swapchain, nullptr);
+            return std::unexpected(res);
+        }
+    }
+
     swapchain = new_swapchain;
     images = std::move(new_images);
     views = std::move(new_views);
@@ -279,7 +309,7 @@ auto Swapchain::recreate(VkExtent2D new_extent) -> std::expected<void, VkResult>
 }
 
 auto Swapchain::create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain, VkResult> {
-    Swapchain out{};
+   Swapchain out{};
     out.device = ci.device;
     out.physical_device = ci.physical_device;
     out.surface = ci.surface;
@@ -289,28 +319,20 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain
     out.preferred_format = ci.preferred_format;
     out.preferred_color_space = ci.preferred_color_space;
 
-    // Create sync once; it's not swapchain-size dependent.
-    out.sync.resize(frames_in_flight);
+    out.acquire_semaphores.resize(frames_in_flight);
 
     VkSemaphoreCreateInfo sem_ci{
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
     };
 
     for (u32 fi = 0; fi < frames_in_flight; ++fi) {
-        VkResult res = vkCreateSemaphore(ci.device, &sem_ci, nullptr, &out.sync[fi].image_available);
-        if (res != VK_SUCCESS) {
-            out.destroy();
-            return std::unexpected(res);
-        }
-
-        res = vkCreateSemaphore(ci.device, &sem_ci, nullptr, &out.sync[fi].render_finished);
+        VkResult res = vkCreateSemaphore(ci.device, &sem_ci, nullptr, &out.acquire_semaphores[fi]);
         if (res != VK_SUCCESS) {
             out.destroy();
             return std::unexpected(res);
         }
     }
 
-    // Create swapchain + images + views.
     auto created = out.create_swapchain_resources(
         ci.extent,
         ci.vsync,
@@ -330,15 +352,16 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain
 
 auto Swapchain::acquire_next_image(u32 frame_index, u64 timeout_ns)
     -> std::expected<SwapchainAcquireResult, VkResult> {
-    const auto bounded = frame_index % frames_in_flight;
-    auto &frame = sync[bounded];
+    
+    const auto bounded_frame = frame_index % frames_in_flight;
+    VkSemaphore acquire_sem = acquire_semaphores[bounded_frame];
 
     u32 image_index {0};
     const VkResult res = vkAcquireNextImageKHR(
         device,
         swapchain,
         timeout_ns,
-        frame.image_available,
+        acquire_sem, 
         VK_NULL_HANDLE,
         &image_index);
 
@@ -348,7 +371,10 @@ auto Swapchain::acquire_next_image(u32 frame_index, u64 timeout_ns)
 
     return SwapchainAcquireResult{
         .image_index = image_index,
-        .sync = frame,
+        .sync = SwapchainFrameSync{
+            .image_available = acquire_sem,
+            .render_finished = render_finished_semaphores[image_index]  
+        },
     };
 }
 

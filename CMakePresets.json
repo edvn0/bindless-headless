@@ -1,5 +1,10 @@
 ﻿{
-  "version": 3,
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "windows-base",
@@ -104,6 +109,50 @@
           "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
         }
       }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "debug",
+      "configurePreset": "x64-debug",
+      "configuration": "Debug",
+      "jobs": 20
+    },
+    {
+      "name": "release",
+      "configurePreset": "x64-release",
+      "configuration": "Release",
+      "jobs": 20
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug Workflow",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "x64-debug"
+        },
+        {
+          "type": "build",
+          "name": "debug"
+        }
+      ]
+    },
+    {
+      "name": "release",
+      "displayName": "Release Workflow",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "x64-release"
+        },
+        {
+          "type": "build",
+          "name": "release"
+        }
+      ]
     }
   ]
 }

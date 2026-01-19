@@ -72,6 +72,9 @@ private:
     std::vector<VkImageView> views{};
     std::vector<SwapchainFrameSync> sync{};
 
+    std::vector<VkSemaphore> acquire_semaphores; 
+std::vector<VkSemaphore> render_finished_semaphores;
+
     bool vsync{true};
     VkFormat preferred_format{VK_FORMAT_B8G8R8A8_UNORM};
     VkColorSpaceKHR preferred_color_space{VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};

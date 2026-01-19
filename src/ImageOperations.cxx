@@ -67,17 +67,31 @@ namespace image_operations {
                         }
                         case VK_FORMAT_R32G32B32A32_SFLOAT: {
                             auto offset = pixel_idx * 16;
-                            auto const *float_data = reinterpret_cast<float const *>(pixel_data + offset);
-                            auto clamp_convert = [](float val) -> u8 {
-                                if (val <= 0.0f)
+                            auto const *f = reinterpret_cast<float const *>(pixel_data + offset);
+
+                            auto convert = [](float v) -> u8 {
+                                if (!std::isfinite(v))
                                     return 0;
-                                if (val >= 1.0f)
-                                    return 255;
-                                return static_cast<u8>(val * 255.0f + 0.5f);
+
+                                // 1. Tone map (HDR → LDR)
+                                v = v / (1.0f + v); // Reinhard
+
+                                // 2. Clamp
+                                v = std::clamp(v, 0.0f, 1.0f);
+
+                                // 3. Linear → sRGB
+                                if (v <= 0.0031308f)
+                                    v = 12.92f * v;
+                                else
+                                    v = 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+
+                                // 4. Quantize
+                                return static_cast<u8>(v * 255.0f + 0.5f);
                             };
-                            bgr[0] = clamp_convert(float_data[2]); // B
-                            bgr[1] = clamp_convert(float_data[1]); // G
-                            bgr[2] = clamp_convert(float_data[0]); // R
+
+                            bgr[0] = convert(f[2]); // B
+                            bgr[1] = convert(f[1]); // G
+                            bgr[2] = convert(f[0]); // R
                             break;
                         }
                         case VK_FORMAT_R8_UNORM:
@@ -106,8 +120,7 @@ namespace image_operations {
         }
     } // namespace
 
-    auto write_to_disk(const OffscreenTarget* texture,
-                       VmaAllocator &allocator, std::string_view filename) -> void {
+    auto write_to_disk(const OffscreenTarget *texture, VmaAllocator &allocator, std::string_view filename) -> void {
         auto output = std::ofstream{filename.data(), std::ios::binary};
         if (!output) {
             error("Failed to open output file for writing {}", filename);

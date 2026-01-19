@@ -24,6 +24,7 @@ struct CLIOptions {
     std::uint32_t width {1280};
     std::uint32_t height {720};
     std::uint32_t light_count {50000};
+    bool vsync {false};
 };
 
 static auto parse_cli(int argc, char** argv) -> CLIOptions {
@@ -49,6 +50,7 @@ static auto parse_cli(int argc, char** argv) -> CLIOptions {
     app.add_option("-l,--light_count", opt.light_count, "Light count");
     app.add_option("--width", opt.width, "Width of 'window'")->default_val(1280);
     app.add_option("--height", opt.height, "Height of 'window'")->default_val(720);
+    app.add_option("-s,--vsync", opt.vsync, "Vsync'")->default_val(true);
 
     // Let CLI11 handle -h/--help
     app.allow_extras(false);

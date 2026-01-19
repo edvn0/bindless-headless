@@ -19,7 +19,6 @@
 
 #include "3PP/PerlinNoise.hpp"
 
-#define HAS_RENDERDOC
 #ifdef HAS_RENDERDOC
 #include "3PP/renderdoc_app.h"
 #endif
@@ -60,6 +59,10 @@ struct RenderingPushConstants {
     const DeviceAddress cube_indices;
     const DeviceAddress indirect_point_light;
     const DeviceAddress indirect_meshlet;
+};
+
+struct TonemapPushConstants {
+    float exposure;
 };
 
 struct FrustumPlane {
@@ -515,10 +518,10 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
     return CompiledPipeline{pipeline, pipeline_layout};
 }
 
-auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
-                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
-                              const std::string_view vert_entry, const std::string_view frag_entry,
-                              VkFormat color_format) -> CompiledPipeline {
+auto create_tonemap_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
+                             const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
+                             const std::string_view vert_entry, const std::string_view frag_entry,
+                             VkFormat color_format) -> CompiledPipeline {
     VkShaderModule vert_shader{};
     VkShaderModuleCreateInfo vert_create_info{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                               .pNext = nullptr,
@@ -538,9 +541,8 @@ auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     VkPushConstantRange push_constant_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = sizeof(RenderingPushConstants),
+            .size = sizeof(TonemapPushConstants),
     };
-
     VkPipelineLayout pipeline_layout{};
     VkPipelineLayoutCreateInfo plci{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -632,9 +634,9 @@ auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = VK_TRUE,
-            .depthCompareOp = VK_COMPARE_OP_GREATER,
+            .depthTestEnable = VK_FALSE,
+            .depthWriteEnable = VK_FALSE,
+            .depthCompareOp = VK_COMPARE_OP_ALWAYS,
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE,
             .front = {},
@@ -644,7 +646,7 @@ auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     };
 
     VkPipelineColorBlendAttachmentState color_blend_attachment{
-            .blendEnable = VK_TRUE,
+            .blendEnable = VK_FALSE,
             .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
             .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
             .colorBlendOp = VK_BLEND_OP_ADD,
@@ -681,7 +683,7 @@ auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
             .viewMask = 0,
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &color_format,
-            .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
+            .depthAttachmentFormat = VK_FORMAT_UNDEFINED,
             .stencilAttachmentFormat = VK_FORMAT_UNDEFINED,
     };
 
@@ -715,22 +717,6 @@ auto create_graphics_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
 
     return CompiledPipeline{pipeline, pipeline_layout};
 }
-
-struct CameraAnim {
-    glm::vec3 pivot{0.0f, 0.0f, 0.0f};
-    float radius{150.0f};
-    float height{50.0f};
-    float orbit_speed{0.2f}; // radians per second
-    float bob_amp{5.0f};
-    float bob_speed{0.7f};
-
-    auto update(float t_seconds) const -> glm::vec3 {
-        const float a = t_seconds * orbit_speed;
-        const float y = height + std::sin(t_seconds * bob_speed) * bob_amp;
-
-        return glm::vec3{std::sin(a) * radius, y, std::cos(a) * radius} + pivot;
-    }
-};
 
 static MaybeNoOp<PFN_vkCmdDrawMeshTasksIndirectEXT> draw_mesh{};
 
@@ -786,13 +772,12 @@ auto execute(int argc, char **argv) -> int {
     VkSurfaceKHR surface{};
     vk_check(glfwCreateWindowSurface(instance.instance, window, nullptr, &surface));
 
-    auto maybe_swapchain = Swapchain::create(SwapchainCreateInfo{
-            .physical_device = physical_device,
-            .device = device,
-            .surface = surface,
-            .graphics_family = graphics_index,
-            .extent = VkExtent2D{opts.width, opts.height},
-    });
+    auto maybe_swapchain = Swapchain::create(SwapchainCreateInfo{.physical_device = physical_device,
+                                                                 .device = device,
+                                                                 .surface = surface,
+                                                                 .graphics_family = graphics_index,
+                                                                 .extent = VkExtent2D{opts.width, opts.height},
+                                                                 .vsync = opts.vsync});
     if (!maybe_swapchain) {
         return 1;
     }
@@ -821,10 +806,15 @@ auto execute(int argc, char **argv) -> int {
     auto predepth_code = compiler.compile_from_file("shaders/predepth.slang", std::span(predepth_names),
                                                     std::span(predepth_reflection));
 
+    std::array<const std::string_view, 2> tonemap_names{"fullscreen_vs", "tonemap_fs"};
+    std::array<ReflectionData, 2> tonemap_reflection{};
+    auto tonemap_code = compiler.compile_from_file("shaders/tonemap.slang", std::span(tonemap_names),
+                                                   std::span(tonemap_reflection));
+
     auto allocator = create_allocator(instance.instance, physical_device, device);
 
-    auto tl_compute = create_timeline(device, compute_queue, compute_index);
-    auto tl_graphics = create_timeline(device, graphics_queue, graphics_index);
+    auto tl_compute = create_compute_timeline(device, compute_queue, compute_index);
+    auto tl_graphics = create_graphics_timeline(device, graphics_queue, graphics_index);
 
     BindlessCaps caps = query_bindless_caps(physical_device);
     BindlessSet bindless{};
@@ -837,9 +827,13 @@ auto execute(int argc, char **argv) -> int {
 
     auto point_light_pipeline =
             create_mesh_pipeline(device, *pipeline_cache, bindless.layout, point_light_code.at(0),
-                                 point_light_code.at(1), point_light_code.at(2), VK_FORMAT_R8G8B8A8_UNORM);
+                                 point_light_code.at(1), point_light_code.at(2), VK_FORMAT_R32G32B32A32_SFLOAT);
     auto predepth_pipeline = create_predepth_pipeline(device, *pipeline_cache, bindless.layout, predepth_code.at(0),
                                                       predepth_code.at(1), VK_FORMAT_D32_SFLOAT);
+
+    auto tonemap_pipeline =
+            create_tonemap_pipeline(device, *pipeline_cache, bindless.layout, tonemap_code.at(0), tonemap_code.at(1),
+                                    "fullscreen_vs", "tonemap_fs", swapchain.format());
 
     DestructionContext ctx{
             .allocator = allocator,
@@ -883,7 +877,10 @@ auto execute(int argc, char **argv) -> int {
             allocator, command_context, 2048u, 2048u, VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
 
     auto offscreen_target_handle = ctx.create_texture(
-            create_offscreen_target(allocator, opts.width, opts.height, VK_FORMAT_R8G8B8A8_UNORM, "offscreen"));
+            create_offscreen_target(allocator, opts.width, opts.height, VK_FORMAT_R32G32B32A32_SFLOAT, "offscreen"));
+
+    auto tonemapped_target_handle = ctx.create_texture(
+            create_offscreen_target(allocator, opts.width, opts.height, VK_FORMAT_R8G8B8A8_UNORM, "tonemapped"));
 
     auto offscreen_depth_target_handle = ctx.create_texture(
             create_depth_target(allocator, opts.width, opts.height, VK_FORMAT_D32_SFLOAT, "offscreen_depth"));
@@ -1351,8 +1348,6 @@ auto execute(int argc, char **argv) -> int {
         if (!acquired) {
             const VkResult res = acquired.error();
             if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-                // swapchain->recreate(new_extent) will happen once you plumb resize.
-                // For now, you can continue and try next loop after recreate.
                 continue;
             }
             vk_check(res);
@@ -1376,7 +1371,7 @@ auto execute(int argc, char **argv) -> int {
                             .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                            .clearValue = {.depthStencil = {0.0f, 0}}, // Reverse-Z
+                            .clearValue = {.depthStencil = {0.0f, 0}},
                     };
 
                     VkRenderingInfo rendering_info{
@@ -1411,7 +1406,6 @@ auto execute(int argc, char **argv) -> int {
                     vkCmdPushConstants(cmd, predepth_pipeline.layout,
                                        VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT, 0, sizeof(pc), &pc);
 
-                    // Execute via Mesh Indirect
                     draw_mesh(cmd, indirect_meshlet_buf, VkDeviceSize{0}, 1u,
                               static_cast<u32>(sizeof(VkDrawMeshTasksIndirectCommandEXT)));
 
@@ -1420,7 +1414,6 @@ auto execute(int argc, char **argv) -> int {
                 no_waits);
         fs.timeline_values[stage_index(Stage::Predepth)] = predepth_val;
 
-        // --- STAGE 2: LIGHT CULLING (Compute) ---
         const std::array culling_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
                                                     .semaphore = tl_graphics.timeline,
                                                     .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}};
@@ -1460,61 +1453,57 @@ auto execute(int argc, char **argv) -> int {
                         vkCmdDispatch(cmd, groups_x, 1u, 1u);
                     };
 
-                    VkMemoryBarrier mem_barrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                                                .pNext = nullptr,
-                                                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                                                .dstAccessMask =
-                                                        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+                    VkMemoryBarrier2 mem_barrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                                 .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                 .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                                                 .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                 .dstAccessMask =
+                                                         VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT};
 
                     bind_and_dispatch(flags, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                    VkDependencyInfo dep_info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                              .memoryBarrierCount = 1,
+                                              .pMemoryBarriers = &mem_barrier};
+                    vkCmdPipelineBarrier2(cmd, &dep_info);
 
                     bind_and_dispatch(scan_local, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                    vkCmdPipelineBarrier2(cmd, &dep_info);
 
                     bind_and_dispatch(scan_groups, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                    vkCmdPipelineBarrier2(cmd, &dep_info);
 
                     bind_and_dispatch(compact, group_count);
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mem_barrier, 0, nullptr, 0,
-                                         nullptr);
+                    vkCmdPipelineBarrier2(cmd, &dep_info);
 
-                    // 2. Dispatch Setup: One thread to rule them all
                     bind_and_dispatch(setup_indirect, 1u);
 
-                    std::array<VkBufferMemoryBarrier, 2> indirect_barrier{
-                            VkBufferMemoryBarrier{
-                                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                                    .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                                    .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT, // Essential for DrawIndirect
-                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .buffer = indirect_buf,
-                                    .offset = 0,
-                                    .size = VK_WHOLE_SIZE},
-                            VkBufferMemoryBarrier{
-                                    .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                                    .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                                    .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT, // Essential for DrawIndirect
-                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .buffer = indirect_meshlet_buf,
-                                    .offset = 0,
-                                    .size = VK_WHOLE_SIZE}};
+                    std::array<VkBufferMemoryBarrier2, 2> indirect_barrier{
+                            VkBufferMemoryBarrier2{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                                   .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                   .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                                                   .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                                   .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                   .buffer = indirect_buf,
+                                                   .offset = 0,
+                                                   .size = VK_WHOLE_SIZE},
+                            VkBufferMemoryBarrier2{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                                   .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                   .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                                                   .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                                                   .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                   .buffer = indirect_meshlet_buf,
+                                                   .offset = 0,
+                                                   .size = VK_WHOLE_SIZE}};
 
-                    vkCmdPipelineBarrier(
-                            cmd,
-                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, // Source: Your setup shader
-                            VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, // Destination: The Indirect command processor
-                            0, 0, nullptr, 2, indirect_barrier.data(), 0, nullptr);
+                    VkDependencyInfo indirect_dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                                  .bufferMemoryBarrierCount = 2,
+                                                  .pBufferMemoryBarriers = indirect_barrier.data()};
 
+                    vkCmdPipelineBarrier2(cmd, &indirect_dep);
 
                     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
                                         static_cast<u32>(GpuStamp::End));
@@ -1523,9 +1512,13 @@ auto execute(int argc, char **argv) -> int {
 
         fs.timeline_values[stage_index(Stage::LightCulling)] = light_val;
 
-        const std::array gbuffer_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::LightCulling)],
-                                                    .semaphore = tl_compute.timeline,
-                                                    .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}};
+        const std::array gbuffer_waits{
+                TimelineWait{
+                        .value = fs.timeline_values[stage_index(Stage::LightCulling)],
+                        .semaphore = tl_compute.timeline,
+                        .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                },
+        };
 
         auto gbuffer_val = submit_stage(
                 tl_graphics, device,
@@ -1598,7 +1591,6 @@ auto execute(int argc, char **argv) -> int {
                                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_MESH_BIT_EXT |
                                                VK_SHADER_STAGE_TASK_BIT_EXT,
                                        0, sizeof(pc), &pc);
-                    // vkCmdDrawIndirect(cmd, indirect_buf, 0, 1, sizeof(VkDrawIndexedIndirectCommand));
 
                     draw_mesh(cmd, indirect_meshlet_buf, VkDeviceSize{0}, 1u,
                               static_cast<u32>(sizeof(VkDrawMeshTasksIndirectCommandEXT)));
@@ -1610,10 +1602,74 @@ auto execute(int argc, char **argv) -> int {
                 SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
 
-        const std::array present_timeline_waits{TimelineWait{
-                .value = fs.timeline_values[stage_index(Stage::GBuffer)],
-                .semaphore = tl_graphics.timeline,
-        }};
+        const std::array tonemap_waits{
+                TimelineWait{
+                        .value = fs.timeline_values[stage_index(Stage::GBuffer)],
+                        .semaphore = tl_graphics.timeline,
+                        .stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                },
+        };
+
+        auto tonemap_val = submit_stage(
+                tl_graphics, device,
+                [&](VkCommandBuffer cmd) {
+                    auto &&hdr = ctx.textures.get(offscreen_target_handle);
+                    auto &&ldr = ctx.textures.get(tonemapped_target_handle);
+
+                    // Transition HDR for sampling
+                    hdr->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            {VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT});
+
+                    // Transition LDR for rendering
+                    ldr->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
+
+                    VkRenderingAttachmentInfo color_attachment{
+                            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                            .imageView = ldr->sampled_view,
+                            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                            .clearValue = {.color = {0, 0, 0, 1}},
+                    };
+
+                    VkRenderingInfo ri{
+                            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                            .renderArea = {.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}},
+                            .layerCount = 1,
+                            .colorAttachmentCount = 1,
+                            .pColorAttachments = &color_attachment,
+                    };
+
+                    vkCmdBeginRendering(cmd, &ri);
+
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemap_pipeline.pipeline);
+
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemap_pipeline.layout, 0, 1,
+                                            &bindless.set, 0, nullptr);
+
+                    TonemapPushConstants pc{
+                            .exposure = exposure,
+                    };
+
+                    vkCmdPushConstants(cmd, tonemap_pipeline.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+                    vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle
+
+                    vkCmdEndRendering(cmd);
+                },
+                SubmitSynchronisation{.timeline_waits = tonemap_waits});
+
+        fs.timeline_values[stage_index(Stage::Tonemapping)] = tonemap_val;
+
+        const std::array present_timeline_waits{
+                TimelineWait{
+                        .value = fs.timeline_values[stage_index(Stage::Tonemapping)],
+                        .semaphore = tl_graphics.timeline,
+                },
+        };
 
         const std::array present_binary_waits{BinaryWait{
                 .semaphore = frame_sync.image_available,
@@ -1625,54 +1681,57 @@ auto execute(int argc, char **argv) -> int {
         auto swapchain_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
-                    auto &&offscreen = ctx.textures.get(offscreen_target_handle);
+                    auto &&tonemapped = ctx.textures.get(tonemapped_target_handle);
 
                     const VkImage dst_image = swapchain.image(swap_image_index);
-                    const VkImage src_image = offscreen->image;
+                    const VkImage src_image = tonemapped->image;
 
-                    // Transition offscreen -> TRANSFER_SRC, swapchain image -> TRANSFER_DST
-                    const std::array barriers{
-                            VkImageMemoryBarrier{
-                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                    .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                                    .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .image = src_image,
-                                    .subresourceRange =
-                                            VkImageSubresourceRange{
-                                                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    .baseMipLevel = 0,
-                                                    .levelCount = 1,
-                                                    .baseArrayLayer = 0,
-                                                    .layerCount = 1,
-                                            },
-                            },
-                            VkImageMemoryBarrier{
-                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                    .srcAccessMask = 0,
-                                    .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                                    .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, // ok if you don't track it; otherwise track
-                                                                            // per-image
-                                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                    .image = dst_image,
-                                    .subresourceRange =
-                                            VkImageSubresourceRange{
-                                                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    .baseMipLevel = 0,
-                                                    .levelCount = 1,
-                                                    .baseArrayLayer = 0,
-                                                    .layerCount = 1,
-                                            },
-                            }};
+                    const std::array barriers{VkImageMemoryBarrier2{
+                                                      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                                      .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                                      .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                                      .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                                      .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
+                                                      .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                                      .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                                      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                      .image = src_image,
+                                                      .subresourceRange =
+                                                              VkImageSubresourceRange{
+                                                                      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                                      .baseMipLevel = 0,
+                                                                      .levelCount = 1,
+                                                                      .baseArrayLayer = 0,
+                                                                      .layerCount = 1,
+                                                              },
+                                              },
+                                              VkImageMemoryBarrier2{
+                                                      .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                                      .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                                                      .srcAccessMask = VK_ACCESS_2_NONE,
+                                                      .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                                      .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                                      .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                                                      .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                                      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                      .image = dst_image,
+                                                      .subresourceRange =
+                                                              VkImageSubresourceRange{
+                                                                      .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                                      .baseMipLevel = 0,
+                                                                      .levelCount = 1,
+                                                                      .baseArrayLayer = 0,
+                                                                      .layerCount = 1,
+                                                              },
+                                              }};
 
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
-                                         static_cast<u32>(barriers.size()), barriers.data());
+                    VkDependencyInfo dep_info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                              .imageMemoryBarrierCount = static_cast<u32>(barriers.size()),
+                                              .pImageMemoryBarriers = barriers.data()};
+
+                    vkCmdPipelineBarrier2(cmd, &dep_info);
 
                     VkImageCopy region{
                             .srcSubresource =
@@ -1697,12 +1756,13 @@ auto execute(int argc, char **argv) -> int {
                     vkCmdCopyImage(cmd, src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst_image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-                    // Transition swapchain image -> PRESENT, and offscreen back -> GENERAL
                     const std::array end_barriers{
-                            VkImageMemoryBarrier{
-                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                    .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
-                                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                            VkImageMemoryBarrier2{
+                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
+                                    .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                    .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                     .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                     .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                                     .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -1717,10 +1777,12 @@ auto execute(int argc, char **argv) -> int {
                                                     .layerCount = 1,
                                             },
                             },
-                            VkImageMemoryBarrier{
-                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                                    .dstAccessMask = 0,
+                            VkImageMemoryBarrier2{
+                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                    .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+                                    .dstAccessMask = VK_ACCESS_2_NONE,
                                     .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                     .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                                     .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -1737,9 +1799,11 @@ auto execute(int argc, char **argv) -> int {
                             },
                     };
 
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr,
-                                         static_cast<u32>(end_barriers.size()), end_barriers.data());
+                    VkDependencyInfo end_dep_info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                                  .imageMemoryBarrierCount = static_cast<u32>(end_barriers.size()),
+                                                  .pImageMemoryBarriers = end_barriers.data()};
+
+                    vkCmdPipelineBarrier2(cmd, &end_dep_info);
                 },
                 SubmitSynchronisation{
                         .timeline_waits = present_timeline_waits,
@@ -1748,9 +1812,6 @@ auto execute(int argc, char **argv) -> int {
                 });
 
         fs.frame_done_value = swapchain_val;
-
-        //        throttle(tl_compute, device);
-        //      throttle(tl_graphics, device);
 
         const auto completed = std::min(tl_compute.completed, tl_graphics.completed);
         ctx.destroy_queue.retire(completed);
@@ -1767,7 +1828,6 @@ auto execute(int argc, char **argv) -> int {
             auto result = swapchain.recreate(current_extent(window));
             if (!result)
                 vk_check(result.error());
-            // Also recreate offscreen targets when you plumb it.
         } else {
             vk_check(present_res);
         }
