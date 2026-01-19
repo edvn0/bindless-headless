@@ -20,6 +20,7 @@
 #include <string_view>
 #include <vector>
 #include <print>
+#include <GLFW/glfw3.h>
 
 #include <vma/vk_mem_alloc.h>
 
@@ -159,7 +160,7 @@ struct InstanceWithDebug {
     VkDebugUtilsMessengerEXT messenger{VK_NULL_HANDLE};
 };
 
-auto create_instance_with_debug(auto &callback, bool is_release) -> InstanceWithDebug {
+auto create_instance_with_debug(auto &callback, std::span<const std::string_view> surface_required_extensions, bool is_release) -> InstanceWithDebug {
     VkApplicationInfo app_info{
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pNext = nullptr,
@@ -174,27 +175,32 @@ auto create_instance_with_debug(auto &callback, bool is_release) -> InstanceWith
         "VK_LAYER_KHRONOS_validation"
     };
 
-    u32 ext_count{};
-    vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
-    std::vector<VkExtensionProperties> extensions(ext_count);
-    vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, extensions.data());
+    std::vector<const char *> enabled_extensions;
+
+    for (const auto &required_extension : surface_required_extensions) {
+        enabled_extensions.push_back(required_extension.data());
+    }
 
     bool has_debug_utils = false;
-    for (const auto &ext: extensions) {
-        if (std::strcmp(ext.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
-            has_debug_utils = true;
+    if (!is_release) {
+        u32 ext_count{};
+        vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
+        std::vector<VkExtensionProperties> extensions(ext_count);
+        vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, extensions.data());
+
+        for (const auto &ext: extensions) {
+            if (std::strcmp(ext.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+                has_debug_utils = true;
+                break;
+            }
+        }
+
+        if (has_debug_utils) {
+            enabled_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
     }
 
-    has_debug_utils &= !is_release;
-
     info("Validation layers status: '{}'", has_debug_utils ? "Enabled" : "Disabled");
-
-    std::vector<const char *> enabled_extensions;
-
-    if (has_debug_utils) {
-        enabled_extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
 
     VkInstanceCreateInfo create_info{
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -203,7 +209,7 @@ auto create_instance_with_debug(auto &callback, bool is_release) -> InstanceWith
         .pApplicationInfo = &app_info,
         .enabledLayerCount = is_release ? 0 : static_cast<u32>(enabled_layers.size()),
         .ppEnabledLayerNames = enabled_layers.data(),
-        .enabledExtensionCount = is_release ? 0 : static_cast<u32>(enabled_extensions.size()),
+        .enabledExtensionCount = static_cast<u32>(enabled_extensions.size()),
         .ppEnabledExtensionNames = enabled_extensions.data()
     };
 
@@ -296,8 +302,9 @@ auto submit_stage(
     TimelineCompute &tl,
     VkDevice device,
     RecordFn &&record,
-    SubmitSynchronisation sync = {}) -> u64 {
-     const u32 index = static_cast<u32>(tl.value % TimelineCompute::buffered);
+    SubmitSynchronisation sync = {}) -> u64
+{
+    const u32 index = static_cast<u32>(tl.value % TimelineCompute::buffered);
     VkCommandBuffer cmd = tl.cmds[index];
 
     const u64 last = tl.slot_last_signal[index];
@@ -326,46 +333,56 @@ auto submit_stage(
 
     const u64 signal_val = tl.value + 1;
 
-    // Build combined wait arrays (binary first, then timeline)
     const u32 bwc = static_cast<u32>(sync.binary_waits.size());
     const u32 twc = static_cast<u32>(sync.timeline_waits.size());
     const u32 total_waits = bwc + twc;
 
     std::vector<VkSemaphore> wait_sems;
     std::vector<VkPipelineStageFlags> wait_stages;
-    std::vector<u64> timeline_wait_values;
+    std::vector<u64> wait_values;
 
     wait_sems.reserve(total_waits);
     wait_stages.reserve(total_waits);
-    timeline_wait_values.reserve(twc);
+    wait_values.reserve(total_waits);
 
-    for ( auto&&[semaphore, stage] : sync.binary_waits) {
-        wait_sems.push_back(semaphore);
-        wait_stages.push_back(stage);
+    for (auto &&w : sync.binary_waits) {
+        wait_sems.push_back(w.semaphore);
+        wait_stages.push_back(w.stage);
+        wait_values.push_back(0);
     }
-    for (auto &&[value, semaphore, stage] : sync.timeline_waits) {
-        wait_sems.push_back(semaphore);
-        wait_stages.push_back(stage);
-        timeline_wait_values.push_back(value);
+
+    for (auto &&w : sync.timeline_waits) {
+        wait_sems.push_back(w.semaphore);
+        wait_stages.push_back(w.stage);
+        wait_values.push_back(w.value);
     }
 
     std::vector<VkSemaphore> signal_sems;
+    std::vector<u64> signal_values;
+
     signal_sems.reserve(1 + sync.binary_signals.size());
+    signal_values.reserve(1 + sync.binary_signals.size());
+
     signal_sems.push_back(tl.timeline);
-    for (VkSemaphore s : sync.binary_signals) signal_sems.push_back(s);
+    signal_values.push_back(signal_val);
+
+    for (VkSemaphore s : sync.binary_signals) {
+        signal_sems.push_back(s);
+        signal_values.push_back(0);
+    }
 
     VkTimelineSemaphoreSubmitInfo timeline_info{
         .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-        .waitSemaphoreValueCount = twc,
-        .pWaitSemaphoreValues = timeline_wait_values.empty() ? nullptr : timeline_wait_values.data(),
-        .signalSemaphoreValueCount = 1,
-        .pSignalSemaphoreValues = &signal_val
+        .waitSemaphoreValueCount = static_cast<u32>(wait_values.size()),
+        .pWaitSemaphoreValues = wait_values.empty() ? nullptr : wait_values.data(),
+        .signalSemaphoreValueCount = static_cast<u32>(signal_values.size()),
+        .pSignalSemaphoreValues = signal_values.empty() ? nullptr : signal_values.data()
     };
 
     VkSubmitInfo si{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .pNext = &timeline_info,
-        .waitSemaphoreCount = total_waits,
+        .waitSemaphoreCount = static_cast<u32>(wait_sems.size()),
         .pWaitSemaphores = wait_sems.empty() ? nullptr : wait_sems.data(),
         .pWaitDstStageMask = wait_stages.empty() ? nullptr : wait_stages.data(),
         .commandBufferCount = 1,
@@ -385,6 +402,12 @@ auto throttle(TimelineCompute &tl, VkDevice device) -> void;
 
 namespace destruction {
     auto instance(InstanceWithDebug const &inst) -> void;
+
+    inline auto wsi(VkInstance& inst, VkSurfaceKHR& surf, GLFWwindow* win) -> void {
+        vkDestroySurfaceKHR(inst, surf, nullptr);
+        glfwDestroyWindow(win);
+        glfwTerminate();
+    }
 
     auto device(VkDevice &dev) -> void;
 

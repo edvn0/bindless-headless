@@ -31,8 +31,14 @@ CPMAddPackage(
         VERSION 2.6.1
 )
 
+CPMAddPackage(
+        URI "gh:glfw/glfw#3.4"
+)
+
 add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp"
-        "src/Pool.cxx" "src/Types.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx" "src/Compiler.cxx" "src/GlobalCommandContext.cxx")
+        "src/Pool.cxx" "src/Types.cxx"
+        "src/ResizeableGraph.cxx"
+        "src/Swapchain.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx" "src/Compiler.cxx" "src/GlobalCommandContext.cxx")
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
@@ -60,6 +66,7 @@ target_link_libraries(BindlessHeadless PRIVATE
         PUBLIC
         glm::glm
         CLI11::CLI11
+        glfw
 )
 
 if (supported)

@@ -571,6 +571,7 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index,
     }
 
     enabled_exts.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+    enabled_exts.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features_khr{
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,

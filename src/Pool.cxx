@@ -61,7 +61,7 @@ auto destroy(DestructionContext &ctx, DestructionContext::TextureHandle handle, 
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, img = std::move(*impl)]() {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
-        if (img.storage_view == img.sampled_view && (img.sampled_view != VK_NULL_HANDLE && img.sampled_view != VK_NULL_HANDLE)) {
+        if (img.storage_view == img.sampled_view && (img.sampled_view != VK_NULL_HANDLE && img.storage_view != VK_NULL_HANDLE)) {
             vkDestroyImageView(info.device, img.sampled_view, nullptr);
         } else {
         if (img.storage_view)
