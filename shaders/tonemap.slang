@@ -2,6 +2,7 @@ import common;
 
 struct TonemapPushConstants
 {
+    float exposure;
     uint image_index;   // HDR texture index
     uint sampler_index; // sampler index
 };
@@ -33,12 +34,12 @@ struct PSOut
 };
 
 [shader("fragment")]
-PSOut ps_main(VSOut i, uniform TonemapPushConstants pc)
+PSOut fs_main(VSOut i, uniform TonemapPushConstants pc)
 {
     uint idx = NonUniformResourceIndex(pc.image_index);
     uint samp_idx = NonUniformResourceIndex(pc.sampler_index);
 
-    float4 hdr = sampled_images[idx].SampleLevel(samplers[samp_idx], i.uv, 0);
+    float4 hdr = sampled_images[idx].Sample(samplers[samp_idx], i.uv);
 
     // Reinhard tonemap: HDR -> [0,1] linear
     float3 ldr_rgb = hdr.rgb / (hdr.rgb + 1.0);

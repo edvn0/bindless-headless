@@ -44,6 +44,8 @@ struct CompilerSession {
         std::array<std::vector<std::uint32_t>, N> spirv_data{};
         const auto shader_source = load_shader_file(path);
 
+        if (shader_source.empty()) return spirv_data;
+
         for (std::size_t i = 0; i < N; ++i) {
             std::filesystem::path entry_path(path);
             spirv_data[i] = compile_entry_from_string(entry_path.filename().string(), path, shader_source, entries[i], &reflection_data[i]);

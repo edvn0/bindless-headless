@@ -4,9 +4,12 @@
 
 namespace {
 
-    auto load_file_to_string = [](std::filesystem::path const &p) {
+    auto load_file_to_string = [](std::filesystem::path const &p) -> std::string {
         const std::ifstream ifs(p);
-        if (!ifs) std::abort();
+        if (!ifs) {
+            error("Could not open file {}", p.string());
+            return "";
+        }
         std::ostringstream oss;
         oss << ifs.rdbuf();
         return oss.str();
