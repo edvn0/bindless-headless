@@ -3,37 +3,32 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <vector>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
-#include <slang/slang.h>
-#include <slang/slang-com-ptr.h>
+#include "Types.hxx"
+
 #include <slang/slang-com-helper.h>
+#include <slang/slang-com-ptr.h>
+#include <slang/slang.h>
+
 
 // Heterogeneous string hashing / equality
 struct string_hash {
     using is_transparent = void;
 
-    auto operator()(std::string_view v) const noexcept -> std::size_t {
-        return std::hash<std::string_view>{}(v);
-    }
+    auto operator()(std::string_view v) const noexcept -> std::size_t { return std::hash<std::string_view>{}(v); }
 
-    auto operator()(std::string const &s) const noexcept -> std::size_t {
-        return (*this)(std::string_view{s});
-    }
+    auto operator()(std::string const &s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
 
-    auto operator()(char const *s) const noexcept -> std::size_t {
-        return (*this)(std::string_view{s});
-    }
+    auto operator()(char const *s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
 };
 
 struct string_eq {
     using is_transparent = void;
 
-    auto operator()(std::string_view a, std::string_view b) const noexcept -> bool {
-        return a == b;
-    }
+    auto operator()(std::string_view a, std::string_view b) const noexcept -> bool { return a == b; }
 };
 
 struct ReflectionData {
@@ -42,11 +37,7 @@ struct ReflectionData {
         std::uint32_t offset{};
         std::uint32_t size{};
 
-        std::unordered_map<
-            std::string,
-            std::uint32_t,
-            string_hash,
-            string_eq> fields;
+        std::unordered_map<std::string, std::uint32_t, string_hash, string_eq> fields;
     };
 
     struct BindingInfo {
@@ -62,11 +53,7 @@ struct ReflectionData {
         std::string name;
         std::uint32_t index{};
 
-        std::unordered_map<
-            std::string,
-            BindingInfo,
-            string_hash,
-            string_eq> bindings;
+        std::unordered_map<std::string, BindingInfo, string_hash, string_eq> bindings;
     };
 
     struct EntryInfo {
@@ -75,59 +62,24 @@ struct ReflectionData {
         std::string name; // entry-point function name in Slang
         std::string stage_name; // "compute", "vertex", ...
 
-        std::unordered_map<
-            std::string,
-            PushConstantInfo,
-            string_hash,
-            string_eq> push_constants;
+        std::unordered_map<std::string, PushConstantInfo, string_hash, string_eq> push_constants;
 
-        std::unordered_map<
-            std::string,
-            SetInfo,
-            string_hash,
-            string_eq> descriptor_sets;
+        std::unordered_map<std::string, SetInfo, string_hash, string_eq> descriptor_sets;
 
-        std::unordered_set<
-            std::string,
-            string_hash,
-            string_eq> stage_flags;
+        std::unordered_set<std::string, string_hash, string_eq> stage_flags;
 
-        std::unordered_map<
-            std::string,
-            std::string,
-            string_hash,
-            string_eq> attributes;
+        std::unordered_map<std::string, std::string, string_hash, string_eq> attributes;
     };
 
-    std::unordered_map<
-        std::string,
-        EntryInfo,
-        string_hash,
-        string_eq> entries;
+    std::unordered_map<std::string, EntryInfo, string_hash, string_eq> entries;
 
-    std::unordered_map<
-        std::string,
-        std::string,
-        string_hash,
-        string_eq> defines;
+    std::unordered_map<std::string, std::string, string_hash, string_eq> defines;
 
-    std::unordered_map<
-        std::string,
-        std::string,
-        string_hash,
-        string_eq> types;
+    std::unordered_map<std::string, std::string, string_hash, string_eq> types;
 
-    std::unordered_map<
-        std::string,
-        std::string,
-        string_hash,
-        string_eq> capabilities;
+    std::unordered_map<std::string, std::string, string_hash, string_eq> capabilities;
 
-    std::unordered_map<
-        std::string,
-        std::string,
-        string_hash,
-        string_eq> misc;
+    std::unordered_map<std::string, std::string, string_hash, string_eq> misc;
 };
 
 
@@ -135,19 +87,32 @@ struct ReflectionData {
 inline auto stage_to_string(SlangStage stage) -> std::string_view {
     using S = SlangStage;
     switch (stage) {
-        case SLANG_STAGE_VERTEX: return "vertex";
-        case SLANG_STAGE_FRAGMENT: return "fragment";
-        case SLANG_STAGE_COMPUTE: return "compute";
-        case SLANG_STAGE_GEOMETRY: return "geometry";
-        case SLANG_STAGE_HULL: return "hull";
-        case SLANG_STAGE_DOMAIN: return "domain";
-        case SLANG_STAGE_RAY_GENERATION: return "raygen";
-        case SLANG_STAGE_INTERSECTION: return "intersection";
-        case SLANG_STAGE_ANY_HIT: return "any_hit";
-        case SLANG_STAGE_CLOSEST_HIT: return "closest_hit";
-        case SLANG_STAGE_MISS: return "miss";
-        case SLANG_STAGE_CALLABLE: return "callable";
-        default: return "unknown";
+        case SLANG_STAGE_VERTEX:
+            return "vertex";
+        case SLANG_STAGE_FRAGMENT:
+            return "fragment";
+        case SLANG_STAGE_COMPUTE:
+            return "compute";
+        case SLANG_STAGE_GEOMETRY:
+            return "geometry";
+        case SLANG_STAGE_HULL:
+            return "hull";
+        case SLANG_STAGE_DOMAIN:
+            return "domain";
+        case SLANG_STAGE_RAY_GENERATION:
+            return "raygen";
+        case SLANG_STAGE_INTERSECTION:
+            return "intersection";
+        case SLANG_STAGE_ANY_HIT:
+            return "any_hit";
+        case SLANG_STAGE_CLOSEST_HIT:
+            return "closest_hit";
+        case SLANG_STAGE_MISS:
+            return "miss";
+        case SLANG_STAGE_CALLABLE:
+            return "callable";
+        default:
+            return "unknown";
     }
 }
 
@@ -187,9 +152,8 @@ inline auto resource_kind_from_type(slang::TypeLayoutReflection *type_layout) ->
 }
 
 // Reflect a single parameter layout into entry_info
-inline auto reflect_parameter_into_entry(
-    ReflectionData::EntryInfo &entry,
-    slang::VariableLayoutReflection *var_layout) -> void {
+inline auto reflect_parameter_into_entry(ReflectionData::EntryInfo &entry, slang::VariableLayoutReflection *var_layout)
+        -> void {
     if (!var_layout) {
         return;
     }
@@ -258,9 +222,7 @@ inline auto reflect_parameter_into_entry(
     }
 
     ReflectionData::BindingInfo bi{};
-    bi.name = param_name.empty()
-                  ? ("binding" + std::to_string(binding_index))
-                  : param_name;
+    bi.name = param_name.empty() ? ("binding" + std::to_string(binding_index)) : param_name;
 
     bi.binding = binding_index;
     bi.set_index = set_index;
@@ -283,9 +245,7 @@ inline auto reflect_parameter_into_entry(
 }
 
 // Reflect one *entry point* (stage) into ReflectionData
-inline auto reflect_entry_point(
-    ReflectionData &out,
-    slang::EntryPointReflection *entry_point) -> void {
+inline auto reflect_entry_point(ReflectionData &out, slang::EntryPointReflection *entry_point) -> void {
     if (!entry_point) {
         return;
     }
@@ -312,9 +272,8 @@ inline auto reflect_entry_point(
 }
 
 // Reflect a linked Slang program (IComponentType) into ReflectionData
-inline auto reflect_program(
-    Slang::ComPtr<slang::IComponentType> const &program,
-    int target_index = 0) -> ReflectionData {
+inline auto reflect_program(Slang::ComPtr<slang::IComponentType> const &program, int target_index = 0)
+        -> ReflectionData {
     ReflectionData result{};
 
     if (!program) {

@@ -35,6 +35,32 @@
       }
     },
     {
+      "name": "x64-debug-tracy",
+      "displayName": "x64 Tracy",
+      "inherits": "windows-base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "HAS_TRACY": "ON"
+      }
+    },
+    {
+      "name": "x64-relwithdebinfo-tracy",
+      "displayName": "x64 RelWithDebInfo Tracy",
+      "inherits": "windows-base",
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "HAS_TRACY": "ON"
+      }
+    },
+    {
       "name": "x64-release",
       "displayName": "x64 Release",
       "inherits": "x64-debug",
@@ -123,6 +149,18 @@
       "configurePreset": "x64-release",
       "configuration": "Release",
       "jobs": 20
+    },
+    {
+      "name": "debug-tracy",
+      "configurePreset": "x64-debug-tracy",
+      "configuration": "Debug",
+      "jobs": 20
+    },
+    {
+      "name": "relwithdebinfo-tracy",
+      "configurePreset": "x64-relwithdebinfo-tracy",
+      "configuration": "Debug",
+      "jobs": 20
     }
   ],
   "workflowPresets": [
@@ -137,6 +175,34 @@
         {
           "type": "build",
           "name": "debug"
+        }
+      ]
+    },
+    {
+      "name": "debug-tracy",
+      "displayName": "Tracy Debug Workflow",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "x64-debug-tracy"
+        },
+        {
+          "type": "build",
+          "name": "debug-tracy"
+        }
+      ]
+    },
+    {
+      "name": "relwithdebinfo-tracy",
+      "displayName": "Tracy RelWithDebInfo Workflow",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "x64-relwithdebinfo-tracy"
+        },
+        {
+          "type": "build",
+          "name": "relwithdebinfo-tracy"
         }
       ]
     },

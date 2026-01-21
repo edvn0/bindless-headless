@@ -30,6 +30,11 @@ struct IndirectMeshCommand {
     uint wgz;
 };
 
+struct Cube {
+    float4 pos_radius;
+    float4 colour_intensity;
+}
+
 [[vk::binding(0, 0)]]
 Texture2D<float> sampled_images[];
 

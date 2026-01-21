@@ -11,7 +11,11 @@
 #include <string_view>
 
 namespace image_operations {
-    auto write_to_disk(const OffscreenTarget*,
-        VmaAllocator &allocator,
-        std::string_view filename) -> void;
-}
+    struct ImageWriteRequest {
+        const OffscreenTarget *texture;
+        std::string filename;
+    };
+
+    auto write_to_disk(const OffscreenTarget *, VmaAllocator &allocator, std::string_view filename) -> void;
+    auto write_batch_to_disk(VmaAllocator &allocator, std::span<const ImageWriteRequest>) -> void;
+} // namespace image_operations

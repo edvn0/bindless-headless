@@ -2,9 +2,7 @@ cmake_minimum_required(VERSION 3.31)
 
 set(CMAKE_CXX_STANDARD 23)
 
-option(HAS_RENDERDOC "Enable RenderDoc integration" OFF)
-option(HAS_TRACY "Enable Tracy integration" OFF)
-option(HAS_HOT_RELOADING "Enable MSVC hot reloading" OFF)
+
 
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141 AND HAS_HOT_RELOADING)
@@ -12,14 +10,11 @@ if (POLICY CMP0141 AND HAS_HOT_RELOADING)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<IF:$<AND:$<C_COMPILER_ID:MSVC>,$<CXX_COMPILER_ID:MSVC>>,$<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,$<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif ()
 
-include(CheckIPOSupported)
-check_ipo_supported(
-        RESULT ipo_supported
-        OUTPUT ipo_output
-        LANGUAGES CXX
-)
-
 project("BindlessHeadless")
+
+option(HAS_RENDERDOC "Enable RenderDoc integration" OFF)
+option(HAS_TRACY "Enable Tracy integration" OFF)
+option(HAS_HOT_RELOADING "Enable MSVC hot reloading" OFF)
 
 include(cmake/CPM.cmake)
 
@@ -40,10 +35,15 @@ CPMAddPackage(
 )
 
 if (HAS_TRACY)
+    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
+
     CPMAddPackage(
-            URI "gh:wolfpld/tracy@0.13.1"
+        URI "gh:wolfpld/tracy#07147111b26ddaf43fb46fabbab42de4451fa567"
     )
 endif ()
+
+message(STATUS "HAS_TRACY = ${HAS_TRACY}")
+message(STATUS "TRACY_ENABLE = ${TRACY_ENABLE}")
 
 add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp"
         "src/Pool.cxx" "src/Types.cxx"
@@ -80,12 +80,7 @@ target_link_libraries(BindlessHeadless PRIVATE
         glfw
 )
 
-if (ipo_supported)
-    message(STATUS "IPO / LTO enabled")
-    set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-else ()
-    message(STATUS "IPO / LTO not supported: <${error}>")
-endif ()
+set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 
 
 if (HAS_RENDERDOC)
@@ -100,7 +95,10 @@ endif ()
 # Add Slang include directory
 target_include_directories(BindlessHeadless PRIVATE ${SLANG_INCLUDE_DIR} ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
 
-target_compile_definitions(BindlessHeadless PRIVATE _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1 GLM_FORCE_DEPTH_ZERO_TO_ONE TRACY_ENABLE)
+target_compile_definitions(BindlessHeadless PRIVATE _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1 GLM_FORCE_DEPTH_ZERO_TO_ONE)
+if(MSVC)
+    target_compile_options(BindlessHeadless PRIVATE /arch:AVX2)
+endif()
 target_compile_options(BindlessHeadless PRIVATE
         $<$<CXX_COMPILER_ID:MSVC>:/W4 /WX>
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall -Wextra -Wpedantic -Werror>
