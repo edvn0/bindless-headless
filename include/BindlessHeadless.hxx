@@ -8,7 +8,7 @@
 #include "Types.hxx"
 
 
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
 #include <GLFW/glfw3.h>
 #include <array>
@@ -24,7 +24,7 @@
 #include <vector>
 
 
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 
 constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle
 constexpr u32 max_in_flight = 2; // GPU submit throttle depth
@@ -146,6 +146,8 @@ struct InstanceWithDebug {
 
 auto create_instance_with_debug(auto &callback, std::span<const std::string_view> surface_required_extensions,
                                 bool is_release) -> InstanceWithDebug {
+    vk_check(volkInitialize());
+
     VkApplicationInfo app_info{.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
                                .pNext = nullptr,
                                .pApplicationName = "HeadlessBindless",
@@ -194,6 +196,7 @@ auto create_instance_with_debug(auto &callback, std::span<const std::string_view
 
     InstanceWithDebug result{};
     vk_check(vkCreateInstance(&create_info, nullptr, &result.instance));
+    volkLoadInstance(result.instance);
 
     if (has_debug_utils) {
         VkDebugUtilsMessengerCreateInfoEXT debug_ci{.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,

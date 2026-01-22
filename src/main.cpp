@@ -29,25 +29,106 @@
 #endif
 
 
-#define NOMINMAX
-#define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
 #include "Swapchain.hxx"
+
+enum class PipelineStats : u32 {
+    InputAssemblyVertices = 0,
+    InputAssemblyPrimitives = 1,
+    VertexShaderInvocations = 2,
+    ClippingInvocations = 3,
+    ClippingPrimitives = 4,
+    FragmentShaderInvocations = 5,
+    ComputeShaderInvocations = 6,
+    Count = 7,
+};
+constexpr u32 pipeline_stats_query_count = 1;
+
+struct GraphicsGpuStats {
+    u64 input_assembly_vertices;
+    u64 input_assembly_primitives;
+    u64 vertex_shader_invocations;
+    u64 clipping_invocations;
+    u64 clipping_primitives;
+    u64 fragment_shader_invocations;
+    u64 mesh_shader_invocations;
+    u64 task_shader_invocations;
+};
+struct ComputeGpuStats {
+    u64 compute_shader_invocations;
+};
+auto read_graphics_stats = [](auto &ctx, auto &device, const auto h) -> std::optional<GraphicsGpuStats> {
+    const auto *qs = ctx.query_pools.get(h);
+    if (!qs)
+        return std::nullopt;
+
+    std::array<u64, 8> stats{}; // Match the number of statistics you requested
+    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
+                                         sizeof(stats), stats.data(), sizeof(u64),
+                                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+    if (r != VK_SUCCESS)
+        return std::nullopt;
+
+    return GraphicsGpuStats{
+            .input_assembly_vertices = stats[0],
+            .input_assembly_primitives = stats[1],
+            .vertex_shader_invocations = stats[2],
+            .clipping_invocations = stats[3],
+            .clipping_primitives = stats[4],
+            .fragment_shader_invocations = stats[5],
+            .mesh_shader_invocations = stats[7],
+            .task_shader_invocations = stats[6],
+    };
+};
+
+auto read_compute_stats = [](auto &ctx, auto &device, const auto h) -> std::optional<ComputeGpuStats> {
+    const auto *qs = ctx.query_pools.get(h);
+    if (!qs)
+        return std::nullopt;
+
+    std::array<u64, 1> stats{}; // Match the number of statistics you requested
+    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
+                                         sizeof(stats), stats.data(), sizeof(u64),
+                                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+
+    if (r != VK_SUCCESS)
+        return std::nullopt;
+
+    return ComputeGpuStats{
+            .compute_shader_invocations = stats[0],
+    };
+};
+
+
+static constexpr u32 THREADS_PER_GROUP = 64;
+static constexpr u32 MAX_WAVES_PER_GROUP = 4;
+
+template<typename T>
+glm::mat<4, 4, T, glm::defaultp> perspectiveLH_ZO_ReverseZ(T fovy, T aspect, T zNear, T /*zFar*/) {
+    T const tanHalfFovy = tan(fovy / T(2));
+
+    glm::mat<4, 4, T, glm::defaultp> Result(T(0));
+    Result[0][0] = T(1) / (aspect * tanHalfFovy);
+    Result[1][1] = T(1) / (tanHalfFovy);
+
+    // 🔥 Reverse-Z
+    Result[2][2] = T(0);
+    Result[2][3] = T(1);
+    Result[3][2] = zNear;
+
+    return Result;
+}
 
 struct GpuPushConstants {
     const DeviceAddress ubo;
     const DeviceAddress lights;
     const DeviceAddress flags;
     const DeviceAddress prefix;
-    const DeviceAddress group_sums;
-    const DeviceAddress group_offsets;
     const DeviceAddress compact;
-    const DeviceAddress indirect_point_light;
-    const DeviceAddress indirect_meshlet;
-    const u32 image_index;
+    const DeviceAddress culled_light_count; // OUTPUT
     const u32 light_count;
-    const u32 group_count;
 };
 
 struct PredepthPushConstants {
@@ -207,6 +288,31 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pi_layout, entry_name);
 
+    VkSpecializationInfo waves_per_group_spec_info{};
+    VkSpecializationMapEntry waves_per_group_spec_map_entry{
+            .constantID = 0,
+            .offset = 0,
+            .size = sizeof(u32),
+    };
+    waves_per_group_spec_info.mapEntryCount = 1;
+    waves_per_group_spec_info.pMapEntries = &waves_per_group_spec_map_entry;
+    waves_per_group_spec_info.dataSize = sizeof(u32);
+    waves_per_group_spec_info.pData = &MAX_WAVES_PER_GROUP;
+
+    VkSpecializationInfo threads_per_group_spec_info{};
+    VkSpecializationMapEntry threads_per_group_spec_map_entry{
+            .constantID = 1,
+            .offset = 0,
+            .size = sizeof(u32),
+    };
+    threads_per_group_spec_info.mapEntryCount = 1;
+    threads_per_group_spec_info.pMapEntries = &threads_per_group_spec_map_entry;
+    threads_per_group_spec_info.dataSize = sizeof(u32);
+    threads_per_group_spec_info.pData = &THREADS_PER_GROUP;
+
+    std::array spec_infos{waves_per_group_spec_info, threads_per_group_spec_info};
+
+
     VkComputePipelineCreateInfo cpci{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
                                      .pNext = nullptr,
                                      .flags = 0,
@@ -218,7 +324,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
                                                      .stage = VK_SHADER_STAGE_COMPUTE_BIT,
                                                      .module = compute_shader,
                                                      .pName = entry_name.data(),
-                                                     .pSpecializationInfo = nullptr,
+                                                     .pSpecializationInfo = spec_infos.data(),
                                              },
                                      .layout = pi_layout,
                                      .basePipelineHandle = VK_NULL_HANDLE,
@@ -295,7 +401,7 @@ auto create_predepth_pipeline(VkDevice device, VkPipelineCache cache, VkDescript
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .depthTestEnable = VK_TRUE,
             .depthWriteEnable = VK_TRUE,
-            .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL, // Reverse-Z: Near is 1.0, Far is 0.0
+            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL, // Reverse-Z: Near is 1.0, Far is 0.0
             .minDepthBounds = 0.0f,
             .maxDepthBounds = 1.0f,
     };
@@ -307,7 +413,7 @@ auto create_predepth_pipeline(VkDevice device, VkPipelineCache cache, VkDescript
 
     // 5. Rasterization (Ensure Back-Face Culling is ON)
     VkPipelineRasterizationStateCreateInfo rs{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                                              .cullMode = VK_CULL_MODE_BACK_BIT,
+                                              .cullMode = VK_CULL_MODE_NONE,
                                               .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
                                               .lineWidth = 1.0f};
 
@@ -458,7 +564,7 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
             .flags = 0,
             .depthTestEnable = VK_TRUE,
             .depthWriteEnable = VK_FALSE,
-            .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL,
+            .depthCompareOp = VK_COMPARE_OP_EQUAL,
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE,
             .front = {},
@@ -821,24 +927,23 @@ auto execute(int argc, char **argv) -> int {
 
     auto command_context = create_global_cmd_context(device, graphics_queue, graphics_index);
 
-    std::array<const std::string_view, 5> names = {"LightFlagsCS", "LightScanLocalCS", "LightScanGroupsCS",
-                                                   "LightCompactCS", "SetupIndirectCS"};
-    std::array<ReflectionData, 5> reflection_data = {};
-    auto culling_code = compiler.compile_from_file("shaders/light_cull_prefix_compact.slang", std::span(names),
+    std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
+    std::array<ReflectionData, names.size()> reflection_data = {};
+    auto culling_code = compiler.compile_from_file("shaders/light_cull_compact_modern.slang", std::span(names),
                                                    std::span(reflection_data));
 
     std::array<const std::string_view, 3> point_light_names = {"main_ms", "main_ts", "main_fs"};
-    std::array<ReflectionData, 3> point_light_reflection = {};
+    std::array<ReflectionData, point_light_names.size()> point_light_reflection = {};
     auto point_light_code = compiler.compile_from_file("shaders/point_light.slang", std::span(point_light_names),
                                                        std::span(point_light_reflection));
 
     std::array<const std::string_view, 3> predepth_names{"main_ts", "main_ms", "main_fs"};
-    std::array<ReflectionData, 3> predepth_reflection{};
+    std::array<ReflectionData, predepth_names.size()> predepth_reflection{};
     auto predepth_code = compiler.compile_from_file("shaders/predepth.slang", std::span(predepth_names),
                                                     std::span(predepth_reflection));
 
     std::array<const std::string_view, 2> tonemap_names{"vs_main", "fs_main"};
-    std::array<ReflectionData, 2> tonemap_reflection{};
+    std::array<ReflectionData, tonemap_names.size()> tonemap_reflection{};
     auto tonemap_code = compiler.compile_from_file("shaders/tonemap.slang", std::span(tonemap_names),
                                                    std::span(tonemap_reflection));
 
@@ -853,8 +958,8 @@ auto execute(int argc, char **argv) -> int {
 
     bindless.grow_if_needed(300u, 40u, 32u, 8u);
 
-    auto &&[flags, scan_local, scan_groups, compact, setup_indirect] = create_compute_pipelines(
-            device, *pipeline_cache, bindless.layout, std::span(culling_code), std::span(names));
+    auto &&[flags_pipeline, compact_pipeline] = create_compute_pipelines(device, *pipeline_cache, bindless.layout,
+                                                                         std::span(culling_code), std::span(names));
 
     auto point_light_pipeline =
             create_mesh_pipeline(device, *pipeline_cache, bindless.layout, point_light_code.at(0),
@@ -870,8 +975,11 @@ auto execute(int argc, char **argv) -> int {
             .bindless_set = &bindless,
     };
 
+
     std::array<DestructionContext::QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<DestructionContext::QueryPoolHandle, frames_in_flight> graphics_query_pool{};
+    std::array<DestructionContext::QueryPoolHandle, frames_in_flight> graphics_stats_pool{};
+    std::array<DestructionContext::QueryPoolHandle, frames_in_flight> compute_stats_pool{};
     {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physical_device, &props);
@@ -889,11 +997,62 @@ auto execute(int argc, char **argv) -> int {
             vk_check(vkCreateQueryPool(device, &qpci, nullptr, &qpc));
             compute_query_pool[fi] = ctx.create_query_pool(QueryPoolState{
                     .pool = qpc, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns});
+            set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, qpc,
+                           "compute_timestamp_query_pool_frame_" + std::to_string(fi));
 
             VkQueryPool qpg = VK_NULL_HANDLE;
             vk_check(vkCreateQueryPool(device, &qpci, nullptr, &qpg));
             graphics_query_pool[fi] = ctx.create_query_pool(QueryPoolState{
                     .pool = qpg, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns});
+            set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, qpg,
+                           "graphics_timestamp_query_pool_frame_" + std::to_string(fi));
+
+            VkQueryPoolCreateInfo stats_qpci{
+                    .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+                    .queryCount = pipeline_stats_query_count,
+                    .pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
+                                          VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
+                                          VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
+                                          VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+                                          VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+                                          VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
+                                          VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT |
+                                          VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT |
+                                          VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT,
+            };
+
+            VkQueryPool stats_pool = VK_NULL_HANDLE;
+            vk_check(vkCreateQueryPool(device, &stats_qpci, nullptr, &stats_pool));
+            graphics_stats_pool[fi] = ctx.create_query_pool(QueryPoolState{
+                    .pool = stats_pool,
+                    .query_count = pipeline_stats_query_count,
+                    .timestamp_period_ns = 0.0, // Not used for stats
+            });
+            set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, stats_pool,
+                           "graphics_stats_query_pool_frame_" + std::to_string(fi));
+
+            // For compute statistics
+            VkQueryPoolCreateInfo compute_stats_qpci{
+                    .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
+                    .queryCount = pipeline_stats_query_count,
+                    .pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT,
+            };
+
+            VkQueryPool compute_stats = VK_NULL_HANDLE;
+            vk_check(vkCreateQueryPool(device, &compute_stats_qpci, nullptr, &compute_stats));
+            compute_stats_pool[fi] = ctx.create_query_pool(QueryPoolState{
+                    .pool = compute_stats,
+                    .query_count = pipeline_stats_query_count,
+                    .timestamp_period_ns = 0.0,
+            });
+            set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, compute_stats,
+                           "compute_stats_query_pool_frame_" + std::to_string(fi));
         }
     }
 
@@ -1009,6 +1168,16 @@ auto execute(int argc, char **argv) -> int {
                                            VmaAllocationCreateInfo{}, all_point_lights, "point_light")
                     .value());
 
+    auto culled_light_count_handle =
+            ctx.buffers.create(Buffer::from_value<u32>(allocator,
+                                                       VkBufferCreateInfo{
+                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                       },
+                                                       VmaAllocationCreateInfo{}, 0u, "culled_point_light_count")
+                                       .value());
+
     auto cubes_handle =
             ctx.buffers.create(Buffer::from_slice<Cube>(allocator,
                                                         VkBufferCreateInfo{
@@ -1020,7 +1189,7 @@ auto execute(int argc, char **argv) -> int {
                                        .value());
 
     VkDrawMeshTasksIndirectCommandEXT cube_meshlet_cmd{};
-    cube_meshlet_cmd.groupCountX = (uint32_t(cubes.size()) + 15) / 16; // 16 threads per group
+    cube_meshlet_cmd.groupCountX = (uint32_t(cubes.size()) + 7) / 8; // 16 threads per group
     cube_meshlet_cmd.groupCountY = 1;
     cube_meshlet_cmd.groupCountZ = 1;
 
@@ -1052,22 +1221,7 @@ auto execute(int argc, char **argv) -> int {
                                                        },
                                                        VmaAllocationCreateInfo{}, zeros_lights, "light_prefix")
                                        .value());
-    auto group_sums_handle =
-            ctx.buffers.create(Buffer::from_slice<u32>(allocator,
-                                                       VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                       },
-                                                       VmaAllocationCreateInfo{}, zeros_groups, "group_sums")
-                                       .value());
-    auto group_offsets_handle =
-            ctx.buffers.create(Buffer::from_slice<u32>(allocator,
-                                                       VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                       },
-                                                       VmaAllocationCreateInfo{}, zeros_groups, "group_offsets")
-                                       .value());
+
     auto compact_lights_handle = ctx.buffers.create(
             Buffer::from_slice<PointLight>(
                     allocator,
@@ -1075,24 +1229,6 @@ auto execute(int argc, char **argv) -> int {
                             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     },
                     VmaAllocationCreateInfo{}, all_point_lights_zero, "compact_lights")
-                    .value());
-
-    VkDrawIndexedIndirectCommand indirect_cmd{
-            .indexCount = 36,
-            .instanceCount = 0,
-            .firstIndex = 0,
-            .vertexOffset = 0,
-            .firstInstance = 0,
-    };
-
-    auto indirect_buffer_handle = ctx.buffers.create(
-            Buffer::from_slice<VkDrawIndexedIndirectCommand>(
-                    allocator,
-                    VkBufferCreateInfo{
-                            .usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    },
-                    VmaAllocationCreateInfo{}, std::span{&indirect_cmd, 1}, "light_draw_indirect")
                     .value());
 
     VkDrawMeshTasksIndirectCommandEXT meshlet_cmd{.groupCountX = 0, .groupCountY = 0, .groupCountZ = 0};
@@ -1112,10 +1248,10 @@ auto execute(int argc, char **argv) -> int {
     glm::vec3 camera_up = glm::vec3(0.0f, 1.0f, 0.0f);
 
     glm::mat4 view = glm::lookAt(camera_pos, camera_target, camera_up);
-    glm::mat4 projection = glm::perspective(glm::radians(90.0f), // FOV
-                                            static_cast<float>(opts.width) / static_cast<float>(opts.height),
-                                            0.1f, // near plane
-                                            1000.0f // far plane
+    glm::mat4 projection = perspectiveLH_ZO_ReverseZ(glm::radians(90.0f), // FOV
+                                                     static_cast<float>(opts.width) / static_cast<float>(opts.height),
+                                                     0.1f, // near plane
+                                                     1000.0f // far plane
     );
 
     glm::mat4 inv_proj = glm::inverse(projection);
@@ -1149,17 +1285,12 @@ auto execute(int argc, char **argv) -> int {
     auto light_addr = ctx.device_address(point_light_handle);
     auto flags_addr = ctx.device_address(flags_handle);
     auto prefix_addr = ctx.device_address(prefix_handle);
-    auto group_sums_addr = ctx.device_address(group_sums_handle);
-    auto group_offsets_addr = ctx.device_address(group_offsets_handle);
     auto compact_addr = ctx.device_address(compact_lights_handle);
-    auto indirect_point_light_addr = ctx.device_address(indirect_buffer_handle);
-    auto indirect_meshlet_addr = ctx.device_address(meshlet_indirect_buffer_handle);
+    auto culled_light_count_addr = ctx.device_address(culled_light_count_handle);
 
     auto cube_meshlet_indirect_buf_addr = ctx.device_address(cube_meshlet_indirect_buffer_handle);
     auto cube_meshlet_indirect_buf = ctx.buffers.get(cube_meshlet_indirect_buffer_handle)->buffer();
     auto cube_buffer_addr = ctx.device_address(cubes_handle);
-    auto indirect_buf = ctx.buffers.get(indirect_buffer_handle)->buffer();
-    auto indirect_meshlet_buf = ctx.buffers.get(meshlet_indirect_buffer_handle)->buffer();
 
     auto stats = FrameStats{};
     FrameStats gpu_compute_ms{};
@@ -1298,6 +1429,8 @@ auto execute(int argc, char **argv) -> int {
                                                  .allocator = allocator,
                                                  .retire_value = completed_now,
                                          });
+
+            continue;
         }
 
         const auto frame_extent = swapchain.extent();
@@ -1324,8 +1457,33 @@ auto execute(int argc, char **argv) -> int {
             if (auto ms = read_timestamp_ms(compute_query_pool[bounded_frame_index])) {
                 gpu_compute_ms.add_sample(*ms);
             }
+
+
             if (auto ms = read_timestamp_ms(graphics_query_pool[bounded_frame_index])) {
                 gpu_graphics_ms.add_sample(*ms);
+            }
+
+
+            if (auto pipeline_stats = read_graphics_stats(ctx, device, graphics_stats_pool[bounded_frame_index])) {
+                volatile auto keep = *pipeline_stats;
+                (void) keep;
+            }
+            if (auto pipeline_stats = read_compute_stats(ctx, device, compute_stats_pool[bounded_frame_index])) {
+                volatile auto keep = *pipeline_stats;
+                (void) keep;
+            }
+
+            if (const auto *cqs = ctx.query_pools.get(compute_query_pool[bounded_frame_index])) {
+                vkResetQueryPool(device, cqs->pool, 0, cqs->query_count);
+            }
+            if (const auto *gqs = ctx.query_pools.get(graphics_query_pool[bounded_frame_index])) {
+                vkResetQueryPool(device, gqs->pool, 0, gqs->query_count);
+            }
+            if (const auto *gqs = ctx.query_pools.get(graphics_stats_pool[bounded_frame_index])) {
+                vkResetQueryPool(device, gqs->pool, 0, gqs->query_count);
+            }
+            if (const auto *qs = ctx.query_pools.get(compute_stats_pool[bounded_frame_index])) {
+                vkResetQueryPool(device, qs->pool, 0, qs->query_count);
             }
         }
 
@@ -1357,7 +1515,7 @@ auto execute(int argc, char **argv) -> int {
                             .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                            .clearValue = {.depthStencil = {0.0f, 0}},
+                            .clearValue = {.depthStencil = {1.0f, 0}},
                     };
 
                     VkRenderingInfo rendering_info{
@@ -1381,8 +1539,8 @@ auto execute(int argc, char **argv) -> int {
                             .y = static_cast<float>(frame_extent.height),
                             .width = static_cast<float>(frame_extent.width),
                             .height = -static_cast<float>(frame_extent.height),
-                            .minDepth = 1.0f,
-                            .maxDepth = 0.0f,
+                            .minDepth = 0.0f,
+                            .maxDepth = 1.0f,
                     };
 
                     VkRect2D sc{.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
@@ -1408,27 +1566,27 @@ auto execute(int argc, char **argv) -> int {
                 tl_compute, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "LightCulling");
-                    const auto *cqs = ctx.query_pools.get(compute_query_pool[bounded_frame_index]);
+
+                    auto &&[cqs, css] = ctx.query_pools.get_multiple(compute_query_pool[bounded_frame_index],
+                                                                     compute_stats_pool[bounded_frame_index]);
                     const auto &cqp = cqs->pool;
+                    const auto &csp = css->pool;
 
                     vkCmdResetQueryPool(cmd, cqp, 0, cqs->query_count);
                     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
                                         static_cast<u32>(GpuStamp::Begin));
+                    vkCmdResetQueryPool(cmd, csp, 0, css->query_count);
+                    vkCmdBeginQuery(cmd, csp, 0, 0);
+
                     const GpuPushConstants pc{
                             .ubo = frame_ubo,
                             .lights = light_addr,
                             .flags = flags_addr,
                             .prefix = prefix_addr,
-                            .group_sums = group_sums_addr,
-                            .group_offsets = group_offsets_addr,
                             .compact = compact_addr,
-                            .indirect_point_light = indirect_point_light_addr,
-                            .indirect_meshlet = indirect_meshlet_addr,
-                            .image_index = offscreen_target_handle.index(),
+                            .culled_light_count = culled_light_count_addr,
                             .light_count = light_count,
-                            .group_count = group_count,
                     };
-
 
                     auto bind_and_dispatch = [&](auto &pl, u32 groups_x) {
                         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.layout, 0, 1, &bindless.set, 0,
@@ -1448,58 +1606,36 @@ auto execute(int argc, char **argv) -> int {
                                                  .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                                  .dstAccessMask =
                                                          VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT};
+
                     VkDependencyInfo dep_info{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                                               .memoryBarrierCount = 1,
                                               .pMemoryBarriers = &mem_barrier};
 
-                    fill_zeros(cmd, ctx.buffers, point_light_handle, flags_handle, prefix_handle, group_sums_handle,
-                               group_offsets_handle, compact_lights_handle);
+                    // ---------------------------------------------------------------------
+                    // Clear required buffers
+                    // ---------------------------------------------------------------------
+                    fill_zeros(cmd, ctx.buffers, flags_handle, prefix_handle, compact_lights_handle,
+                               culled_light_count_handle);
+
                     vkCmdPipelineBarrier2(cmd, &dep_info);
 
-                    bind_and_dispatch(flags, group_count);
+                    // ---------------------------------------------------------------------
+                    // Pass 1: flags
+                    // ---------------------------------------------------------------------
+                    const u32 group_count = (light_count + THREADS_PER_GROUP - 1) / THREADS_PER_GROUP;
+
+                    bind_and_dispatch(flags_pipeline, group_count);
                     vkCmdPipelineBarrier2(cmd, &dep_info);
 
-                    bind_and_dispatch(scan_local, group_count);
-                    vkCmdPipelineBarrier2(cmd, &dep_info);
-
-                    bind_and_dispatch(scan_groups, group_count);
-                    vkCmdPipelineBarrier2(cmd, &dep_info);
-
-                    bind_and_dispatch(compact, group_count);
-                    vkCmdPipelineBarrier2(cmd, &dep_info);
-
-                    bind_and_dispatch(setup_indirect, 1u);
-
-                    std::array<VkBufferMemoryBarrier2, 2> indirect_barrier{
-                            VkBufferMemoryBarrier2{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                                                   .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                   .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-                                                   .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                                   .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
-                                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                                   .buffer = indirect_buf,
-                                                   .offset = 0,
-                                                   .size = VK_WHOLE_SIZE},
-                            VkBufferMemoryBarrier2{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                                                   .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                   .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-                                                   .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                                                   .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
-                                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                                   .buffer = indirect_meshlet_buf,
-                                                   .offset = 0,
-                                                   .size = VK_WHOLE_SIZE}};
-
-                    VkDependencyInfo indirect_dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                                                  .bufferMemoryBarrierCount = 2,
-                                                  .pBufferMemoryBarriers = indirect_barrier.data()};
-
-                    vkCmdPipelineBarrier2(cmd, &indirect_dep);
+                    // ---------------------------------------------------------------------
+                    // Pass 2: scan + compact (atomic reservation)
+                    // ---------------------------------------------------------------------
+                    bind_and_dispatch(compact_pipeline, group_count);
 
                     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
                                         static_cast<u32>(GpuStamp::End));
+                    vkCmdEndQuery(cmd, csp, 0);
+
                     TRACY_GPU_COLLECT(tracy_compute.ctx, cmd);
                 },
                 SubmitSynchronisation{.timeline_waits = culling_waits});
@@ -1518,13 +1654,17 @@ auto execute(int argc, char **argv) -> int {
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "GBuffer");
-                    const auto *gqs = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
+                    auto &&[graphics_perf_query, graphics_stats] = ctx.query_pools.get_multiple(
+                            graphics_query_pool[bounded_frame_index], graphics_stats_pool[bounded_frame_index]);
                     auto &&[offscreen, depth] =
                             ctx.textures.get_multiple(offscreen_target_handle, offscreen_depth_target_handle);
-                    const VkQueryPool &gqp = gqs->pool;
+                    const VkQueryPool &graphics_perf_pool = graphics_perf_query->pool;
+                    const VkQueryPool &graphics_pool_for_stats = graphics_stats->pool;
 
-                    vkCmdResetQueryPool(cmd, gqp, 0, gqs->query_count);
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, gqp, 0);
+                    vkCmdResetQueryPool(cmd, graphics_perf_pool, 0, graphics_perf_query->query_count);
+                    vkCmdResetQueryPool(cmd, graphics_pool_for_stats, 0, graphics_stats->query_count);
+                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, graphics_perf_pool, 0);
+                    vkCmdBeginQuery(cmd, graphics_pool_for_stats, 0, 0);
 
                     offscreen->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
@@ -1589,7 +1729,8 @@ auto execute(int argc, char **argv) -> int {
 
                     vkCmdEndRendering(cmd);
 
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, gqp, 1);
+                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, graphics_perf_pool, 1);
+                    vkCmdEndQuery(cmd, graphics_pool_for_stats, 0);
                 },
                 SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
@@ -1879,8 +2020,8 @@ auto execute(int argc, char **argv) -> int {
     tracy_compute.shutdown();
     tracy_graphics.shutdown();
 
-    destruction::pipeline(device, flags, scan_local, scan_groups, compact, setup_indirect, point_light_pipeline,
-                          predepth_pipeline, tonemap_pipeline);
+    destruction::pipeline(device, flags_pipeline, compact_pipeline, predepth_pipeline, tonemap_pipeline,
+                          point_light_pipeline);
     destruction::global_command_context(command_context);
     destruction::bindless_set(device, bindless);
     destruction::timeline_compute(device, tl_graphics);

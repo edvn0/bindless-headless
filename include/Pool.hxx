@@ -1,15 +1,17 @@
 #pragma once
 
-#include "Types.hxx"
 #include "Forward.hxx"
+#include "Types.hxx"
 
-#include <vector>
+
 #include <cassert>
-#include <optional>
-#include <functional>
 #include <deque>
+#include <functional>
+#include <optional>
+#include <vector>
 
-#include <vma/vk_mem_alloc.h>
+
+#include <vk_mem_alloc.h>
 
 #include "Buffer.hxx"
 
@@ -22,21 +24,18 @@ struct DeferredDestroyQueue {
 
     std::deque<Item> items;
 
-    auto enqueue(u64 v, std::function<void()> fn) -> void {
-        items.push_back({v, std::move(fn)});
-    }
+    auto enqueue(u64 v, std::function<void()> fn) -> void { items.push_back({v, std::move(fn)}); }
 
     auto retire(u64 completed) -> void {
         std::erase_if(items, [&](Item const &it) {
-            if (it.retire_value > completed) return false;
+            if (it.retire_value > completed)
+                return false;
             it.fn();
             return true;
         });
     }
 
-    auto empty() const -> bool {
-        return items.empty();
-    }
+    auto empty() const -> bool { return items.empty(); }
 };
 
 
@@ -45,55 +44,37 @@ class Handle final {
 public:
     Handle() = default;
 
-    [[nodiscard]] auto empty() const -> bool {
-        return generation == 0u;
-    }
+    [[nodiscard]] auto empty() const -> bool { return generation == 0u; }
 
-    [[nodiscard]] auto valid() const -> bool {
-        return generation != 0u;
-    }
+    [[nodiscard]] auto valid() const -> bool { return generation != 0u; }
 
-    [[nodiscard]] auto index() const -> std::uint32_t {
-        return index_;
-    }
+    [[nodiscard]] auto index() const -> std::uint32_t { return index_; }
 
-    [[nodiscard]] auto gen() const -> std::uint32_t {
-        return generation;
-    }
+    [[nodiscard]] auto gen() const -> std::uint32_t { return generation; }
 
     [[nodiscard]] auto index_as_void() const -> void * {
-        return reinterpret_cast<void *>(
-            static_cast<std::uintptr_t>(index_));
+        return reinterpret_cast<void *>(static_cast<std::uintptr_t>(index_));
     }
 
     [[nodiscard]] auto handle_as_void() const -> void * {
         static_assert(sizeof(void *) >= sizeof(u64));
-        auto packed =
-                (static_cast<u64>(generation) << 32) |
-                static_cast<u64>(index_);
-        return reinterpret_cast<void *>(
-            static_cast<std::uintptr_t>(packed));
+        auto packed = (static_cast<u64>(generation) << 32) | static_cast<u64>(index_);
+        return reinterpret_cast<void *>(static_cast<std::uintptr_t>(packed));
     }
 
     auto operator==(Handle const &other) const -> bool {
         return index_ == other.index_ && generation == other.generation;
     }
 
-    auto operator!=(Handle const &other) const -> bool {
-        return !(*this == other);
-    }
+    auto operator!=(Handle const &other) const -> bool { return !(*this == other); }
 
-    explicit operator bool() const {
-        return generation != 0u;
-    }
+    explicit operator bool() const { return generation != 0u; }
 
 private:
     template<typename ObjectType_, typename ImplObjectType>
     friend class Pool;
 
-    Handle(std::uint32_t index, std::uint32_t gen) noexcept
-        : index_(index), generation(gen) {
-    }
+    Handle(std::uint32_t index, std::uint32_t gen) noexcept : index_(index), generation(gen) {}
 
     std::uint32_t index_ = 0u;
     std::uint32_t generation = 0u;
@@ -108,9 +89,7 @@ class Pool {
     struct PoolEntry {
         PoolEntry() = default;
 
-        explicit PoolEntry(ImplObjectType &&obj) noexcept
-            : object(std::move(obj)) {
-        }
+        explicit PoolEntry(ImplObjectType &&obj) noexcept : object(std::move(obj)) {}
 
         ImplObjectType object{};
         std::uint32_t generation = 1u;
@@ -178,14 +157,8 @@ public:
         return &entries[index].object;
     }
 
-    [[nodiscard]] auto get_multiple(auto&&... handles) const
-    {
-        return std::make_tuple(get(handles)...);
-    }
-    [[nodiscard]] auto get_multiple(auto&&... handles)
-    {
-        return std::make_tuple(get(handles)...);
-    }
+    [[nodiscard]] auto get_multiple(auto &&...handles) const { return std::make_tuple(get(handles)...); }
+    [[nodiscard]] auto get_multiple(auto &&...handles) { return std::make_tuple(get(handles)...); }
 
     [[nodiscard]] auto get(Handle<ObjectType> handle) -> ImplObjectType * {
         if (handle.empty()) {
@@ -225,17 +198,11 @@ public:
         object_count = 0u;
     }
 
-    [[nodiscard]] auto num_objects() const -> std::uint32_t {
-        return object_count;
-    }
+    [[nodiscard]] auto num_objects() const -> std::uint32_t { return object_count; }
 
-    [[nodiscard]] auto data() -> std::vector<PoolEntry> & {
-        return entries;
-    }
+    [[nodiscard]] auto data() -> std::vector<PoolEntry> & { return entries; }
 
-    [[nodiscard]] auto data() const -> std::vector<PoolEntry> const & {
-        return entries;
-    }
+    [[nodiscard]] auto data() const -> std::vector<PoolEntry> const & { return entries; }
 
 private:
     std::vector<PoolEntry> entries{};
@@ -272,7 +239,7 @@ struct DestructionContext {
     using BufferHandle = Handle<struct BufferTag>;
     using BufferPool = Pool<BufferTag, Buffer>;
     using QueryPoolHandle = Handle<struct QueryPoolTag>;
-    using QueryPoolPool   = Pool<QueryPoolTag, QueryPoolState>;
+    using QueryPoolPool = Pool<QueryPoolTag, QueryPoolState>;
 
     TexturePool textures{};
     auto create_texture(OffscreenTarget &&) -> TextureHandle;
@@ -294,18 +261,11 @@ private:
     [[nodiscard]] auto get_device() const -> VkDevice;
 };
 
-auto destroy(DestructionContext &ctx,
-             DestructionContext::TextureHandle handle,
-             u64 retire_value = UINT64_MAX) -> void;
+auto destroy(DestructionContext &ctx, DestructionContext::TextureHandle handle, u64 retire_value = UINT64_MAX) -> void;
 
-auto destroy(DestructionContext &ctx,
-             DestructionContext::SamplerHandle handle,
-             u64 retire_value = UINT64_MAX) -> void;
+auto destroy(DestructionContext &ctx, DestructionContext::SamplerHandle handle, u64 retire_value = UINT64_MAX) -> void;
 
-auto destroy(DestructionContext &ctx,
-             DestructionContext::BufferHandle handle,
-             u64 retire_value = UINT64_MAX) -> void;
+auto destroy(DestructionContext &ctx, DestructionContext::BufferHandle handle, u64 retire_value = UINT64_MAX) -> void;
 
-             auto destroy(DestructionContext &ctx,
-             DestructionContext::QueryPoolHandle handle,
-             u64 retire_value = UINT64_MAX) -> void;
+auto destroy(DestructionContext &ctx, DestructionContext::QueryPoolHandle handle, u64 retire_value = UINT64_MAX)
+        -> void;

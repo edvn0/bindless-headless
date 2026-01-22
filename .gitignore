@@ -11,3 +11,4 @@ logs
 .logs
 app_logs
 .zed
+CMakeUserPresets.json

@@ -1,6 +1,6 @@
-#include "../include/Buffer.hxx"
+#include "Buffer.hxx"
 
-#include "../include/BindlessHeadless.hxx"
+#include "BindlessHeadless.hxx"
 
 auto Buffer::set_name(VmaAllocator &allocator, const std::string_view name) const -> void {
     vmaSetAllocationName(allocator, vma_allocation, name.data());

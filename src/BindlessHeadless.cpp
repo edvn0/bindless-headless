@@ -17,7 +17,7 @@
 
 auto vk_check(VkResult result) -> void {
     if (result != VK_SUCCESS) {
-        warn("Check failed: {}", string_VkResult(result));
+        warn("Check failed: {}", static_cast<u32>(result));
         std::abort();
     }
 }
@@ -633,6 +633,7 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
 
     VkDevice device{};
     vk_check(vkCreateDevice(pd, &dci, nullptr, &device));
+    volkLoadDevice(device);
 
     VkQueue gq{};
     vkGetDeviceQueue(device, graphics_index, 0u, &gq);
@@ -649,6 +650,12 @@ auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device)
     info.physicalDevice = pd;
     info.device = device;
     info.instance = instance;
+
+    VmaVulkanFunctions vma_vulkan_func{};
+    vma_vulkan_func.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+    vma_vulkan_func.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+
+    info.pVulkanFunctions = &vma_vulkan_func;
 
     VmaAllocator alloc{};
     vmaCreateAllocator(&info, &alloc);
@@ -668,13 +675,14 @@ auto throttle(ComputeTimeline &tl, VkDevice device) -> void {
     tl.completed = current;
 
     const u64 limit = max_in_flight_submits<ComputeTimeline>();
-    if (tl.value <= tl.completed + limit) return;
+    if (tl.value <= tl.completed + limit)
+        return;
 
     const u64 wait_val = tl.value - limit;
-    VkSemaphoreWaitInfo wi{ .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                            .semaphoreCount = 1,
-                            .pSemaphores = &tl.timeline,
-                            .pValues = &wait_val };
+    VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                           .semaphoreCount = 1,
+                           .pSemaphores = &tl.timeline,
+                           .pValues = &wait_val};
     vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
     tl.completed = wait_val;
 }
@@ -685,13 +693,14 @@ auto throttle(GraphicsTimeline &tl, VkDevice device) -> void {
     tl.completed = current;
 
     const u64 limit = max_in_flight_submits<GraphicsTimeline>();
-    if (tl.value <= tl.completed + limit) return;
+    if (tl.value <= tl.completed + limit)
+        return;
 
     const u64 wait_val = tl.value - limit;
-    VkSemaphoreWaitInfo wi{ .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                            .semaphoreCount = 1,
-                            .pSemaphores = &tl.timeline,
-                            .pValues = &wait_val };
+    VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                           .semaphoreCount = 1,
+                           .pSemaphores = &tl.timeline,
+                           .pValues = &wait_val};
     vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
     tl.completed = wait_val;
 }

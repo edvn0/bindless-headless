@@ -9,9 +9,9 @@
 
 #include "Types.hxx"
 
-#include <slang/slang-com-helper.h>
-#include <slang/slang-com-ptr.h>
-#include <slang/slang.h>
+#include <slang-com-helper.h>
+#include <slang-com-ptr.h>
+#include <slang.h>
 
 
 // Heterogeneous string hashing / equality

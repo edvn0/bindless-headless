@@ -13,9 +13,7 @@ struct PushConstants
     uint*       group_sums;
     uint*       group_offsets;
     PointLight* compact;
-    IndirectCommand* indirect;
-    IndirectMeshCommand* indirect_mesh;
-    uint        image_index;
+    uint*       culled_light_count;
     uint        light_count;
     uint        group_count;
 };
@@ -150,21 +148,13 @@ void LightCompactCS(uint3 dtid : SV_DispatchThreadID,
 }
 
 [shader("compute")]
-[numthreads(1, 1, 1)]
-void SetupIndirectCS()
+[numthreads(1,1,1)]
+void FinalizeLightCountCS()
 {
     uint last_group    = g_push.group_count - 1u;
-    uint last_offset   = g_push.group_offsets[last_group];
-    uint last_sum      = g_push.group_sums[last_group];
-    uint total_compact = last_offset + last_sum;
+    uint total_compact =
+        g_push.group_offsets[last_group] +
+        g_push.group_sums[last_group];
 
-    g_push.indirect->index_count    = 36;            // Cube indices
-    g_push.indirect->instance_count = total_compact; // Our culled light count
-    g_push.indirect->first_index    = 0;
-    g_push.indirect->vertex_offset  = 0;
-    g_push.indirect->first_instance = 0;
-
-    g_push.indirect_mesh->wgx =(total_compact + 15u) / 16u;
-    g_push.indirect_mesh->wgy = 1;
-    g_push.indirect_mesh->wgz = 1;
+    g_push.culled_light_count[0] = total_compact;
 }

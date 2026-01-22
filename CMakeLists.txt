@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 3.31)
 set(CMAKE_CXX_STANDARD 23)
 
 
-
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141 AND HAS_HOT_RELOADING)
     cmake_policy(SET CMP0141 NEW)
@@ -34,6 +33,40 @@ CPMAddPackage(
         URI "gh:glfw/glfw#3.4"
 )
 
+CPMAddPackage(
+  NAME Vulkan-Headers
+  GITHUB_REPOSITORY KhronosGroup/Vulkan-Headers
+  GIT_TAG vulkan-sdk-1.4.335.0
+)
+get_target_property(VULKAN_HEADERS_INCLUDE Vulkan::Headers INTERFACE_INCLUDE_DIRECTORIES)
+
+set(VULKAN_HEADERS_INSTALL_DIR "${VULKAN_HEADERS_INCLUDE}" CACHE PATH "" FORCE)
+set(VOLK_PLATFORM_DEFINE)
+
+if (WIN32)
+  list(APPEND VOLK_PLATFORM_DEFINE VK_USE_PLATFORM_WIN32_KHR)
+elseif(UNIX)
+  list(APPEND VOLK_PLATFORM_DEFINE VK_USE_PLATFORM_XCB_KHR)
+endif()
+
+set(VOLK_PULL_IN_VULKAN OFF CACHE BOOL "" FORCE)
+set(VOLK_HEADERS_ONLY OFF CACHE BOOL "" FORCE)
+CPMAddPackage(
+  NAME volk
+  GITHUB_REPOSITORY zeux/volk
+  GIT_TAG vulkan-sdk-1.4.335.0
+  OPTIONS
+    "VOLK_STATIC_DEFINES=${VOLK_PLATFORM_DEFINE}"
+)
+target_include_directories(volk_headers INTERFACE ${VULKAN_HEADERS_INCLUDE})
+target_include_directories(volk PRIVATE ${VULKAN_HEADERS_INCLUDE})
+
+CPMAddPackage(
+  NAME VulkanMemoryAllocator
+  GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+  VERSION 3.3.0
+)
+
 if (HAS_TRACY)
     set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
 
@@ -54,25 +87,34 @@ add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
 
-find_package(Vulkan REQUIRED)
 find_package(spdlog REQUIRED)
+find_package(Slang CONFIG REQUIRED)
+set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
+set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
 
-# Add Slang libraries manually
-set(SLANG_LIB_DIR "${Vulkan_INCLUDE_DIR}/../Lib")
-set(SLANG_INCLUDE_DIR "${Vulkan_INCLUDE_DIR}/../Include")
+# Create imported static library target for the compiler
+add_library(slang-compiler STATIC IMPORTED)
+set_target_properties(slang-compiler PROPERTIES
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/slang-compiler.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+)
 
-# Find the Slang libraries
-find_library(SLANG_LIBRARY NAMES slang PATHS ${SLANG_LIB_DIR} REQUIRED)
-find_library(SLANG_COMPILER_LIBRARY NAMES slang-compiler PATHS ${SLANG_LIB_DIR} REQUIRED)
-find_library(SLANG_RT_LIBRARY NAMES slang-rt PATHS ${SLANG_LIB_DIR} REQUIRED)
+add_library(slang-rt STATIC IMPORTED)
+set_target_properties(slang-rt PROPERTIES
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/slang-rt.lib"
+    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+)
 
-target_link_libraries(BindlessHeadlessAllocator PRIVATE Vulkan::Vulkan)
+
+target_include_directories(BindlessHeadless PRIVATE ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include ${SLANG_INCLUDE_DIR})
+target_link_libraries(BindlessHeadlessAllocator PRIVATE volk volk::volk_headers VulkanMemoryAllocator)
 target_link_libraries(BindlessHeadless PRIVATE
-        Vulkan::Vulkan
+        volk 
+        volk::volk_headers
         BindlessHeadlessAllocator
-        ${SLANG_LIBRARY}
-        ${SLANG_COMPILER_LIBRARY}
-        ${SLANG_RT_LIBRARY}
+        slang::slang
+  slang-compiler
+  slang-rt
         spdlog::spdlog
         PUBLIC
         glm::glm
@@ -92,10 +134,8 @@ if (HAS_TRACY)
     target_compile_definitions(BindlessHeadless PRIVATE TRACY_ENABLE)
 endif ()
 
-# Add Slang include directory
-target_include_directories(BindlessHeadless PRIVATE ${SLANG_INCLUDE_DIR} ${CMAKE_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/include)
-
-target_compile_definitions(BindlessHeadless PRIVATE _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1 GLM_FORCE_DEPTH_ZERO_TO_ONE)
+target_compile_definitions(BindlessHeadlessAllocator PRIVATE VK_NO_PROTOTYPES)
+target_compile_definitions(BindlessHeadless PRIVATE VK_NO_PROTOTYPES WIN32_LEAN_AND_MEAN NOMINMAX _HAS_EXCEPTIONS=0 SLANG_DISABLE_EXCEPTIONS=1 GLM_FORCE_DEPTH_ZERO_TO_ONE ${VOLK_PLATFORM_DEFINE})
 if(MSVC)
     target_compile_options(BindlessHeadless PRIVATE /arch:AVX2)
 endif()

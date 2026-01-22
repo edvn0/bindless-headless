@@ -1,26 +1,19 @@
-#include <vulkan/vulkan.h>
-#include <vulkan/vk_enum_string_helper.h>
-
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <numeric>
 #include <optional>
+#include <print>
+#include <ranges>
 #include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <algorithm>
-#include <print>
-#include <chrono>
-#include <cmath>
-#include <numeric>
-#include <algorithm>
-#include <ranges>
-#include <vector>
-#include <array>
-#include <cstdint>
+

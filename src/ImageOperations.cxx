@@ -313,7 +313,7 @@ namespace image_operations {
                         pixel_size = 1;
                         break;
                     default:
-                        error("Unsupported format for {}: {}", req.filename, string_VkFormat(tex.format));
+                        error("Unsupported format for {}: {}", req.filename, static_cast<u32>(tex.format));
                         continue;
                 }
 
@@ -337,7 +337,7 @@ namespace image_operations {
                                               &staging.allocation, &staging.alloc_info);
 
                 if (result != VK_SUCCESS) {
-                    error("Failed to create staging buffer for {}: {}", req.filename, string_VkResult(result));
+                    error("Failed to create staging buffer for {}: {}", req.filename, static_cast<u32>(result));
                     continue;
                 }
 
@@ -562,7 +562,7 @@ namespace image_operations {
                     pixel_size = 1;
                     break;
                 default:
-                    error("Unsupported format for writing to disk: {}", string_VkFormat(tex.format));
+                    error("Unsupported format for writing to disk: {}", static_cast<u32>(tex.format));
                     return;
             }
         }
@@ -595,7 +595,7 @@ namespace image_operations {
                                           &staging_allocation, &staging_alloc_info);
 
             if (result != VK_SUCCESS) {
-                error("Failed to create staging buffer: {}", string_VkResult(result));
+                error("Failed to create staging buffer: {}", static_cast<u32>(result));
                 return;
             }
         }

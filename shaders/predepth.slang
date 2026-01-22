@@ -12,14 +12,11 @@ struct PushConstants
     IndirectMeshCommand* indirect_mesh;
 };
 
-[[vk::push_constant]]
-PushConstants g_push;
-
 groupshared TaskData payload;
 
 [shader("amplification")]
 [numthreads(16, 1, 1)]
-void main_ts(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID) {
+void main_ts(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID, uniform PushConstants g_push) {
     if (gtid == 0) {
         payload.base_cube_idx = gid * 16;
     }
@@ -42,7 +39,8 @@ void main_ms(
     uint gtid : SV_GroupThreadID,
     in payload TaskData payload,
     out vertices float4 out_pos[128],
-    out indices uint3 prims[192]
+    out indices uint3 prims[192], 
+    uniform PushConstants g_push
 ) {
     uint cube_idx = payload.base_cube_idx + gtid;
 
@@ -57,9 +55,13 @@ void main_ms(
     uint v_base = gtid * 8;
     uint t_base = gtid * 12;
 
-    SetMeshOutputCounts(8, 12);
+if (gtid == 0)
+{
+    SetMeshOutputCounts(128, 192);
+}
+GroupMemoryBarrierWithGroupSync();
 
-    var vp = g_push->frame_ubo->view_projection;
+    var vp = g_push.frame_ubo->view_projection;
 
     [unroll]
     for (uint i = 0; i < 8; i++) {

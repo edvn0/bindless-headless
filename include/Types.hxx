@@ -3,9 +3,9 @@
 #include <cstdint>
 #include <mutex>
 #include <numeric>
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 
 using u16 = std::uint16_t;
 using u32 = std::uint32_t;
@@ -28,7 +28,8 @@ struct OffscreenTarget {
 
     auto is_depth() const -> bool;
     auto is_stencil() const -> bool;
-    auto transition_if_not_initialised(VkCommandBuffer, VkImageLayout, std::pair<VkAccessFlagBits, VkPipelineStageFlagBits> destination_flags) -> void;
+    auto transition_if_not_initialised(VkCommandBuffer, VkImageLayout,
+                                       std::pair<VkAccessFlagBits, VkPipelineStageFlagBits> destination_flags) -> void;
 };
 
 struct FrameStats {
@@ -69,46 +70,31 @@ struct FrameStats {
         sorted.reserve(capacity);
     }
 
-    auto add_sample(double v) -> void {
-        samples.push_back(v);
-        sorted_dirty = true;
-
-        ++count;
-        sum += v;
-        min = std::min(min, v);
-        max = std::max(max, v);
-
-        // Welford
-        const double delta = v - mean;
-        mean += delta / static_cast<double>(count);
-        const double delta2 = v - mean;
-        m2 += delta * delta2;
-    }
+    auto add_sample(double v) -> void;
 
     auto total() const -> double { return (count == 0) ? 0.0 : sum; }
     auto avg() const -> double { return (count == 0) ? 0.0 : mean; }
 
     auto variance_pop() const -> double {
-        if (count < 2) return 0.0;
+        if (count < 2)
+            return 0.0;
         return m2 / static_cast<double>(count);
     }
 
-    auto stddev_pop() const -> double {
-        return std::sqrt(variance_pop());
-    }
+    auto stddev_pop() const -> double { return std::sqrt(variance_pop()); }
 
     auto variance_sample() const -> double {
-        if (count < 2) return 0.0;
+        if (count < 2)
+            return 0.0;
         return m2 / static_cast<double>(count - 1);
     }
 
-    auto stddev_sample() const -> double {
-        return std::sqrt(variance_sample());
-    }
+    auto stddev_sample() const -> double { return std::sqrt(variance_sample()); }
 
 private:
     auto ensure_sorted() const -> void {
-        if (!sorted_dirty) return;
+        if (!sorted_dirty)
+            return;
         sorted = samples;
         std::ranges::sort(sorted);
         sorted_dirty = false;
@@ -116,20 +102,7 @@ private:
 
 public:
     // Linear-interpolated quantile (p in [0, 1])
-    auto quantile(double p) const -> double {
-        if (count == 0) return 0.0;
-        if (p <= 0.0) return min;
-        if (p >= 1.0) return max;
-
-        ensure_sorted();
-
-        const double x = p * static_cast<double>(count - 1);
-        const auto i = static_cast<std::size_t>(std::floor(x));
-        const std::size_t j = std::min(i + 1, count - 1);
-        const double t = x - static_cast<double>(i);
-
-        return sorted[i] * (1.0 - t) + sorted[j] * t;
-    }
+    auto quantile(double p) const -> double;
 
     auto median() const -> double { return quantile(0.5); }
     auto p90() const -> double { return quantile(0.90); }
@@ -145,7 +118,8 @@ public:
 
     auto quartiles() const -> Quartiles {
         Quartiles q;
-        if (count == 0) return q;
+        if (count == 0)
+            return q;
         q.q1 = quantile(0.25);
         q.q2 = quantile(0.50);
         q.q3 = quantile(0.75);
@@ -154,10 +128,9 @@ public:
     }
 };
 
-template <typename T>
+template<typename T>
 concept IsFunctionPointerLike =
-    std::is_pointer_v<std::remove_cvref_t<T>> &&
-    std::is_function_v<std::remove_pointer_t<std::remove_cvref_t<T>>>;
+        std::is_pointer_v<std::remove_cvref_t<T>> && std::is_function_v<std::remove_pointer_t<std::remove_cvref_t<T>>>;
 /*
 template<IsFunctionPointerLike Fn>
 class MaybeNoOp {
@@ -221,26 +194,22 @@ public:
     explicit MaybeNoOp(std::nullptr_t) : f(nullptr) {}
     MaybeNoOp() : f(nullptr) {}
 
-    [[nodiscard]] auto empty() const noexcept -> bool {
-        return f.load(std::memory_order_acquire) == nullptr;
-    }
+    [[nodiscard]] auto empty() const noexcept -> bool { return f.load(std::memory_order_acquire) == nullptr; }
 
-    explicit operator bool() const noexcept {
-        return !empty();
-    }
+    explicit operator bool() const noexcept { return !empty(); }
 
-    auto operator=(Fn fn) noexcept -> MaybeNoOp& {
+    auto operator=(Fn fn) noexcept -> MaybeNoOp & {
         f.store(fn, std::memory_order_release);
         return *this;
     }
 
-    auto operator=(std::nullptr_t) noexcept -> MaybeNoOp& {
+    auto operator=(std::nullptr_t) noexcept -> MaybeNoOp & {
         f.store(nullptr, std::memory_order_release);
         return *this;
     }
 
     template<typename... Args>
-    auto operator()(Args &&... args) const {
+    auto operator()(Args &&...args) const {
         using r_t = std::invoke_result_t<Fn, Args...>;
 
         // Load the function pointer atomically
@@ -261,17 +230,15 @@ public:
     }
 };
 
-constexpr auto matches(const auto& needle, const auto&&... haystack) {
-    return ((needle == haystack) || ...);
-}
+constexpr auto matches(const auto &needle, const auto &&...haystack) { return ((needle == haystack) || ...); }
 
 namespace std {
-    template<> struct formatter<FrameStats::Quartiles> : formatter<double> {
-        auto format(const FrameStats::Quartiles& q, auto& ctx) const {
+    template<>
+    struct formatter<FrameStats::Quartiles> : formatter<double> {
+        auto format(const FrameStats::Quartiles &q, auto &ctx) const {
             using std::format_to;
-            format_to(ctx.out(), "Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, IQR: {:.3f}",
-                      q.q1, q.q2, q.q3, q.iqr);
+            format_to(ctx.out(), "Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, IQR: {:.3f}", q.q1, q.q2, q.q3, q.iqr);
             return ctx.out();
         }
     };
-}
+} // namespace std
