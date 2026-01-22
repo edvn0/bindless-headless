@@ -38,7 +38,7 @@ void main_ts(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID, uniform PushCo
 void main_ms(
     uint gtid : SV_GroupThreadID,
     in payload TaskData payload,
-    out vertices float4 out_pos[128],
+    out vertices float4 out_pos[128] : SV_Position,
     out indices uint3 prims[192], 
     uniform PushConstants g_push
 ) {
@@ -79,6 +79,24 @@ GroupMemoryBarrierWithGroupSync();
     for (uint j = 0; j < 12; j++) {
         prims[t_base + j] = cube_indices[j] + v_base;
     }
+}
+
+struct VertexOutput {
+    float4 position;
+};
+
+struct VertexInput {
+    float3 position;
+};
+
+struct PC {
+    UBO* frame_ubo;
+    float4x4* transforms;
+};
+[shader("vertex")]
+float4 main_vs(VertexInput input,  uint instance: SV_InstanceID, uniform PC pc): SV_Position {
+    VertexOutput output = {};
+    return mul(pc.frame_ubo->view_projection, mul(pc.transforms[instance] ,float4(input.position, 1.0)));
 }
 
 [shader("fragment")]

@@ -142,6 +142,8 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 struct InstanceWithDebug {
     VkInstance instance{VK_NULL_HANDLE};
     VkDebugUtilsMessengerEXT messenger{VK_NULL_HANDLE};
+
+    explicit(false) operator VkInstance() const { return instance; }
 };
 
 auto create_instance_with_debug(auto &callback, std::span<const std::string_view> surface_required_extensions,

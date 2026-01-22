@@ -12,3 +12,4 @@ logs
 app_logs
 .zed
 CMakeUserPresets.json
+*.dot

@@ -14,6 +14,10 @@ using i32 = std::int32_t;
 using u8 = std::uint8_t;
 using i8 = std::int8_t;
 
+enum class DeviceAddress : std::uint64_t {
+    Invalid = 0,
+};
+
 auto vk_check(VkResult result) -> void;
 
 struct OffscreenTarget {

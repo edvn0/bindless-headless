@@ -13,7 +13,7 @@ PushConstants g_push;
 
 struct VertexOutput
 {
-    float4 position;
+    float4 position : SV_Position;
     float4 color;       // padded
     float4 world_pos;   // padded
 };
@@ -111,6 +111,23 @@ void main_ms(
 
     for (uint j=0;j<12;j++)
         prims[j] = cube_indices[j];
+}
+
+struct VertexInput {
+    float3 position;
+};
+
+struct PC {
+    UBO* frame_ubo;
+    float4x4* transforms;
+};
+[shader("vertex")]
+VertexOutput main_vs(VertexInput input,  uint instance: SV_InstanceID, uniform PC pc) {
+    VertexOutput output = {};
+    output.position=mul(pc.frame_ubo->view_projection, mul(pc.transforms[instance] ,float4(input.position, 1.0)));
+    output.world_pos = mul(pc.transforms[instance] ,float4(input.position, 1.0));
+    output.color = float4(0.1, 0.9, 0.1, 1.0);
+    return output;
 }
 
 // -----------------------------------------------------------------------------

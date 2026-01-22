@@ -7,7 +7,7 @@
 #include <vector>
 #include <volk.h>
 
-
+#include "Logger.hxx"
 
 inline auto pipeline_cache_path(std::int32_t argc, char **argv) -> std::optional<std::filesystem::path> {
     if (argc > 1)

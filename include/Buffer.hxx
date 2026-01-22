@@ -4,6 +4,7 @@
 #include <span>
 #include <type_traits>
 
+#include "Logger.hxx"
 #include "Types.hxx"
 
 struct BufferCreateError {
@@ -14,9 +15,6 @@ struct BufferCreateError {
     Type type{};
 };
 
-enum class DeviceAddress : std::uint64_t {
-    Invalid = 0,
-};
 
 class Buffer {
     std::optional<u64> count;
@@ -30,6 +28,23 @@ public:
     [[nodiscard]] auto device_address() const noexcept { return dev_address; }
     [[nodiscard]] auto buffer() const noexcept { return vk_buffer; }
     [[nodiscard]] auto allocation() const noexcept { return vma_allocation; }
+    [[nodiscard]] auto get_count() const noexcept -> u64 { return count.value_or(0); }
+
+    template<typename T, std::size_t N = std::dynamic_extent> requires std::is_trivial_v<T>
+    auto write_slice(VmaAllocator& alloc, std::span<T, N> slice) {
+        auto* data = allocation_info.pMappedData;
+        if (!data) {
+            error("Trying to write into non-mapped memory. How?");
+            return;
+        }
+        std::memcpy(data, slice.data(), slice.size_bytes());
+        vk_check(vmaFlushAllocation(alloc, allocation(), 0, slice.size()));
+    }
+
+    template<typename T, std::size_t N = std::dynamic_extent> requires std::is_trivial_v<T>
+    auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice) {
+        return write_slice(alloc, std::span<T>{slice.data(), slice.size()});
+    }
 
     template<typename T>
         requires std::is_trivial_v<T>

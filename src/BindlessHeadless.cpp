@@ -12,6 +12,7 @@
 #include "3PP/PerlinNoise.hpp"
 
 #include "3PP/renderdoc_app.h"
+#include "vulkan/vulkan_core.h"
 
 #include <chrono>
 
@@ -185,6 +186,13 @@ auto create_offscreen_target(VmaAllocator alloc, u32 width, u32 height, VkFormat
     t.height = height;
     t.format = format;
 
+    VkImageUsageFlags flags = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+    if (format != VK_FORMAT_R8G8B8A8_SRGB) {
+        flags |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
+
     VkImageCreateInfo ici{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                           .pNext = nullptr,
                           .flags = 0,
@@ -195,10 +203,7 @@ auto create_offscreen_target(VmaAllocator alloc, u32 width, u32 height, VkFormat
                           .arrayLayers = 1,
                           .samples = VK_SAMPLE_COUNT_1_BIT,
                           .tiling = VK_IMAGE_TILING_OPTIMAL,
-                          .usage = VK_IMAGE_USAGE_SAMPLED_BIT | // For sampled_view
-                                   VK_IMAGE_USAGE_STORAGE_BIT | // For storage_view
-                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                                   VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                          .usage = flags,
                           .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                           .queueFamilyIndexCount = 0,
                           .pQueueFamilyIndices = nullptr,
@@ -227,29 +232,32 @@ auto create_offscreen_target(VmaAllocator alloc, u32 width, u32 height, VkFormat
                                                            .layerCount = 1}};
     vk_check(vkCreateImageView(info.device, &sampled_vci, nullptr, &t.sampled_view));
 
-    // Create storage view (for reading/writing in compute shaders)
-    VkImageViewCreateInfo storage_vci{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                      .pNext = nullptr,
-                                      .flags = 0,
-                                      .image = t.image,
-                                      .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                      .format = format,
-                                      .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                                                     VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
-                                      .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                           .baseMipLevel = 0,
-                                                           .levelCount = 1,
-                                                           .baseArrayLayer = 0,
-                                                           .layerCount = 1}};
-    vk_check(vkCreateImageView(info.device, &storage_vci, nullptr, &t.storage_view));
+    if (format != VK_FORMAT_R8G8B8A8_SRGB) {
+        // Create storage view (for reading/writing in compute shaders)
+        VkImageViewCreateInfo storage_vci{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                          .pNext = nullptr,
+                                          .flags = 0,
+                                          .image = t.image,
+                                          .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                          .format = format,
+                                          .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                                                         VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
+                                          .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                               .baseMipLevel = 0,
+                                                               .levelCount = 1,
+                                                               .baseArrayLayer = 0,
+                                                               .layerCount = 1}};
+        vk_check(vkCreateImageView(info.device, &storage_vci, nullptr, &t.storage_view));
+        auto storage_view_name = std::format("{}_storage_view", name);
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, storage_view_name);
+    } else {
+        t.storage_view = VK_NULL_HANDLE;
+    }
 
-    // Set debug names
+
     auto sampled_view_name = std::format("{}_sampled_view", name);
-    auto storage_view_name = std::format("{}_storage_view", name);
-
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, sampled_view_name);
-    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, storage_view_name);
     vmaSetAllocationName(alloc, t.allocation, name.data());
 
     return t;

@@ -9,14 +9,16 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Forward.hxx"
 #include "Types.hxx"
 
+
 struct ResizeContext {
-    VmaAllocator &allocator;
+    DestructionContext &ctx;
     u64 retire_value{0};
 
     auto get_device() const -> VkDevice;
-
+    auto get_allocator() const -> VmaAllocator;
     auto get_instance() const -> VkInstance;
 };
 
@@ -33,15 +35,14 @@ struct ResizeGraph {
         std::uint32_t insertion_index{0};
     };
 
-    auto add_node(std::string_view name,
-                  ResizeCallback &&rebuild) -> NodeId {
+    auto add_node(std::string_view name, ResizeCallback &&rebuild) -> NodeId {
         const NodeId id = next_id++;
         nodes.push_back(Node{
-            .id = id,
-            .name = std::string{name},
-            .deps = {},
-            .rebuild = std::move(rebuild),
-            .insertion_index = static_cast<std::uint32_t>(nodes.size()),
+                .id = id,
+                .name = std::string{name},
+                .deps = {},
+                .rebuild = std::move(rebuild),
+                .insertion_index = static_cast<std::uint32_t>(nodes.size()),
         });
         id_to_index[id] = nodes.size() - 1;
         return id;
@@ -49,22 +50,26 @@ struct ResizeGraph {
 
     auto add_dependency(NodeId node, NodeId depends_on) -> void {
         auto *n = find_node(node);
-        if (!n) std::abort();
+        if (!n)
+            std::abort();
         n->deps.push_back(depends_on);
     }
 
     auto rebuild(VkExtent2D extent, const ResizeContext &rc) -> void {
+        if (extent.width == 0 || extent.height == 0) return;
+
         ensure_topo_cache();
         for (NodeId id: topo_order_cache) {
             nodes.at(id_to_index.at(id)).rebuild(extent, rc);
         }
     }
 
-    [[nodiscard]] auto to_graphviz_dot(bool include_topo_rank = true) const -> std::string ;
+    [[nodiscard]] auto to_graphviz_dot(bool include_topo_rank = true) const -> std::string;
 
 private:
     auto ensure_topo_cache() -> void {
-        if (topo_cache_valid) return;
+        if (topo_cache_valid)
+            return;
         topo_order_cache = topo_sort_stable(); // your Kahn stable topo
         topo_cache_valid = true;
         topo_cache_revision = graph_revision;
@@ -72,14 +77,15 @@ private:
 
     auto find_node(const NodeId id) -> Node * {
         const auto it = id_to_index.find(id);
-        if (it == id_to_index.end()) return nullptr;
+        if (it == id_to_index.end())
+            return nullptr;
         return &nodes[it->second];
     }
 
     auto topo_sort_stable() const -> std::vector<NodeId> {
         // Build adjacency and indegrees.
         // deps: dep -> node edge
-        std::unordered_map<NodeId, std::vector<NodeId> > outgoing{};
+        std::unordered_map<NodeId, std::vector<NodeId>> outgoing{};
         outgoing.reserve(nodes.size());
 
         std::unordered_map<NodeId, std::uint32_t> indegree{};
@@ -107,14 +113,10 @@ private:
             }
         }
 
-        auto insertion_index_of = [&](NodeId id) -> std::uint32_t {
-            return nodes[id_to_index.at(id)].insertion_index;
-        };
+        auto insertion_index_of = [&](NodeId id) -> std::uint32_t { return nodes[id_to_index.at(id)].insertion_index; };
 
         auto stable_ready_sort = [&] {
-            std::ranges::sort(ready, [&](NodeId a, NodeId b) {
-                return insertion_index_of(a) < insertion_index_of(b);
-            });
+            std::ranges::sort(ready, [&](NodeId a, NodeId b) { return insertion_index_of(a) < insertion_index_of(b); });
         };
 
         stable_ready_sort();
@@ -128,7 +130,8 @@ private:
             out.push_back(n);
 
             auto it = outgoing.find(n);
-            if (it == outgoing.end()) continue;
+            if (it == outgoing.end())
+                continue;
 
             for (NodeId m: it->second) {
                 auto &deg = indegree[m];
@@ -158,5 +161,4 @@ private:
     std::uint64_t topo_cache_revision{0};
     bool topo_cache_valid{false};
     std::vector<NodeId> topo_order_cache{};
-
 };

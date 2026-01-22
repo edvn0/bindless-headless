@@ -25,6 +25,7 @@ VSOut vs_main(uint vertex_id : SV_VertexID)
     VSOut o;
     o.position = float4(pos, 0.0, 1.0);
     o.uv = pos * 0.5 + 0.5;
+    o.uv.y = 1 - o.uv.y;
     return o;
 }
 
@@ -38,13 +39,20 @@ PSOut fs_main(VSOut i, uniform TonemapPushConstants pc)
 {
     uint idx = NonUniformResourceIndex(pc.image_index);
     uint samp_idx = NonUniformResourceIndex(pc.sampler_index);
-
     float4 hdr = sampled_images[idx].Sample(samplers[samp_idx], i.uv);
-
-    // Reinhard tonemap: HDR -> [0,1] linear
-    float3 ldr_rgb = hdr.rgb / (hdr.rgb + 1.0);
-
+    
+    // Apply exposure first
+    float3 color = hdr.rgb * pc.exposure;
+    
+    // ACES filmic tonemap (better than Reinhard, preserves colors)
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    float3 ldr_rgb = saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+    
     PSOut o;
-    o.color = float4(ldr_rgb, hdr.a); // linear RGB, no gamma
+    o.color =float4(hdr.xyz,1); // output linear, hardware converts to sRGB
     return o;
 }

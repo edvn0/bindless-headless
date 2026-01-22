@@ -80,7 +80,7 @@ message(STATUS "TRACY_ENABLE = ${TRACY_ENABLE}")
 
 add_executable(BindlessHeadless "src/main.cpp" "src/BindlessHeadless.cpp"
         "src/Pool.cxx" "src/Types.cxx"
-        "src/Profiler.cxx"
+        "src/Profiler.cxx" "src/Pipelines.cxx"
         "src/ResizeableGraph.cxx"
         "src/Swapchain.cxx" "src/ImageOperations.cxx" "src/Buffer.cxx" "src/Logger.cxx" "src/Compiler.cxx" "src/GlobalCommandContext.cxx")
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
