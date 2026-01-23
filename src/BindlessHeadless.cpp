@@ -8,11 +8,7 @@
 #include "Pool.hxx"
 #include "Reflection.hxx"
 
-
 #include "3PP/PerlinNoise.hpp"
-
-#include "3PP/renderdoc_app.h"
-#include "vulkan/vulkan_core.h"
 
 #include <chrono>
 

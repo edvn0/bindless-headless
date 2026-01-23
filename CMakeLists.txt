@@ -11,7 +11,6 @@ endif ()
 
 project("BindlessHeadless")
 
-option(HAS_RENDERDOC "Enable RenderDoc integration" OFF)
 option(HAS_TRACY "Enable Tracy integration" OFF)
 option(HAS_HOT_RELOADING "Enable MSVC hot reloading" OFF)
 
@@ -21,6 +20,11 @@ include(cmake/CPM.cmake)
 CPMAddPackage(
         URI "gh:g-truc/glm#1.0.3"
         OPTIONS "GLM_ENABLE_CXX_20 ON" "GLM_ENABLE_SIMD_AVX2 ON" "GLM_ENABLE_SIMD_AVX ON" "GLM_ENABLE_SIMD_SSE4_2 ON" "GLM_ENABLE_SIMD_SSE2 ON"
+)
+
+CPMAddPackage(
+        URI "gh:SpartanJ/efsw#1.5.1"
+        OPTIONS "BUILD_SHARED_LIBS OFF"
 )
 
 CPMAddPackage(
@@ -116,6 +120,7 @@ target_link_libraries(BindlessHeadless PRIVATE
   slang-compiler
   slang-rt
         spdlog::spdlog
+        efsw-static
         PUBLIC
         glm::glm
         CLI11::CLI11
@@ -123,11 +128,6 @@ target_link_libraries(BindlessHeadless PRIVATE
 )
 
 set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-
-
-if (HAS_RENDERDOC)
-    target_compile_definitions(BindlessHeadless PRIVATE HAS_RENDERDOC=1)
-endif ()
 
 if (HAS_TRACY)
     target_link_libraries(BindlessHeadless PRIVATE Tracy::TracyClient)

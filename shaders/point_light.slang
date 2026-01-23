@@ -13,9 +13,11 @@ PushConstants g_push;
 
 struct VertexOutput
 {
-    float4 position : SV_Position;
-    float4 color;       // padded
-    float4 world_pos;   // padded
+    float4 position  : SV_Position;
+    float3 world_pos : TEXCOORD0;
+    float3 normal    : TEXCOORD1;
+    float2 uv        : TEXCOORD2;
+    float3 color     : TEXCOORD3;
 };
 
 struct TaskData {
@@ -90,8 +92,8 @@ void main_ms(
                                  ((i>>2)&1)*2-1);
         float3 world_pos = unit_pos * radius + center;
 
-        local_verts[i].world_pos = float4(world_pos,1.0);
-        local_verts[i].color     = float4(color,0.0);
+        local_verts[i].world_pos = world_pos;
+        local_verts[i].color     = color;
         local_verts[i].position  = mul(vp,float4(world_pos,1.0));
     }
 
@@ -115,6 +117,8 @@ void main_ms(
 
 struct VertexInput {
     float3 position;
+    uint normal;
+    uint uvs;
 };
 
 struct PC {
@@ -122,24 +126,68 @@ struct PC {
     float4x4* transforms;
 };
 [shader("vertex")]
-VertexOutput main_vs(VertexInput input,  uint instance: SV_InstanceID, uniform PC pc) {
-    VertexOutput output = {};
-    output.position=mul(pc.frame_ubo->view_projection, mul(pc.transforms[instance] ,float4(input.position, 1.0)));
-    output.world_pos = mul(pc.transforms[instance] ,float4(input.position, 1.0));
-    output.color = float4(0.1, 0.9, 0.1, 1.0);
-    return output;
+VertexOutput main_vs(
+    VertexInput input,
+    uint instance : SV_InstanceID,
+    uniform PC pc
+) {
+    VertexOutput o = {};
+
+    float4x4 model = pc.transforms[instance];
+    float4 world_pos = mul(model, float4(input.position, 1.0));
+
+    o.position  = mul(pc.frame_ubo->view_projection, world_pos);
+    o.world_pos = world_pos.xyz;
+
+    // Normal
+    float3 local_normal = normalize(unpackUnorm3x10_1x2(input.normal).xyz);
+    o.normal = normalize(mul((float3x3)model, local_normal));
+
+    // UVs
+    UV4 uvpack = unpack_uv_8_8_8_8(input.uvs);
+
+    // Reconstruct quad UV from position (example)
+    float2 uv_lerp = saturate(input.position.xy * 0.5 + 0.5);
+    o.uv = lerp(uvpack.uv0, uvpack.uv1, uv_lerp);
+
+    o.color = float3(0.1, 0.9, 0.1);
+
+    return o;
 }
 
 // -----------------------------------------------------------------------------
 // Fragment Shader
 // -----------------------------------------------------------------------------
 [shader("fragment")]
-float4 main_fs(VertexOutput input) : SV_Target0
+float4 main_fs(VertexOutput input, uniform PC pc) : SV_Target0
 {
-    float3 color = input.color.xyz;
-    float3 light_dir = normalize(float3(1.0,1.0,-1.0));
-    float3 normal = normalize(cross(ddx(input.world_pos.xyz),ddy(input.world_pos.xyz)));
-    float ndotl = max(0.2,dot(normal,light_dir));
-    color *= ndotl;
-    return float4(color,1.0);
+    // Inputs
+    float3 albedo = input.color;
+    float3 N = normalize(input.normal);
+
+    // Sun (world space)
+    float3 sun_dir = normalize(pc.frame_ubo->sun_dir);
+    float  sun_intensity = pc.frame_ubo->sun_intensity;
+
+    // Light comes *from* the sun direction
+    float3 L = -sun_dir;
+
+    // View direction
+    float3 V = normalize(
+        pc.frame_ubo->camera_position.xyz - input.world_pos
+    );
+
+    // Lambert
+    float NdotL = saturate(dot(N, L));
+
+    // Cheap Blinn-Phong spec
+    float3 H = normalize(L + V);
+    float spec = pow(saturate(dot(N, H)), 32.0);
+
+    // Ambient + direct
+    float3 lighting =
+        albedo * (0.15 + NdotL * sun_intensity) +
+        spec * sun_intensity;
+
+    return float4(lighting, 1.0);
 }

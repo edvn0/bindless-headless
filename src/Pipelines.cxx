@@ -340,9 +340,9 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
     };
 
     VkPipelineColorBlendAttachmentState color_blend_attachment{
-            .blendEnable = VK_FALSE,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+            .blendEnable = VK_TRUE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
             .colorBlendOp = VK_BLEND_OP_ADD,
             .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
             .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
@@ -383,16 +383,28 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
     std::array<VkVertexInputBindingDescription, 1> binding_descriptions{
             VkVertexInputBindingDescription{
                     .binding = 0,
-                    .stride = sizeof(glm::vec3),
+                    .stride = sizeof(glm::vec3) + sizeof(u32)*2,
                     .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
             },
     };
 
-    std::array<VkVertexInputAttributeDescription, 1> attribute_descriptions{
+    std::array attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
                     .format = VK_FORMAT_R32G32B32_SFLOAT,
+                    .offset = 0,
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 1,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = 0,
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 2,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
                     .offset = 0,
             },
     };

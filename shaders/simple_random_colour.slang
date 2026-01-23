@@ -1,11 +1,4 @@
-[[vk::binding(0, 0)]]
-Texture2D<float> sampled_images[];
-
-[[vk::binding(1, 0)]]
-SamplerState samplers[];
-
-[[vk::binding(2, 0)]]
-RWTexture2D<float4> storage_images[];
+import common;
 
 struct PushConstants {
     uint image_index;
@@ -18,7 +11,7 @@ float sample_noise(uint noise_idx, uint noise_sampler_index, uint2 pixel)
     uint w, h;
     sampled_images[noise_idx].GetDimensions(w, h);
     float2 uv = float2(pixel) / float2(w, h);
-    return sampled_images[noise_idx].SampleLevel(samplers[noise_sampler_index], uv, 0.0);
+    return sampled_images[noise_idx].SampleLevel(samplers[noise_sampler_index], uv, 0.0).r;
 }
 
 uint hash(uint x) {

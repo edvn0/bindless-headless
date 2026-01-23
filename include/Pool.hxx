@@ -159,6 +159,7 @@ public:
 
     [[nodiscard]] auto get_multiple(auto &&...handles) const { return std::make_tuple(get(handles)...); }
     [[nodiscard]] auto get_multiple(auto &&...handles) { return std::make_tuple(get(handles)...); }
+    [[nodiscard]] auto get_mesh_buffers(auto& object) { return get_multiple(object.vertex_buffer, object.index_buffer); }
 
     [[nodiscard]] auto get(Handle<ObjectType> handle) -> ImplObjectType * {
         if (handle.empty()) {

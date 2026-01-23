@@ -31,19 +31,24 @@ public:
     [[nodiscard]] auto get_count() const noexcept -> u64 { return count.value_or(0); }
 
     template<typename T, std::size_t N = std::dynamic_extent> requires std::is_trivial_v<T>
-    auto write_slice(VmaAllocator& alloc, std::span<T, N> slice) {
+    auto write_slice(VmaAllocator& alloc, std::span<T, N> slice, std::size_t offset = 0) {
         auto* data = allocation_info.pMappedData;
         if (!data) {
             error("Trying to write into non-mapped memory. How?");
             return;
         }
-        std::memcpy(data, slice.data(), slice.size_bytes());
+        if (offset + slice.size_bytes() > size()) {
+            error("Trying to overwrite memory");
+            return;
+        }
+        const auto offset_data = static_cast<u8*>(data) + offset;
+        std::memcpy(offset_data, slice.data(), slice.size_bytes());
         vk_check(vmaFlushAllocation(alloc, allocation(), 0, slice.size()));
     }
 
     template<typename T, std::size_t N = std::dynamic_extent> requires std::is_trivial_v<T>
-    auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice) {
-        return write_slice(alloc, std::span<T>{slice.data(), slice.size()});
+    auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice,std::size_t offset = 0) {
+        return write_slice(alloc, std::span<T>{slice.data(), slice.size()}, offset);
     }
 
     template<typename T>
