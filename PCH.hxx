@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <numeric>

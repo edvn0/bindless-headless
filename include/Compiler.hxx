@@ -1,60 +1,71 @@
 #pragma once
 
-#include "Forward.hxx"
-#include "Logger.hxx"
+#include "ReflectionData.hxx"
 #include "Types.hxx"
+#include "Logger.hxx"
 
-
+#include <array>
+#include <cstddef>
+#include <filesystem>
+#include <memory>
+#include <span>
+#include <string_view>
 #include <vector>
 
-#include <slang-com-helper.h>
-#include <slang-com-ptr.h>
-#include <slang.h>
+namespace detail {
+        struct Impl;
+}
 
+class Compiler {
+public:
+    Compiler();
+    ~Compiler();
 
-struct CompilerSession {
-    Slang::ComPtr<slang::IGlobalSession> global;
-    Slang::ComPtr<slang::ISession> session;
+    Compiler(Compiler const&) = delete;
+    auto operator=(Compiler const&) -> Compiler& = delete;
 
-    CompilerSession();
-
-    auto compile_compute_from_string(std::string_view name, std::string_view path, std::string_view src,
-                                     std::string_view entry = "main") -> std::vector<u32>;
-
-    auto compile_entry_from_string(std::string_view name, std::string_view path, std::string_view src,
-                                   std::string_view entry, ReflectionData *out_reflection = nullptr)
-            -> std::vector<std::uint32_t>;
-
-    auto compile_entry_from_file(std::string_view path, std::string_view entry,
-                                 ReflectionData *out_reflection = nullptr) -> std::vector<std::uint32_t>;
-
-    // previous compute-only helpers can forward to this if you wish
-    auto compile_compute_from_file(std::string_view path, std::string_view entry, ReflectionData *data = nullptr)
-            -> std::vector<std::uint32_t>;
+    Compiler(Compiler&&) noexcept;
+    auto operator=(Compiler&&) noexcept -> Compiler&;
 
     template<std::size_t N>
-    auto compile_from_file(std::string_view path, const std::span<const std::string_view, N> entries,
-                           const std::span<ReflectionData, N> reflection_data) {
-        std::array<std::vector<std::uint32_t>, N> spirv_data{};
-        const auto shader_source = load_shader_file(path);
-
-        if (shader_source.empty())
-            return spirv_data;
-
-        for (std::size_t i = 0; i < N; ++i) {
-            std::filesystem::path entry_path(path);
-            spirv_data[i] = compile_entry_from_string(entry_path.filename().string(), path, shader_source, entries[i],
-                                                      &reflection_data[i]);
-        }
-        return spirv_data;
+    auto compile_from_file(
+        std::string_view path,
+        std::span<const std::string_view, N> entries,
+        std::span<ReflectionData, N> reflection_data
+    ) -> std::array<std::vector<u32>, N>
+    {
+        std::array<std::vector<u32>, N> spirv{};
+        compile_from_file_impl(path, entries, reflection_data, spirv);
+        return spirv;
     }
 
+    // Useful if you later want dynamic entry lists
+    auto compile_from_file(
+        std::string_view path,
+        std::span<const std::string_view> entries,
+        std::span<ReflectionData> reflection_data
+    ) -> std::vector<std::vector<u32>>;
+
 private:
-    auto compile_compute_module(Slang::ComPtr<slang::IModule> const &module, std::string_view entry)
-            -> std::vector<u32>;
+    std::unique_ptr<detail::Impl> impl;
 
-    auto compile_entry_module(Slang::ComPtr<slang::IModule> const &module, std::string_view entry,
-                              ReflectionData *out_reflection) -> std::vector<std::uint32_t>;
+    template<std::size_t N>
+    auto compile_from_file_impl(
+        std::string_view path,
+        std::span<const std::string_view, N> entries,
+        std::span<ReflectionData, N> reflection_data,
+        std::array<std::vector<u32>, N>& out_spirv
+    ) -> void
+    {
+        // Adapter to the dynamic function to avoid duplicating backend logic
+        std::vector<std::string_view> dyn_entries(entries.begin(), entries.end());
+        std::vector<ReflectionData> dyn_refl(reflection_data.begin(), reflection_data.end());
 
-    auto load_shader_file(std::string_view) -> std::string;
+        auto dyn_spv = compile_from_file(path, dyn_entries, dyn_refl);
+
+        for (std::size_t i = 0; i < N; ++i) {
+            out_spirv[i] = std::move(dyn_spv[i]);
+            reflection_data[i] = dyn_refl[i];
+        }
+    }
 };

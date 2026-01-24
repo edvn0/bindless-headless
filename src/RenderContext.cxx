@@ -3,24 +3,24 @@
 #include "../include/BindlessSet.hxx"
 
 
-auto DestructionContext::get_device() const -> VkDevice {
+auto RenderContext::get_device() const -> VkDevice {
     VmaAllocatorInfo info{};
     vmaGetAllocatorInfo(allocator, &info);
     return info.device;
 }
 
-auto DestructionContext::create_texture(OffscreenTarget &&target) -> TextureHandle {
+auto RenderContext::create_texture(OffscreenTarget &&target) -> TextureHandle {
     bindless_set->need_repopulate = true;
     return textures.create(std::move(target));
 }
 
-auto DestructionContext::create_sampler(VkSampler &&sampler) -> SamplerHandle {
+auto RenderContext::create_sampler(VkSampler &&sampler) -> SamplerHandle {
     bindless_set->need_repopulate = true;
     return samplers.create(std::move(sampler));
 }
 
 
-auto DestructionContext::create_sampler(const VkSamplerCreateInfo info, const std::string_view name) -> SamplerHandle {
+auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::string_view name) -> SamplerHandle {
     bindless_set->need_repopulate = true;
 
     VkSamplerCreateInfo ci{info};
@@ -31,20 +31,20 @@ auto DestructionContext::create_sampler(const VkSamplerCreateInfo info, const st
     return create_sampler(::create_sampler(allocator, ci, name));
 }
 
-auto DestructionContext::create_buffer(Buffer &&buffer) -> BufferHandle { return buffers.create(std::move(buffer)); }
+auto RenderContext::create_buffer(Buffer &&buffer) -> BufferHandle { return buffers.create(std::move(buffer)); }
 
-auto DestructionContext::create_query_pool(QueryPoolState &&state) -> QueryPoolHandle {
+auto RenderContext::create_query_pool(QueryPoolState &&state) -> QueryPoolHandle {
     return query_pools.create(std::move(state));
 }
 
-auto DestructionContext::device_address(BufferHandle handle) -> DeviceAddress {
+auto RenderContext::device_address(BufferHandle handle) -> DeviceAddress {
     if (const auto *buf = buffers.get(handle)) {
         return buf->device_address();
     }
     return DeviceAddress::Invalid;
 }
 
-auto DestructionContext::clear_all() -> void {
+auto RenderContext::clear_all() -> void {
     textures.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     samplers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     buffers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
@@ -52,7 +52,7 @@ auto DestructionContext::clear_all() -> void {
 }
 
 
-auto destroy(DestructionContext &ctx, DestructionContext::TextureHandle handle, u64 retire_value) -> void {
+auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void {
     auto impl = ctx.textures.take(handle);
     if (!impl) {
         return;
@@ -74,7 +74,7 @@ auto destroy(DestructionContext &ctx, DestructionContext::TextureHandle handle, 
     });
 }
 
-auto destroy(DestructionContext &ctx, DestructionContext::SamplerHandle handle, u64 retire_value) -> void {
+auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void {
     auto impl = ctx.samplers.take(handle);
     if (!impl) {
         return;
@@ -87,7 +87,7 @@ auto destroy(DestructionContext &ctx, DestructionContext::SamplerHandle handle, 
     });
 }
 
-auto destroy(DestructionContext &ctx, DestructionContext::BufferHandle handle, u64 retire_value) -> void {
+auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value) -> void {
     auto impl = ctx.buffers.take(handle);
     if (!impl) {
         return;
@@ -101,7 +101,7 @@ auto destroy(DestructionContext &ctx, DestructionContext::BufferHandle handle, u
     });
 }
 
-auto destroy(DestructionContext &ctx, DestructionContext::QueryPoolHandle handle, u64 retire_value) -> void {
+auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value) -> void {
     auto impl = ctx.query_pools.take(handle);
     if (!impl) {
         return;

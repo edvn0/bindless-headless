@@ -10,12 +10,12 @@
 
 #include <volk.h>
 
+
 #include <GLFW/glfw3.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <expected>
 #include <optional>
 #include <print>
 #include <span>
@@ -23,12 +23,8 @@
 #include <string_view>
 #include <vector>
 
-
 #include <vk_mem_alloc.h>
-
-constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle
-constexpr u32 max_in_flight = 2; // GPU submit throttle depth
-
+#include <tl/expected.hpp>
 
 namespace detail {
     auto initialise_debug_name_func(VkInstance) -> void;
@@ -38,6 +34,7 @@ namespace detail {
 
     auto submit_and_wait(VkDevice device, VkCommandPool cmd_pool, VkQueue queue, auto &&record) -> void {
         VkCommandBufferAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = nullptr,
                                        .commandPool = cmd_pool,
                                        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
                                        .commandBufferCount = 1};
@@ -46,16 +43,20 @@ namespace detail {
         vk_check(vkAllocateCommandBuffers(device, &ai, &cb));
 
         VkCommandBufferBeginInfo bi{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+            .pNext = nullptr,
+                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,.pInheritanceInfo = nullptr};
         vk_check(vkBeginCommandBuffer(cb, &bi));
 
         record(cb);
 
         vk_check(vkEndCommandBuffer(cb));
 
-        VkSubmitInfo si{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1, .pCommandBuffers = &cb};
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cb;
 
-        VkFenceCreateInfo fci{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFenceCreateInfo fci{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .pNext = nullptr, .flags = 0};
 
         VkFence fence{};
         vk_check(vkCreateFence(device, &fci, nullptr, &fence));
@@ -235,7 +236,7 @@ struct PhysicalDeviceChoice {
 
 using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32>;
 
-auto pick_physical_device(VkInstance instance) -> std::expected<DeviceChoice, PhysicalDeviceChoice>;
+auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
 enum class GpuStamp : u32 { Begin = 0, End = 1, Count = 2 };
 

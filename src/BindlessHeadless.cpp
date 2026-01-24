@@ -437,11 +437,11 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
     return t;
 }
 
-auto pick_physical_device(VkInstance instance) -> std::expected<DeviceChoice, PhysicalDeviceChoice> {
+auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice> {
     u32 count{};
     vkEnumeratePhysicalDevices(instance, &count, nullptr);
     if (count == 0u) {
-        return std::unexpected(PhysicalDeviceChoice{PhysicalDeviceChoice::Error::NoDevicesFound});
+        return tl::unexpected(PhysicalDeviceChoice{PhysicalDeviceChoice::Error::NoDevicesFound});
     }
 
     std::vector<VkPhysicalDevice> devices(count);
@@ -492,7 +492,7 @@ auto pick_physical_device(VkInstance instance) -> std::expected<DeviceChoice, Ph
         }
     }
 
-    return std::unexpected(PhysicalDeviceChoice{PhysicalDeviceChoice::Error::NoQueuesFound});
+    return tl::unexpected(PhysicalDeviceChoice{PhysicalDeviceChoice::Error::NoQueuesFound});
 }
 
 auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)

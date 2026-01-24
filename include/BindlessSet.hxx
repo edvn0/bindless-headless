@@ -3,6 +3,7 @@
 #define NO_MIN_MAX
 
 #include "Types.hxx"
+#include "RenderContext.hxx"
 
 #include <volk.h>
 
@@ -104,7 +105,7 @@ struct BindlessSet {
         return true;
     }
 
-    auto repopulate_if_needed(DestructionContext::TexturePool &textures, DestructionContext::SamplerPool &samplers)
+    auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers)
             -> void {
         if (!need_repopulate) [[likely]]
             return;

@@ -74,7 +74,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
                                      .layout = pi_layout,
                                      .basePipelineHandle = VK_NULL_HANDLE,
                                      .basePipelineIndex = -1};
-    VkPipeline pipeline{};
+    VkPipeline pipeline{VK_NULL_HANDLE};
     vk_check(vkCreateComputePipelines(device, cache, 1, &cpci, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, entry_name);
 

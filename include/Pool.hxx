@@ -3,18 +3,13 @@
 #include "Forward.hxx"
 #include "Types.hxx"
 
-
 #include <cassert>
 #include <deque>
 #include <functional>
 #include <optional>
 #include <vector>
 
-
 #include <vk_mem_alloc.h>
-
-#include "Buffer.hxx"
-
 
 struct DeferredDestroyQueue {
     struct Item {
@@ -159,7 +154,6 @@ public:
 
     [[nodiscard]] auto get_multiple(auto &&...handles) const { return std::make_tuple(get(handles)...); }
     [[nodiscard]] auto get_multiple(auto &&...handles) { return std::make_tuple(get(handles)...); }
-    [[nodiscard]] auto get_mesh_buffers(auto& object) { return get_multiple(object.vertex_buffer, object.index_buffer); }
 
     [[nodiscard]] auto get(Handle<ObjectType> handle) -> ImplObjectType * {
         if (handle.empty()) {
@@ -221,52 +215,3 @@ private:
         return false;
     }
 };
-
-struct QueryPoolState {
-    VkQueryPool pool = VK_NULL_HANDLE;
-    u32 query_count = 0;
-    double timestamp_period_ns = 1.0; // from VkPhysicalDeviceLimits::timestampPeriod
-};
-
-struct DestructionContext {
-    VmaAllocator &allocator;
-    DeferredDestroyQueue destroy_queue{};
-    BindlessSet *bindless_set{nullptr};
-
-    using TextureHandle = Handle<struct TextureTag>;
-    using TexturePool = Pool<TextureTag, OffscreenTarget>;
-    using SamplerHandle = Handle<struct SamplerTag>;
-    using SamplerPool = Pool<SamplerTag, VkSampler>;
-    using BufferHandle = Handle<struct BufferTag>;
-    using BufferPool = Pool<BufferTag, Buffer>;
-    using QueryPoolHandle = Handle<struct QueryPoolTag>;
-    using QueryPoolPool = Pool<QueryPoolTag, QueryPoolState>;
-
-    TexturePool textures{};
-    auto create_texture(OffscreenTarget &&) -> TextureHandle;
-
-    SamplerPool samplers{};
-    auto create_sampler(VkSampler &&) -> SamplerHandle;
-    auto create_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
-
-    BufferPool buffers{};
-    auto create_buffer(Buffer &&) -> BufferHandle;
-
-    QueryPoolPool query_pools{};
-    auto create_query_pool(QueryPoolState &&) -> QueryPoolHandle;
-
-    auto device_address(BufferHandle) -> DeviceAddress;
-    auto clear_all() -> void;
-
-private:
-    [[nodiscard]] auto get_device() const -> VkDevice;
-};
-
-auto destroy(DestructionContext &ctx, DestructionContext::TextureHandle handle, u64 retire_value = UINT64_MAX) -> void;
-
-auto destroy(DestructionContext &ctx, DestructionContext::SamplerHandle handle, u64 retire_value = UINT64_MAX) -> void;
-
-auto destroy(DestructionContext &ctx, DestructionContext::BufferHandle handle, u64 retire_value = UINT64_MAX) -> void;
-
-auto destroy(DestructionContext &ctx, DestructionContext::QueryPoolHandle handle, u64 retire_value = UINT64_MAX)
-        -> void;

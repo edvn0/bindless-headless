@@ -1,7 +1,7 @@
 #pragma once
 
-#include <expected>
 #include <vector>
+#include <tl/expected.hpp>
 
 #include "Types.hxx"
 
@@ -30,14 +30,14 @@ struct SwapchainAcquireResult {
 
 class Swapchain {
 public:
-    static auto create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain, VkResult>;
+    static auto create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain, VkResult>;
 
     auto destroy() -> void;
 
-    auto recreate(VkExtent2D new_extent) -> std::expected<void, VkResult>;
+    auto recreate(VkExtent2D new_extent) -> tl::expected<void, VkResult>;
 
     auto acquire_next_image(u32 frame_index, u64 timeout_ns = UINT64_MAX)
-            -> std::expected<SwapchainAcquireResult, VkResult>;
+            -> tl::expected<SwapchainAcquireResult, VkResult>;
 
     auto present(VkQueue queue, u32 image_index, VkSemaphore render_finished) -> VkResult;
 
@@ -55,7 +55,7 @@ private:
 
     auto create_swapchain_resources(VkExtent2D requested_extent, bool vsync, VkFormat preferred_format,
                                     VkColorSpaceKHR preferred_color_space, VkSwapchainKHR old_swapchain)
-            -> std::expected<void, VkResult>;
+            -> tl::expected<void, VkResult>;
 
     VkDevice device{VK_NULL_HANDLE};
     VkPhysicalDevice physical_device{VK_NULL_HANDLE};

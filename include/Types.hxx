@@ -4,6 +4,7 @@
 #include <mutex>
 #include <numeric>
 #include <volk.h>
+#include <string_view>
 
 #include <vk_mem_alloc.h>
 
@@ -13,6 +14,25 @@ using u64 = std::uint64_t;
 using i32 = std::int32_t;
 using u8 = std::uint8_t;
 using i8 = std::int8_t;
+
+inline constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle
+inline constexpr u32 max_in_flight = 2; // GPU submit throttle depth
+
+struct string_hash {
+    using is_transparent = void;
+
+    auto operator()(std::string_view v) const noexcept -> std::size_t {
+        return std::hash<std::string_view>{}(v);
+    }
+    auto operator()(std::string const& s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
+    auto operator()(char const* s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
+};
+
+struct string_eq {
+    using is_transparent = void;
+    auto operator()(std::string_view a, std::string_view b) const noexcept -> bool { return a == b; }
+};
+
 
 enum class DeviceAddress : std::uint64_t {
     Invalid = 0,

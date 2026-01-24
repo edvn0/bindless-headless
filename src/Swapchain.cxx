@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <limits>
 
-#include "BindlessHeadless.hxx"
-
 static auto clamp_u32(u32 v, u32 lo, u32 hi) -> u32 {
     return std::min(std::max(v, lo), hi);
 }
@@ -134,29 +132,29 @@ auto Swapchain::create_swapchain_resources(
     bool use_vsync,
     VkFormat want_format,
     VkColorSpaceKHR want_color_space,
-    VkSwapchainKHR old_swapchain) -> std::expected<void, VkResult>
+    VkSwapchainKHR old_swapchain) -> tl::expected<void, VkResult>
 {
     VkSurfaceCapabilitiesKHR caps{};
     VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &caps);
-    if (res != VK_SUCCESS) return std::unexpected(res);
+    if (res != VK_SUCCESS) return tl::unexpected(res);
 
     u32 format_count = 0;
     res = vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, nullptr);
-    if (res != VK_SUCCESS) return std::unexpected(res);
-    if (format_count == 0) return std::unexpected(VK_ERROR_INITIALIZATION_FAILED);
+    if (res != VK_SUCCESS) return tl::unexpected(res);
+    if (format_count == 0) return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
 
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     res = vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, formats.data());
-    if (res != VK_SUCCESS) return std::unexpected(res);
+    if (res != VK_SUCCESS) return tl::unexpected(res);
 
     u32 present_mode_count = 0;
     res = vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, nullptr);
-    if (res != VK_SUCCESS) return std::unexpected(res);
-    if (present_mode_count == 0) return std::unexpected(VK_ERROR_INITIALIZATION_FAILED);
+    if (res != VK_SUCCESS) return tl::unexpected(res);
+    if (present_mode_count == 0) return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
 
     std::vector<VkPresentModeKHR> present_modes(present_mode_count);
     res = vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, present_modes.data());
-    if (res != VK_SUCCESS) return std::unexpected(res);
+    if (res != VK_SUCCESS) return tl::unexpected(res);
 
     surface_format = choose_surface_format(formats, want_format, want_color_space);
     present_mode = choose_present_mode(present_modes, use_vsync);
@@ -185,24 +183,24 @@ auto Swapchain::create_swapchain_resources(
 
     VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
     res = vkCreateSwapchainKHR(device, &sci, nullptr, &new_swapchain);
-    if (res != VK_SUCCESS) return std::unexpected(res);
+    if (res != VK_SUCCESS) return tl::unexpected(res);
 
     u32 swap_image_count = 0;
     res = vkGetSwapchainImagesKHR(device, new_swapchain, &swap_image_count, nullptr);
     if (res != VK_SUCCESS) {
         vkDestroySwapchainKHR(device, new_swapchain, nullptr);
-        return std::unexpected(res);
+        return tl::unexpected(res);
     }
     if (swap_image_count == 0) {
         vkDestroySwapchainKHR(device, new_swapchain, nullptr);
-        return std::unexpected(VK_ERROR_INITIALIZATION_FAILED);
+        return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
     }
 
     std::vector<VkImage> new_images(swap_image_count);
     res = vkGetSwapchainImagesKHR(device, new_swapchain, &swap_image_count, new_images.data());
     if (res != VK_SUCCESS) {
         vkDestroySwapchainKHR(device, new_swapchain, nullptr);
-        return std::unexpected(res);
+        return tl::unexpected(res);
     }
 
     std::vector<VkImageView> new_views(swap_image_count, VK_NULL_HANDLE);
@@ -235,7 +233,7 @@ auto Swapchain::create_swapchain_resources(
                 }
             }
             vkDestroySwapchainKHR(device, new_swapchain, nullptr);
-            return std::unexpected(res);
+            return tl::unexpected(res);
         }
     }
 
@@ -260,7 +258,7 @@ auto Swapchain::create_swapchain_resources(
                 }
             }
             vkDestroySwapchainKHR(device, new_swapchain, nullptr);
-            return std::unexpected(res);
+            return tl::unexpected(res);
         }
     }
 
@@ -271,9 +269,9 @@ auto Swapchain::create_swapchain_resources(
     return {};
 }
 
-auto Swapchain::recreate(VkExtent2D new_extent) -> std::expected<void, VkResult> {
+auto Swapchain::recreate(VkExtent2D new_extent) -> tl::expected<void, VkResult> {
     if (device == VK_NULL_HANDLE || physical_device == VK_NULL_HANDLE || surface == VK_NULL_HANDLE) {
-        return std::unexpected(VK_ERROR_INITIALIZATION_FAILED);
+        return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
     }
 
     vkDeviceWaitIdle(device);
@@ -308,7 +306,7 @@ auto Swapchain::recreate(VkExtent2D new_extent) -> std::expected<void, VkResult>
     return {};
 }
 
-auto Swapchain::create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain, VkResult> {
+auto Swapchain::create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain, VkResult> {
    Swapchain out{};
     out.device = ci.device;
     out.physical_device = ci.physical_device;
@@ -329,7 +327,7 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain
         VkResult res = vkCreateSemaphore(ci.device, &sem_ci, nullptr, &out.acquire_semaphores[fi]);
         if (res != VK_SUCCESS) {
             out.destroy();
-            return std::unexpected(res);
+            return tl::unexpected(res);
         }
     }
 
@@ -343,7 +341,7 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain
     if (!created) {
         const VkResult res = created.error();
         out.destroy();
-        return std::unexpected(res);
+        return tl::unexpected(res);
     }
 
     return out;
@@ -351,7 +349,7 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> std::expected<Swapchain
 
 
 auto Swapchain::acquire_next_image(u32 frame_index, u64 timeout_ns)
-    -> std::expected<SwapchainAcquireResult, VkResult> {
+    -> tl::expected<SwapchainAcquireResult, VkResult> {
     
     const auto bounded_frame = frame_index % frames_in_flight;
     VkSemaphore acquire_sem = acquire_semaphores[bounded_frame];
@@ -366,7 +364,7 @@ auto Swapchain::acquire_next_image(u32 frame_index, u64 timeout_ns)
         &image_index);
 
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) {
-        return std::unexpected(res);
+        return tl::unexpected(res);
     }
 
     return SwapchainAcquireResult{

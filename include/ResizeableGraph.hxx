@@ -14,7 +14,7 @@
 
 
 struct ResizeContext {
-    DestructionContext &ctx;
+    RenderContext &ctx;
     u64 retire_value{0};
 
     auto get_device() const -> VkDevice;
