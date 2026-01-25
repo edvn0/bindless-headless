@@ -13,6 +13,7 @@ add_executable(BindlessHeadless
   "src/ImageOperations.cxx"
   "src/Buffer.cxx"
   "src/Logger.cxx"
+  "src/Camera.cxx"
   "src/Compiler.cxx"
   "src/GlobalCommandContext.cxx"
 )

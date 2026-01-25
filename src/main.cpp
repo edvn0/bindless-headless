@@ -14,6 +14,7 @@
 #include "RenderContext.hxx"
 #include "ResizeableGraph.hxx"
 #include "Swapchain.hxx"
+#include "Camera.hxx"
 
 
 #include <GLFW/glfw3.h>
@@ -388,6 +389,56 @@ struct Deleter {
         delete t;
     }
 };
+
+struct AppState {
+    bool resized{false};
+
+    glm::vec2 last_mouse{0.0f, 0.0f};
+    bool mouse_inited{false};
+
+    CameraInput cam_in{};
+    EditorCamera cam{};
+};
+
+static auto fill_frame_ubo_from_camera(
+        FrameUBO& ubo,
+        const EditorCamera& cam,
+        VkExtent2D extent,
+        float fov_y_radians,
+        float z_near) -> void
+{
+    const float aspect =
+            static_cast<float>(extent.width) / std::max(1.0f, static_cast<float>(extent.height));
+
+    ubo.view = cam.view_matrix();
+    ubo.projection = PerspectiveRH_ReverseZ_Inf(fov_y_radians, aspect, z_near);
+    ubo.inv_projection = glm::inverse(ubo.projection);
+    ubo.view_projection = ubo.projection * ubo.view;
+    ubo.camera_position = glm::vec4(cam.camera_position(), 1.0f);
+
+    const auto planes = extract_frustum_planes(ubo.inv_projection);
+    ubo.frustum_planes = {planes[0], planes[1], planes[2], planes[3], planes[4], planes[5]};
+}
+
+static auto write_camera_to_frame_ubo(
+        RenderContext& ctx,
+        AlignedRingBuffer<FrameUBO>& frame_ubo_ring,
+        u32 frame_index,
+        const EditorCamera& cam,
+        VkExtent2D extent,
+        float fov_y_radians,
+        float z_near) -> void
+{
+    FrameUBO ubo{};
+    fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, z_near);
+
+    frame_ubo_ring.write_field(ctx, frame_index, ubo.view, offsetof(FrameUBO, view));
+    frame_ubo_ring.write_field(ctx, frame_index, ubo.projection, offsetof(FrameUBO, projection));
+    frame_ubo_ring.write_field(ctx, frame_index, ubo.view_projection, offsetof(FrameUBO, view_projection));
+    frame_ubo_ring.write_field(ctx, frame_index, ubo.inv_projection, offsetof(FrameUBO, inv_projection));
+    frame_ubo_ring.write_field(ctx, frame_index, ubo.camera_position, offsetof(FrameUBO, camera_position));
+    frame_ubo_ring.write_field(ctx, frame_index, ubo.frustum_planes, offsetof(FrameUBO, frustum_planes));
+}
 
 auto execute(int argc, char **argv) -> int {
     std::unique_ptr<efsw::FileWatcher, Deleter> watcher(new efsw::FileWatcher(false), Deleter{});
@@ -816,9 +867,6 @@ auto execute(int argc, char **argv) -> int {
         return dt_ns * ns_to_ms_factor;
     };
 
-    struct WindowData {
-        bool resized{false};
-    } wd;
     auto current_extent = [](GLFWwindow *win) {
         int fbw{0};
         int fbh{0};
@@ -826,19 +874,56 @@ auto execute(int argc, char **argv) -> int {
         return VkExtent2D{.width = static_cast<u32>(std::max(fbw, 0)), .height = static_cast<u32>(std::max(fbh, 0))};
     };
 
-    glfwSetWindowUserPointer(window, &wd);
+     AppState app_state {};
+     glfwSetWindowUserPointer(window, &app_state);
     glfwSetKeyCallback(window, [](auto w, auto k, auto, auto, auto) {
         if (k == GLFW_KEY_ESCAPE) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
         }
     });
     glfwSetWindowSizeCallback(window, [](auto w, auto, auto) {
-        auto &data = *static_cast<WindowData *>(glfwGetWindowUserPointer(w));
+        auto &data = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
         data.resized = true;
     });
     glfwSetFramebufferSizeCallback(window, [](auto w, auto, auto) {
-        auto &data = *static_cast<WindowData *>(glfwGetWindowUserPointer(w));
+        auto &data = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
         data.resized = true;
+    });
+
+    glfwSetMouseButtonCallback(window, [](GLFWwindow* w, int button, int action, int) {
+        auto& a = *static_cast<AppState*>(glfwGetWindowUserPointer(w));
+        const bool down = (action == GLFW_PRESS);
+
+        if (button == GLFW_MOUSE_BUTTON_LEFT)   a.cam_in.lmb = down;
+        if (button == GLFW_MOUSE_BUTTON_MIDDLE) a.cam_in.mmb = down;
+        if (button == GLFW_MOUSE_BUTTON_RIGHT)  a.cam_in.rmb = down;
+
+        // Cursor capture for fly look feel
+        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+            glfwSetInputMode(w, GLFW_CURSOR, down ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+            a.mouse_inited = false; // avoid huge jump when toggling
+        }
+    });
+
+    glfwSetCursorPosCallback(window, [](GLFWwindow* w, double x, double y) {
+        auto& a = *static_cast<AppState*>(glfwGetWindowUserPointer(w));
+        const glm::vec2 p{static_cast<float>(x), static_cast<float>(y)};
+
+        if (!a.mouse_inited) {
+            a.last_mouse = p;
+            a.mouse_inited = true;
+            return;
+        }
+
+        const glm::vec2 d = p - a.last_mouse;
+        a.last_mouse = p;
+
+        a.cam_in.mouse_delta += d;
+    });
+
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
+        auto& a = *static_cast<AppState*>(glfwGetWindowUserPointer(w));
+        a.cam_in.scroll_delta += static_cast<float>(yoff);
     });
 
     glfwShowWindow(window);
@@ -890,23 +975,8 @@ auto execute(int argc, char **argv) -> int {
         });
 
         const auto uniforms_node =
-                resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D e, const ResizeContext &resize_context) {
-                    const float aspect_ratio = static_cast<float>(e.width) / static_cast<float>(e.height);
-
-                    FrameUBO ubo_data{};
-                    const auto camera_pos = glm::vec3{15, 10, -20};
-                    ubo_data.view = glm::lookAt(camera_pos, glm::vec3{0, 0, 0}, glm::vec3{0, 1, 0});
-                    ubo_data.projection = PerspectiveRH_ReverseZ_Inf(glm::radians(70.0f), aspect_ratio, 0.1F);
-                    const auto frustum_projection =
-                            glm::perspectiveFov(glm::radians(70.0f), static_cast<float>(e.width),
-                                                static_cast<float>(e.height), 0.1F, 1000.F);
-                    ubo_data.inv_projection = glm::inverse(frustum_projection);
-                    ubo_data.view_projection = ubo_data.projection * ubo_data.view;
-                    ubo_data.camera_position = glm::vec4{camera_pos, 1.0};
-                    const auto planes = extract_frustum_planes(ubo_data.inv_projection);
-                    ubo_data.frustum_planes = {planes[0], planes[1], planes[2], planes[3], planes[4], planes[5]};
-
-                    aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
+                resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D, const ResizeContext &) {
+                   // TODO: When something needs to be done with the uniforms node.
                 });
 
 
@@ -954,16 +1024,20 @@ auto execute(int argc, char **argv) -> int {
         const auto frame_extent = swapchain.extent();
         auto start_time = std::chrono::high_resolution_clock::now();
         const auto bounded_frame_index = static_cast<u32>(frame_index % frames_in_flight);
+        app_state.cam.update(window, dt, app_state.cam_in);
+        constexpr float fov_y = glm::radians(70.0f);
+        constexpr float z_near = 0.1f;
+        write_camera_to_frame_ubo(ctx, aligned_frame_buffer_handle, bounded_frame_index, app_state.cam, frame_extent, fov_y, z_near);
 
         {
-            const double t = glm::radians(73.0f);
+            constexpr auto rads_per_seconds = glm::radians(20.0F);
+            const double t = -dt * rads_per_seconds;
             const glm::vec3 sun_dir = glm::normalize(glm::vec3(cos(t), sin(t), -0.4f));
 
             auto sun_direction_intensity = glm::vec4(sun_dir, 1.5f);
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
             aligned_frame_buffer_handle.write_field(ctx, bounded_frame_index, sun_direction_intensity, offset);
 
-            constexpr auto rads_per_seconds = glm::radians(20.0F);
             {
                 ZoneScopedNC("Rotate cubes", 0xff0013);
                 std::for_each(
