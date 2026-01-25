@@ -24,16 +24,22 @@ auto ResizeGraph::to_graphviz_dot(bool include_topo_rank) const -> std::string {
         r.reserve(s.size());
         for (char c: s) {
             switch (c) {
-                case '\\': r += "\\\\";
+                case '\\':
+                    r += "\\\\";
                     break;
-                case '\"': r += "\\\"";
+                case '\"':
+                    r += "\\\"";
                     break;
-                case '\n': r += "\\n";
+                case '\n':
+                    r += "\\n";
                     break;
-                case '\r': break;
-                case '\t': r += "\\t";
+                case '\r':
                     break;
-                default: r += c;
+                case '\t':
+                    r += "\\t";
+                    break;
+                default:
+                    r += c;
                     break;
             }
         }
@@ -42,12 +48,10 @@ auto ResizeGraph::to_graphviz_dot(bool include_topo_rank) const -> std::string {
 
     // Emit nodes.
     for (auto const &n: nodes) {
-        out << "  n" << n.id << " [label=\""
-                << escape(n.name);
+        out << "  n" << n.id << " [label=\"" << escape(n.name);
 
         out << "\\n"
-                << "id=" << n.id
-                << "  ins=" << n.insertion_index;
+            << "id=" << n.id << "  ins=" << n.insertion_index;
 
         if (include_topo_rank) {
             if (auto it = topo_rank.find(n.id); it != topo_rank.end()) {

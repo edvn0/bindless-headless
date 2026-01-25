@@ -65,17 +65,14 @@ auto clamp_msaa_samples = [](VkPhysicalDevice physical_device,
     const VkSampleCountFlags supported =
             props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
 
-    // Always allow 1.
     if (requested == VK_SAMPLE_COUNT_1_BIT) {
         return VK_SAMPLE_COUNT_1_BIT;
     }
 
-    // If requested is supported, accept it.
     if ((supported & requested) != 0) {
         return requested;
     }
 
-    // Otherwise choose the next-lower supported sample count.
     if ((supported & VK_SAMPLE_COUNT_64_BIT) && requested > VK_SAMPLE_COUNT_64_BIT)
         return VK_SAMPLE_COUNT_64_BIT;
     if ((supported & VK_SAMPLE_COUNT_32_BIT) && requested >= VK_SAMPLE_COUNT_32_BIT)
@@ -105,19 +102,12 @@ struct Mesh {
         const auto index_name = std::format("{}_indices", name);
         auto vertex_buffer =
                 ctx.buffers.create(Buffer::from_slice<Vert>(ctx.allocator,
-                                                            VkBufferCreateInfo{
-                                                                    .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                                                                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                            },
-                                                            VmaAllocationCreateInfo{}, vertices, vertex_name)
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, vertices, vertex_name)
                                            .value());
         auto index_buffer =
-                ctx.buffers.create(Buffer::from_slice<Idx>(ctx.allocator,
-                                                           VkBufferCreateInfo{
-                                                                   .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                                                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                           },
-                                                           VmaAllocationCreateInfo{}, indices, index_name)
+                ctx.buffers.create(Buffer::from_slice<Idx>(ctx.allocator,VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, indices, index_name)
                                            .value());
         return Mesh{
                 .vertex_buffer = vertex_buffer,
@@ -731,22 +721,16 @@ auto execute(int argc, char **argv) -> int {
 
     auto point_light_handle = ctx.buffers.create(
             Buffer::from_slice<PointLight>(allocator,
-                                           VkBufferCreateInfo{
-                                                   .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                           },
-                                           VmaAllocationCreateInfo{}, all_point_lights, "point_light")
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, all_point_lights, "point_light")
                     .value());
 
     auto culled_light_count_handle =
             ctx.buffers.create(Buffer::from_value<u32>(allocator,
-                                                       VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                       },
-                                                       VmaAllocationCreateInfo{}, 0u, "culled_point_light_count")
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, 0u, "culled_point_light_count")
                                        .value());
 
     auto mapped_to_transforms = cubes | std::views::transform([](const Cube &cube) {
@@ -782,31 +766,22 @@ auto execute(int argc, char **argv) -> int {
     std::vector zeros_groups(group_count, 0u);
     auto flags_handle =
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
-                                                       VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                       },
-                                                       VmaAllocationCreateInfo{}, zeros_lights, "light_flags")
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, zeros_lights, "light_flags")
                                        .value());
     auto prefix_handle =
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
-                                                       VkBufferCreateInfo{
-                                                               .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                       },
-                                                       VmaAllocationCreateInfo{}, zeros_lights, "light_prefix")
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, zeros_lights, "light_prefix")
                                        .value());
 
     auto compact_lights_handle = ctx.buffers.create(
             Buffer::from_slice<PointLight>(allocator,
-                                           VkBufferCreateInfo{
-                                                   .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                           },
-                                           VmaAllocationCreateInfo{}, all_point_lights_zero, "compact_lights")
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,all_point_lights_zero, "compact_lights")
                     .value());
 
     auto aligned_frame_buffer_handle = AlignedRingBuffer<FrameUBO>::create(ctx, "aligned_frame_ubo_buffer").value();
@@ -918,7 +893,7 @@ auto execute(int argc, char **argv) -> int {
                     FrameUBO ubo_data{};
                     const auto camera_pos = glm::vec3{15, 10, -20};
                     ubo_data.view = glm::lookAt(camera_pos, glm::vec3{0, 0, 0}, glm::vec3{0, 1, 0});
-                    ubo_data.projection = PerspectiveRH_ReverseZ_Inf(glm::radians(70.0f), aspect_ratio, 0.0001F);
+                    ubo_data.projection = PerspectiveRH_ReverseZ_Inf(glm::radians(70.0f), aspect_ratio, 1.F);
                     const auto frustum_projection =
                             glm::perspectiveFov(glm::radians(70.0f), static_cast<float>(e.width),
                                                 static_cast<float>(e.height), 0.1F, 1000.F);

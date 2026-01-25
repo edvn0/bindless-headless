@@ -62,10 +62,12 @@ auto create_compute_pipelines(VkDevice device, PipelineCache &cache, VkDescripto
 
 
 auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &,
-                              const std::vector<uint32_t> &, VkFormat, VkSampleCountFlagBits  = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
+                              const std::vector<uint32_t> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)
+        -> CompiledPipeline;
 
 auto create_mesh_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,
-                          const std::vector<u32> &, VkFormat, VkSampleCountFlagBits  = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
+                          const std::vector<u32> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)
+        -> CompiledPipeline;
 
 auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,
                              const std::vector<u32> &, const std::string_view, const std::string_view, VkFormat)

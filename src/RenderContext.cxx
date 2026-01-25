@@ -1,6 +1,6 @@
-#include "../include/Pool.hxx"
 #include "../include/BindlessHeadless.hxx"
 #include "../include/BindlessSet.hxx"
+#include "../include/Pool.hxx"
 
 
 auto RenderContext::get_device() const -> VkDevice {
@@ -52,52 +52,46 @@ auto RenderContext::clear_all() -> void {
 }
 
 namespace {
-  template <std::size_t N>
-auto destroy_unique_image_views(VkDevice device, std::array<VkImageView, N> views) -> void {
-    std::ranges::sort(views);
-    VkImageView last = VK_NULL_HANDLE;
-    for (VkImageView v : views) {
-        if (v == VK_NULL_HANDLE) {
-            continue;
-        }
-        if (v == last) {
-            continue;
-        }
+    template<std::size_t N>
+    auto destroy_unique_image_views(VkDevice device, std::array<VkImageView, N> views) -> void {
+        std::ranges::sort(views);
+        VkImageView last = VK_NULL_HANDLE;
+        for (VkImageView v: views) {
+            if (v == VK_NULL_HANDLE) {
+                continue;
+            }
+            if (v == last) {
+                continue;
+            }
 
-        vkDestroyImageView(device, v, nullptr);
-        last = v;
+            vkDestroyImageView(device, v, nullptr);
+            last = v;
+        }
     }
-}
-}
+} // namespace
 
-auto destroy(RenderContext& ctx, TextureHandle handle, u64 retire_value) -> void {
+auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void {
     auto impl = ctx.textures.take(handle);
     if (!impl) {
         return;
     }
 
-    ctx.destroy_queue.enqueue(
-        retire_value,
-        [alloc = ctx.allocator, img = std::move(*impl)]() mutable {
-            VmaAllocatorInfo info{};
-            vmaGetAllocatorInfo(alloc, &info);
+    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, img = std::move(*impl)]() mutable {
+        VmaAllocatorInfo info{};
+        vmaGetAllocatorInfo(alloc, &info);
 
-            destroy_unique_image_views(
-                info.device,
-                std::array<VkImageView, 3>{
-                    img.attachment_view,
-                    img.sampled_view,
-                    img.storage_view,
-                }
-            );
+        destroy_unique_image_views(info.device, std::array<VkImageView, 3>{
+                                                        img.attachment_view,
+                                                        img.sampled_view,
+                                                        img.storage_view,
+                                                });
 
-            if (img.image != VK_NULL_HANDLE) {
-                vmaDestroyImage(alloc, img.image, img.allocation);
-                img.image = VK_NULL_HANDLE;
-                img.allocation = VK_NULL_HANDLE;
-            }
+        if (img.image != VK_NULL_HANDLE) {
+            vmaDestroyImage(alloc, img.image, img.allocation);
+            img.image = VK_NULL_HANDLE;
+            img.allocation = VK_NULL_HANDLE;
         }
-    );
+    });
 }
 
 

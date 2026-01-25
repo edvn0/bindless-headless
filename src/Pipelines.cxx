@@ -168,14 +168,9 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .rasterizationSamples = samples,
     };
-    std::array dynamic_states = {
-            VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_SCISSOR,
-            VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
-            VK_DYNAMIC_STATE_DEPTH_BOUNDS,
-            VK_DYNAMIC_STATE_CULL_MODE,
-            VK_DYNAMIC_STATE_FRONT_FACE
-    };
+    std::array dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT,         VK_DYNAMIC_STATE_SCISSOR,
+                                 VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_DEPTH_BOUNDS,
+                                 VK_DYNAMIC_STATE_CULL_MODE,        VK_DYNAMIC_STATE_FRONT_FACE};
     VkPipelineDynamicStateCreateInfo dy{.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                         .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
                                         .pDynamicStates = dynamic_states.data()};
@@ -372,14 +367,9 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
             .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
     };
 
-    std::array dynamic_states{
-            VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_SCISSOR,
-            VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
-            VK_DYNAMIC_STATE_DEPTH_BOUNDS,
-            VK_DYNAMIC_STATE_CULL_MODE,
-            VK_DYNAMIC_STATE_FRONT_FACE
-    };
+    std::array dynamic_states{VK_DYNAMIC_STATE_VIEWPORT,         VK_DYNAMIC_STATE_SCISSOR,
+                              VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_DEPTH_BOUNDS,
+                              VK_DYNAMIC_STATE_CULL_MODE,        VK_DYNAMIC_STATE_FRONT_FACE};
     VkPipelineDynamicStateCreateInfo dynamic_state{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
             .pNext = nullptr,

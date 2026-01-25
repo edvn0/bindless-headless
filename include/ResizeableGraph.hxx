@@ -56,7 +56,8 @@ struct ResizeGraph {
     }
 
     auto rebuild(VkExtent2D extent, const ResizeContext &rc) -> void {
-        if (extent.width == 0 || extent.height == 0) return;
+        if (extent.width == 0 || extent.height == 0)
+            return;
 
         ensure_topo_cache();
         for (NodeId id: topo_order_cache) {

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <vector>
 #include <tl/expected.hpp>
+#include <vector>
 
 #include "Types.hxx"
 
@@ -72,8 +72,8 @@ private:
     std::vector<VkImageView> views{};
     std::vector<SwapchainFrameSync> sync{};
 
-    std::vector<VkSemaphore> acquire_semaphores; 
-std::vector<VkSemaphore> render_finished_semaphores;
+    std::vector<VkSemaphore> acquire_semaphores;
+    std::vector<VkSemaphore> render_finished_semaphores;
 
     bool vsync{true};
     VkFormat preferred_format{VK_FORMAT_B8G8R8A8_UNORM};

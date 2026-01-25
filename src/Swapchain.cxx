@@ -3,32 +3,23 @@
 #include <algorithm>
 #include <limits>
 
-static auto clamp_u32(u32 v, u32 lo, u32 hi) -> u32 {
-    return std::min(std::max(v, lo), hi);
-}
+static auto clamp_u32(u32 v, u32 lo, u32 hi) -> u32 { return std::min(std::max(v, lo), hi); }
 
-static auto choose_surface_format(
-    std::span<const VkSurfaceFormatKHR> formats,
-    VkFormat preferred_format,
-    VkColorSpaceKHR preferred_color_space) -> VkSurfaceFormatKHR
-{
+static auto choose_surface_format(std::span<const VkSurfaceFormatKHR> formats, VkFormat preferred_format,
+                                  VkColorSpaceKHR preferred_color_space) -> VkSurfaceFormatKHR {
     if (formats.size() == 1 && formats[0].format == VK_FORMAT_UNDEFINED) {
-        return VkSurfaceFormatKHR{
-            .format = preferred_format,
-            .colorSpace = preferred_color_space
-        };
+        return VkSurfaceFormatKHR{.format = preferred_format, .colorSpace = preferred_color_space};
     }
 
-    for (const auto &f : formats) {
+    for (const auto &f: formats) {
         if (f.format == preferred_format && f.colorSpace == preferred_color_space) {
             return f;
         }
     }
 
-    for (const auto &f : formats) {
+    for (const auto &f: formats) {
         if ((f.format == VK_FORMAT_B8G8R8A8_SRGB || f.format == VK_FORMAT_R8G8B8A8_SRGB) &&
-            f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-        {
+            f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
             return f;
         }
     }
@@ -37,16 +28,16 @@ static auto choose_surface_format(
 }
 
 static auto choose_present_mode(std::span<const VkPresentModeKHR> modes, bool vsync) -> VkPresentModeKHR {
-    const auto has = [&](VkPresentModeKHR m) -> bool {
-        return std::ranges::find(modes, m) != modes.end();
-    };
+    const auto has = [&](VkPresentModeKHR m) -> bool { return std::ranges::find(modes, m) != modes.end(); };
 
     if (vsync) {
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
-    if (has(VK_PRESENT_MODE_MAILBOX_KHR)) return VK_PRESENT_MODE_MAILBOX_KHR;
-    if (has(VK_PRESENT_MODE_IMMEDIATE_KHR)) return VK_PRESENT_MODE_IMMEDIATE_KHR;
+    if (has(VK_PRESENT_MODE_MAILBOX_KHR))
+        return VK_PRESENT_MODE_MAILBOX_KHR;
+    if (has(VK_PRESENT_MODE_IMMEDIATE_KHR))
+        return VK_PRESENT_MODE_IMMEDIATE_KHR;
 
     return VK_PRESENT_MODE_FIFO_KHR;
 }
@@ -73,7 +64,7 @@ static auto choose_image_count(const VkSurfaceCapabilitiesKHR &caps) -> u32 {
 }
 
 auto Swapchain::destroy_swapchain_resources() -> void {
-    for (auto v : views) {
+    for (auto v: views) {
         if (v != VK_NULL_HANDLE) {
             vkDestroyImageView(device, v, nullptr);
         }
@@ -81,8 +72,8 @@ auto Swapchain::destroy_swapchain_resources() -> void {
     views.clear();
     images.clear();
 
-    
-    for (auto &s : render_finished_semaphores) {
+
+    for (auto &s: render_finished_semaphores) {
         if (s != VK_NULL_HANDLE) {
             vkDestroySemaphore(device, s, nullptr);
             s = VK_NULL_HANDLE;
@@ -108,8 +99,8 @@ auto Swapchain::destroy() -> void {
 
     destroy_swapchain_resources();
 
-    
-    for (auto &s : acquire_semaphores) {
+
+    for (auto &s: acquire_semaphores) {
         if (s != VK_NULL_HANDLE) {
             vkDestroySemaphore(device, s, nullptr);
             s = VK_NULL_HANDLE;
@@ -127,34 +118,38 @@ auto Swapchain::destroy() -> void {
     preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 }
 
-auto Swapchain::create_swapchain_resources(
-    VkExtent2D requested_extent,
-    bool use_vsync,
-    VkFormat want_format,
-    VkColorSpaceKHR want_color_space,
-    VkSwapchainKHR old_swapchain) -> tl::expected<void, VkResult>
-{
+auto Swapchain::create_swapchain_resources(VkExtent2D requested_extent, bool use_vsync, VkFormat want_format,
+                                           VkColorSpaceKHR want_color_space, VkSwapchainKHR old_swapchain)
+        -> tl::expected<void, VkResult> {
     VkSurfaceCapabilitiesKHR caps{};
     VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface, &caps);
-    if (res != VK_SUCCESS) return tl::unexpected(res);
+    if (res != VK_SUCCESS)
+        return tl::unexpected(res);
 
     u32 format_count = 0;
     res = vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, nullptr);
-    if (res != VK_SUCCESS) return tl::unexpected(res);
-    if (format_count == 0) return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
+    if (res != VK_SUCCESS)
+        return tl::unexpected(res);
+    if (format_count == 0)
+        return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
 
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     res = vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, formats.data());
-    if (res != VK_SUCCESS) return tl::unexpected(res);
+    if (res != VK_SUCCESS)
+        return tl::unexpected(res);
 
     u32 present_mode_count = 0;
     res = vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, nullptr);
-    if (res != VK_SUCCESS) return tl::unexpected(res);
-    if (present_mode_count == 0) return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
+    if (res != VK_SUCCESS)
+        return tl::unexpected(res);
+    if (present_mode_count == 0)
+        return tl::unexpected(VK_ERROR_INITIALIZATION_FAILED);
 
     std::vector<VkPresentModeKHR> present_modes(present_mode_count);
-    res = vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count, present_modes.data());
-    if (res != VK_SUCCESS) return tl::unexpected(res);
+    res = vkGetPhysicalDeviceSurfacePresentModesKHR(physical_device, surface, &present_mode_count,
+                                                    present_modes.data());
+    if (res != VK_SUCCESS)
+        return tl::unexpected(res);
 
     surface_format = choose_surface_format(formats, want_format, want_color_space);
     present_mode = choose_present_mode(present_modes, use_vsync);
@@ -162,28 +157,27 @@ auto Swapchain::create_swapchain_resources(
 
     const u32 image_count = choose_image_count(caps);
 
-    VkSwapchainCreateInfoKHR sci{
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        .surface = surface,
-        .minImageCount = image_count,
-        .imageFormat = surface_format.format,
-        .imageColorSpace = surface_format.colorSpace,
-        .imageExtent = full_extent,
-        .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices = nullptr,
-        .preTransform = caps.currentTransform,
-        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .presentMode = present_mode,
-        .clipped = VK_TRUE,
-        .oldSwapchain = old_swapchain
-    };
+    VkSwapchainCreateInfoKHR sci{.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+                                 .surface = surface,
+                                 .minImageCount = image_count,
+                                 .imageFormat = surface_format.format,
+                                 .imageColorSpace = surface_format.colorSpace,
+                                 .imageExtent = full_extent,
+                                 .imageArrayLayers = 1,
+                                 .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                 .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                                 .queueFamilyIndexCount = 0,
+                                 .pQueueFamilyIndices = nullptr,
+                                 .preTransform = caps.currentTransform,
+                                 .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+                                 .presentMode = present_mode,
+                                 .clipped = VK_TRUE,
+                                 .oldSwapchain = old_swapchain};
 
     VkSwapchainKHR new_swapchain = VK_NULL_HANDLE;
     res = vkCreateSwapchainKHR(device, &sci, nullptr, &new_swapchain);
-    if (res != VK_SUCCESS) return tl::unexpected(res);
+    if (res != VK_SUCCESS)
+        return tl::unexpected(res);
 
     u32 swap_image_count = 0;
     res = vkGetSwapchainImagesKHR(device, new_swapchain, &swap_image_count, nullptr);
@@ -205,29 +199,23 @@ auto Swapchain::create_swapchain_resources(
 
     std::vector<VkImageView> new_views(swap_image_count, VK_NULL_HANDLE);
     for (u32 i = 0; i < swap_image_count; ++i) {
-        VkImageViewCreateInfo ivci{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = new_images[i],
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = surface_format.format,
-            .components = VkComponentMapping{
-                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = VK_COMPONENT_SWIZZLE_IDENTITY
-            },
-            .subresourceRange = VkImageSubresourceRange{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1
-            }
-        };
+        VkImageViewCreateInfo ivci{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                   .image = new_images[i],
+                                   .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                   .format = surface_format.format,
+                                   .components = VkComponentMapping{.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                                                                    .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                                                                    .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                                                                    .a = VK_COMPONENT_SWIZZLE_IDENTITY},
+                                   .subresourceRange = VkImageSubresourceRange{.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                                               .baseMipLevel = 0,
+                                                                               .levelCount = 1,
+                                                                               .baseArrayLayer = 0,
+                                                                               .layerCount = 1}};
 
         res = vkCreateImageView(device, &ivci, nullptr, &new_views[i]);
         if (res != VK_SUCCESS) {
-            for (auto v : new_views) {
+            for (auto v: new_views) {
                 if (v != VK_NULL_HANDLE) {
                     vkDestroyImageView(device, v, nullptr);
                 }
@@ -237,22 +225,20 @@ auto Swapchain::create_swapchain_resources(
         }
     }
 
-    
-    for (auto &s : render_finished_semaphores) {
+
+    for (auto &s: render_finished_semaphores) {
         if (s != VK_NULL_HANDLE) {
             vkDestroySemaphore(device, s, nullptr);
         }
     }
     render_finished_semaphores.resize(swap_image_count);
 
-    VkSemaphoreCreateInfo sem_ci{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
-    };
+    VkSemaphoreCreateInfo sem_ci{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
     for (u32 i = 0; i < swap_image_count; ++i) {
         res = vkCreateSemaphore(device, &sem_ci, nullptr, &render_finished_semaphores[i]);
         if (res != VK_SUCCESS) {
-            for (auto v : new_views) {
+            for (auto v: new_views) {
                 if (v != VK_NULL_HANDLE) {
                     vkDestroyImageView(device, v, nullptr);
                 }
@@ -278,7 +264,7 @@ auto Swapchain::recreate(VkExtent2D new_extent) -> tl::expected<void, VkResult> 
 
     const VkSwapchainKHR old_swapchain = swapchain;
 
-    for (auto v : views) {
+    for (auto v: views) {
         if (v != VK_NULL_HANDLE) {
             vkDestroyImageView(device, v, nullptr);
         }
@@ -287,7 +273,8 @@ auto Swapchain::recreate(VkExtent2D new_extent) -> tl::expected<void, VkResult> 
     images.clear();
     swapchain = VK_NULL_HANDLE;
 
-    auto created = create_swapchain_resources(new_extent, vsync, preferred_format, preferred_color_space, old_swapchain);
+    auto created =
+            create_swapchain_resources(new_extent, vsync, preferred_format, preferred_color_space, old_swapchain);
     if (!created) {
         if (old_swapchain != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device, old_swapchain, nullptr);
@@ -307,7 +294,7 @@ auto Swapchain::recreate(VkExtent2D new_extent) -> tl::expected<void, VkResult> 
 }
 
 auto Swapchain::create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain, VkResult> {
-   Swapchain out{};
+    Swapchain out{};
     out.device = ci.device;
     out.physical_device = ci.physical_device;
     out.surface = ci.surface;
@@ -319,9 +306,7 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain,
 
     out.acquire_semaphores.resize(frames_in_flight);
 
-    VkSemaphoreCreateInfo sem_ci{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO
-    };
+    VkSemaphoreCreateInfo sem_ci{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
     for (u32 fi = 0; fi < frames_in_flight; ++fi) {
         VkResult res = vkCreateSemaphore(ci.device, &sem_ci, nullptr, &out.acquire_semaphores[fi]);
@@ -331,12 +316,8 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain,
         }
     }
 
-    auto created = out.create_swapchain_resources(
-        ci.extent,
-        ci.vsync,
-        ci.preferred_format,
-        ci.preferred_color_space,
-        VK_NULL_HANDLE);
+    auto created = out.create_swapchain_resources(ci.extent, ci.vsync, ci.preferred_format, ci.preferred_color_space,
+                                                  VK_NULL_HANDLE);
 
     if (!created) {
         const VkResult res = created.error();
@@ -348,31 +329,23 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain,
 }
 
 
-auto Swapchain::acquire_next_image(u32 frame_index, u64 timeout_ns)
-    -> tl::expected<SwapchainAcquireResult, VkResult> {
-    
+auto Swapchain::acquire_next_image(u32 frame_index, u64 timeout_ns) -> tl::expected<SwapchainAcquireResult, VkResult> {
+
     const auto bounded_frame = frame_index % frames_in_flight;
     VkSemaphore acquire_sem = acquire_semaphores[bounded_frame];
 
-    u32 image_index {0};
-    const VkResult res = vkAcquireNextImageKHR(
-        device,
-        swapchain,
-        timeout_ns,
-        acquire_sem, 
-        VK_NULL_HANDLE,
-        &image_index);
+    u32 image_index{0};
+    const VkResult res =
+            vkAcquireNextImageKHR(device, swapchain, timeout_ns, acquire_sem, VK_NULL_HANDLE, &image_index);
 
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) {
         return tl::unexpected(res);
     }
 
     return SwapchainAcquireResult{
-        .image_index = image_index,
-        .sync = SwapchainFrameSync{
-            .image_available = acquire_sem,
-            .render_finished = render_finished_semaphores[image_index]  
-        },
+            .image_index = image_index,
+            .sync = SwapchainFrameSync{.image_available = acquire_sem,
+                                       .render_finished = render_finished_semaphores[image_index]},
     };
 }
 
@@ -381,15 +354,13 @@ auto Swapchain::present(VkQueue queue, u32 image_index, VkSemaphore render_finis
         return VK_ERROR_OUT_OF_DATE_KHR;
     }
 
-    VkPresentInfoKHR pi{
-        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .waitSemaphoreCount = render_finished ? 1u : 0u,
-        .pWaitSemaphores = render_finished ? &render_finished : nullptr,
-        .swapchainCount = 1u,
-        .pSwapchains = &swapchain,
-        .pImageIndices = &image_index,
-        .pResults = nullptr
-    };
+    VkPresentInfoKHR pi{.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                        .waitSemaphoreCount = render_finished ? 1u : 0u,
+                        .pWaitSemaphores = render_finished ? &render_finished : nullptr,
+                        .swapchainCount = 1u,
+                        .pSwapchains = &swapchain,
+                        .pImageIndices = &image_index,
+                        .pResults = nullptr};
 
     return vkQueuePresentKHR(queue, &pi);
 }

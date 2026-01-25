@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <mutex>
 #include <numeric>
-#include <volk.h>
 #include <string_view>
+#include <volk.h>
 
 #include <vk_mem_alloc.h>
 
@@ -21,11 +21,9 @@ inline constexpr u32 max_in_flight = 2; // GPU submit throttle depth
 struct string_hash {
     using is_transparent = void;
 
-    auto operator()(std::string_view v) const noexcept -> std::size_t {
-        return std::hash<std::string_view>{}(v);
-    }
-    auto operator()(std::string const& s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
-    auto operator()(char const* s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
+    auto operator()(std::string_view v) const noexcept -> std::size_t { return std::hash<std::string_view>{}(v); }
+    auto operator()(std::string const &s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
+    auto operator()(char const *s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
 };
 
 struct string_eq {

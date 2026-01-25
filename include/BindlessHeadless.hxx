@@ -156,34 +156,18 @@ struct TargetSamplerConfiguration {
     std::bitset<3> sampled_storage_transfer{0b111};
 };
 
-auto create_offscreen_target(VmaAllocator& alloc,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    VkSampleCountFlagBits samples,
-    TargetSamplerConfiguration config,
-    std::string_view name) -> OffscreenTarget;
-   inline auto create_offscreen_target(VmaAllocator& alloc,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    TargetSamplerConfiguration config,
-    std::string_view name) -> OffscreenTarget {
+auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
+                             TargetSamplerConfiguration config, std::string_view name) -> OffscreenTarget;
+inline auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format,
+                                    TargetSamplerConfiguration config, std::string_view name) -> OffscreenTarget {
     return create_offscreen_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, std::move(config), name);
-    }
+}
 
-auto create_depth_target(    VmaAllocator& alloc,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    VkSampleCountFlagBits samples,
-    bool want_sampled, // usually true only for single-sample depth you intend to sample later
-    std::string_view name) -> OffscreenTarget;
-inline auto create_depth_target(   VmaAllocator& alloc, 
-    u32 width,
-    u32 height,
-    VkFormat format,
-    std::string_view name) -> OffscreenTarget {
+auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
+                         bool want_sampled, // usually true only for single-sample depth you intend to sample later
+                         std::string_view name) -> OffscreenTarget;
+inline auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, std::string_view name)
+        -> OffscreenTarget {
     return create_depth_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, true, name);
 }
 

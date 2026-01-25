@@ -32,7 +32,7 @@ struct ReflectionData {
     };
 
     struct EntryInfo {
-        std::string name;       // entry-point function name (backend-specific)
+        std::string name; // entry-point function name (backend-specific)
         std::string stage_name; // "compute", "vertex", ...
 
         std::unordered_map<std::string, PushConstantInfo, string_hash, string_eq> push_constants;
@@ -68,18 +68,31 @@ enum class ShaderStage {
 
 inline auto stage_to_string(ShaderStage s) -> std::string_view {
     switch (s) {
-        case ShaderStage::Vertex: return "vertex";
-        case ShaderStage::Fragment: return "fragment";
-        case ShaderStage::Compute: return "compute";
-        case ShaderStage::Geometry: return "geometry";
-        case ShaderStage::Hull: return "hull";
-        case ShaderStage::Domain: return "domain";
-        case ShaderStage::RayGen: return "raygen";
-        case ShaderStage::Intersection: return "intersection";
-        case ShaderStage::AnyHit: return "any_hit";
-        case ShaderStage::ClosestHit: return "closest_hit";
-        case ShaderStage::Miss: return "miss";
-        case ShaderStage::Callable: return "callable";
-        default: return "unknown";
+        case ShaderStage::Vertex:
+            return "vertex";
+        case ShaderStage::Fragment:
+            return "fragment";
+        case ShaderStage::Compute:
+            return "compute";
+        case ShaderStage::Geometry:
+            return "geometry";
+        case ShaderStage::Hull:
+            return "hull";
+        case ShaderStage::Domain:
+            return "domain";
+        case ShaderStage::RayGen:
+            return "raygen";
+        case ShaderStage::Intersection:
+            return "intersection";
+        case ShaderStage::AnyHit:
+            return "any_hit";
+        case ShaderStage::ClosestHit:
+            return "closest_hit";
+        case ShaderStage::Miss:
+            return "miss";
+        case ShaderStage::Callable:
+            return "callable";
+        default:
+            return "unknown";
     }
 }
