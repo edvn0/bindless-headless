@@ -282,7 +282,6 @@ namespace image_operations {
         VmaAllocatorInfo allocator_info{};
         vmaGetAllocatorInfo(allocator, &allocator_info);
 
-        // Create staging buffers for all images
         std::vector<StagingBuffer> staging_buffers;
         staging_buffers.reserve(requests.size());
 
@@ -352,7 +351,6 @@ namespace image_operations {
             return;
         }
 
-        // Create command pool and buffer
         VkCommandPool command_pool{};
         {
             ZoneScopedNC("create_command_pool", 0x4080FF);
@@ -393,7 +391,6 @@ namespace image_operations {
             }
         }
 
-        // Record all copy commands in a single command buffer
         {
             ZoneScopedNC("record_batch_commands", 0x40FFFF);
 
@@ -411,7 +408,6 @@ namespace image_operations {
                 auto const &tex = *requests[i].texture;
                 auto const &staging = staging_buffers[i];
 
-                // Transition to transfer source
                 VkImageMemoryBarrier2 barrier{
                         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                         .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -509,13 +505,11 @@ namespace image_operations {
                 }));
             }
 
-            // Wait for all conversions to complete
             for (auto &f: futures) {
                 f.get();
             }
         }
 
-        // Cleanup
         {
             ZoneScopedNC("batch_cleanup", 0x808080);
             vkDestroyCommandPool(allocator_info.device, command_pool, nullptr);

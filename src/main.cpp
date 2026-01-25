@@ -100,15 +100,16 @@ struct Mesh {
             -> Mesh {
         const auto vertex_name = std::format("{}_vertices", name);
         const auto index_name = std::format("{}_indices", name);
-        auto vertex_buffer =
-                ctx.buffers.create(Buffer::from_slice<Vert>(ctx.allocator,
-                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, vertices, vertex_name)
-                                           .value());
-        auto index_buffer =
-                ctx.buffers.create(Buffer::from_slice<Idx>(ctx.allocator,VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, indices, index_name)
-                                           .value());
+        auto vertex_buffer = ctx.buffers.create(
+                Buffer::from_slice<Vert>(ctx.allocator,
+                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                         vertices, vertex_name)
+                        .value());
+        auto index_buffer = ctx.buffers.create(
+                Buffer::from_slice<Idx>(ctx.allocator,
+                                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                        indices, index_name)
+                        .value());
         return Mesh{
                 .vertex_buffer = vertex_buffer,
                 .index_buffer = index_buffer,
@@ -138,35 +139,36 @@ inline void generate_cube(std::array<Vertex, 24> &out_vertices, std::array<uint1
     uint32_t vert_index = 0;
     uint32_t idx_index = 0;
 
+    constexpr std::array<Face, 6> faces = {
+            // -Z (front face)
+            Face{{0, 0, -1}, {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1}}},
+            // +Z (back face)
+            {{0, 0, 1}, {{-1, -1, 1}, {-1, 1, 1}, {1, 1, 1}, {1, -1, 1}}},
+            // -X (left face)
+            {{-1, 0, 0}, {{-1, -1, 1}, {-1, -1, -1}, {-1, 1, -1}, {-1, 1, 1}}},
+            // +X (right face)
+            {{1, 0, 0}, {{1, -1, -1}, {1, -1, 1}, {1, 1, 1}, {1, 1, -1}}},
+            // -Y (bottom face) - FIXED: reversed winding order
+            {{0, -1, 0}, {{-1, -1, -1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1}}},
+            // +Y (top face)
+            {{0, 1, 0}, {{-1, 1, -1}, {1, 1, -1}, {1, 1, 1}, {-1, 1, 1}}},
+    };
+
     for (uint32_t f = 0; f < 6; ++f) {
-        constexpr std::array<Face, 6> faces = {
-                // -Z
-                Face{{0, 0, -1}, {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1}}},
-                // +Z
-                {{0, 0, 1}, {{-1, -1, 1}, {-1, 1, 1}, {1, 1, 1}, {1, -1, 1}}},
-                // -X
-                {{-1, 0, 0}, {{-1, -1, 1}, {-1, -1, -1}, {-1, 1, -1}, {-1, 1, 1}}},
-                // +X
-                {{1, 0, 0}, {{1, -1, -1}, {1, -1, 1}, {1, 1, 1}, {1, 1, -1}}},
-                // -Y
-                {{0, -1, 0}, {{-1, -1, 1}, {1, -1, 1}, {1, -1, -1}, {-1, -1, -1}}},
-                // +Y
-                {{0, 1, 0}, {{-1, 1, -1}, {1, 1, -1}, {1, 1, 1}, {-1, 1, 1}}},
-        };
         u32 base = vert_index;
 
         // Pack normal using GLM
-        glm::vec4 normal4(faces.at(f).normal, 0.0f); // w = 0 for the extra 2 bits
-        u32 packed_normal = glm::packUnorm3x10_1x2(normal4);
+        glm::vec4 normal4(faces[f].normal, 0.0f);
+        u32 packed_normal = glm::packSnorm3x10_1x2(normal4);
 
         // Pack full UV rect
-        u32 packed_uv = (0x00u) | (0x00u << 8) | (0xFFu << 16) | (0xFFu << 24); // full 0..1
+        u32 packed_uv = (0x00u) | (0x00u << 8) | (0xFFu << 16) | (0xFFu << 24);
 
         for (int v = 0; v < 4; ++v) {
             out_vertices[vert_index++] = {faces[f].v[v], packed_normal, packed_uv};
         }
 
-        // Two triangles per face
+        // Two triangles per face (CCW winding)
         auto as_u16 = static_cast<u16>(base);
         out_indices[idx_index++] = as_u16 + 0;
         out_indices[idx_index++] = as_u16 + 1;
@@ -721,17 +723,17 @@ auto execute(int argc, char **argv) -> int {
 
     auto point_light_handle = ctx.buffers.create(
             Buffer::from_slice<PointLight>(allocator,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, all_point_lights, "point_light")
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           all_point_lights, "point_light")
                     .value());
 
-    auto culled_light_count_handle =
-            ctx.buffers.create(Buffer::from_value<u32>(allocator,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, 0u, "culled_point_light_count")
-                                       .value());
+    auto culled_light_count_handle = ctx.buffers.create(
+            Buffer::from_value<u32>(allocator,
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                    0u, "culled_point_light_count")
+                    .value());
 
     auto mapped_to_transforms = cubes | std::views::transform([](const Cube &cube) {
                                     glm::mat4 transform = glm::translate(
@@ -764,25 +766,26 @@ auto execute(int argc, char **argv) -> int {
 
     std::vector zeros_lights(light_count, 0u);
     std::vector zeros_groups(group_count, 0u);
-    auto flags_handle =
-            ctx.buffers.create(Buffer::from_slice<u32>(allocator,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, zeros_lights, "light_flags")
-                                       .value());
-    auto prefix_handle =
-            ctx.buffers.create(Buffer::from_slice<u32>(allocator,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, zeros_lights, "light_prefix")
-                                       .value());
+    auto flags_handle = ctx.buffers.create(Buffer::from_slice<u32>(allocator,
+                                                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                                   zeros_lights, "light_flags")
+                                                   .value());
+    auto prefix_handle = ctx.buffers.create(Buffer::from_slice<u32>(allocator,
+                                                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                                    zeros_lights, "light_prefix")
+                                                    .value());
 
-    auto compact_lights_handle = ctx.buffers.create(
-            Buffer::from_slice<PointLight>(allocator,
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                         VK_BUFFER_USAGE_TRANSFER_DST_BIT,all_point_lights_zero, "compact_lights")
-                    .value());
+    auto compact_lights_handle =
+            ctx.buffers.create(Buffer::from_slice<PointLight>(allocator,
+                                                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                                      VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                              all_point_lights_zero, "compact_lights")
+                                       .value());
 
     auto aligned_frame_buffer_handle = AlignedRingBuffer<FrameUBO>::create(ctx, "aligned_frame_ubo_buffer").value();
 
@@ -893,7 +896,7 @@ auto execute(int argc, char **argv) -> int {
                     FrameUBO ubo_data{};
                     const auto camera_pos = glm::vec3{15, 10, -20};
                     ubo_data.view = glm::lookAt(camera_pos, glm::vec3{0, 0, 0}, glm::vec3{0, 1, 0});
-                    ubo_data.projection = PerspectiveRH_ReverseZ_Inf(glm::radians(70.0f), aspect_ratio, 1.F);
+                    ubo_data.projection = PerspectiveRH_ReverseZ_Inf(glm::radians(70.0f), aspect_ratio, 0.1F);
                     const auto frustum_projection =
                             glm::perspectiveFov(glm::radians(70.0f), static_cast<float>(e.width),
                                                 static_cast<float>(e.height), 0.1F, 1000.F);
@@ -918,7 +921,15 @@ auto execute(int argc, char **argv) -> int {
                                       });
 
     u64 frame_index{};
+    auto last_frame_time = std::chrono::high_resolution_clock::now();
+    double dt = 0.0; // Delta time in seconds
+
     while (!glfwWindowShouldClose(window)) {
+        auto current_frame_time = std::chrono::high_resolution_clock::now();
+        dt = std::chrono::duration<double>(current_frame_time - last_frame_time).count();
+        last_frame_time = current_frame_time;
+
+
         glfwPollEvents();
 
         const u64 completed_now = std::min(tl_compute.completed, tl_graphics.completed);
@@ -952,19 +963,25 @@ auto execute(int argc, char **argv) -> int {
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
             aligned_frame_buffer_handle.write_field(ctx, bounded_frame_index, sun_direction_intensity, offset);
 
-            constexpr auto rotation_angle = glm::radians(0.5F);
+            constexpr auto rads_per_seconds = glm::radians(20.0F);
             {
                 ZoneScopedNC("Rotate cubes", 0xff0013);
-                std::for_each(std::execution::par_unseq, mapped_to_transforms.begin(), mapped_to_transforms.end(),
-                              [&random_offset = random_factors, &m = mapped_to_transforms](glm::mat4 &transform) {
-                                  // Apply rotation around Y-axis
-                                  size_t index = &transform - m.data();
-                                  const glm::vec3 &f = random_offset[index];
+                std::for_each(
+                        std::execution::par_unseq, mapped_to_transforms.begin(), mapped_to_transforms.end(),
+                        [d = dt, &random_offset = random_factors, &m = mapped_to_transforms](glm::mat4 &transform) {
+                            // Apply rotation around Y-axis
+                            size_t index = &transform - m.data();
+                            const glm::vec3 &f = random_offset[index];
 
-                                  transform = glm::rotate(transform, rotation_angle * f.y, glm::vec3(0.0f, 1.0f, 0.0f));
-                                  transform = glm::rotate(transform, rotation_angle * f.z, glm::vec3(0.0f, 0.0f, 1.0f));
-                                  transform = glm::rotate(transform, rotation_angle * f.x, glm::vec3(1.0f, 0.0f, 1.0f));
-                              });
+                            auto dt_scaled_vec = f * static_cast<float>(d);
+
+                            transform = glm::rotate(transform, rads_per_seconds * dt_scaled_vec.y,
+                                                    glm::vec3(0.0f, 1.0f, 0.0f));
+                            transform = glm::rotate(transform, rads_per_seconds * dt_scaled_vec.z,
+                                                    glm::vec3(0.0f, 0.0f, 1.0f));
+                            transform = glm::rotate(transform, rads_per_seconds * dt_scaled_vec.x,
+                                                    glm::vec3(1.0f, 0.0f, 0.0f));
+                        });
             }
             cubes_transform_handle->write_slot(ctx, bounded_frame_index, mapped_to_transforms);
         }
@@ -1082,7 +1099,7 @@ auto execute(int argc, char **argv) -> int {
                     vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
                     vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
                     vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
-                    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_CLOCKWISE);
                     vkCmdPushConstants(cmd, predepth_pipeline.layout,
                                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
 
@@ -1152,25 +1169,16 @@ auto execute(int argc, char **argv) -> int {
                                               .memoryBarrierCount = 1,
                                               .pMemoryBarriers = &mem_barrier};
 
-                    // ---------------------------------------------------------------------
-                    // Clear required buffers
-                    // ---------------------------------------------------------------------
                     fill_zeros(cmd, ctx.buffers, flags_handle, prefix_handle, compact_lights_handle,
                                culled_light_count_handle);
 
                     vkCmdPipelineBarrier2(cmd, &dep_info);
 
-                    // ---------------------------------------------------------------------
-                    // Pass 1: flags
-                    // ---------------------------------------------------------------------
                     const u32 gc = (light_count + THREADS_PER_GROUP - 1) / THREADS_PER_GROUP;
 
                     bind_and_dispatch(flags_pipeline, gc);
                     vkCmdPipelineBarrier2(cmd, &dep_info);
 
-                    // ---------------------------------------------------------------------
-                    // Pass 2: scan + compact (atomic reservation)
-                    // ---------------------------------------------------------------------
                     bind_and_dispatch(compact_pipeline, gc);
 
                     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
@@ -1231,7 +1239,7 @@ auto execute(int argc, char **argv) -> int {
                             .resolveMode = VK_RESOLVE_MODE_NONE,
                             .resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL,
                             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                            .clearValue = {.color = {0.0f, 0.0f, 0.0f, 1.0f}},
+                            .clearValue = {.color = {.float32={ 0.0f, 0.0f, 0.0f, 1.0f}}},
                     };
 
                     color_attachment.imageView = color->attachment_view;
@@ -1285,7 +1293,7 @@ auto execute(int argc, char **argv) -> int {
                     vkCmdSetScissor(cmd, 0, 1, &sc);
                     vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_EQUAL);
                     vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
-                    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_CLOCKWISE);
                     vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
                     vkCmdPushConstants(cmd, point_light_pipeline.layout,
                                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
@@ -1321,12 +1329,10 @@ auto execute(int argc, char **argv) -> int {
                     auto &&hdr = ctx.textures.get(offscreen_target_handle);
                     auto &&ldr = ctx.textures.get(tonemapped_target_handle);
 
-                    // Transition HDR for sampling
                     hdr->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                             {VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT});
 
-                    // Transition LDR for rendering
                     ldr->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
                             {VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
@@ -1337,7 +1343,7 @@ auto execute(int argc, char **argv) -> int {
                             .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                            .clearValue = {.color = {0, 0, 0, 1}},
+                            .clearValue = {.color = {.float32={0.0f, 0.0f, 0.0f, 1.0f}}},
                     };
 
                     VkRenderingInfo ri{
@@ -1575,7 +1581,7 @@ auto execute(int argc, char **argv) -> int {
     {
         ZoneScopedNC("batch_write_images", 0xFF00AA);
         std::array requests{image_operations::ImageWriteRequest{oth, "output.bmp"},
-                            image_operations::ImageWriteRequest{ph, "perlin.bmp"}};
+                            image_operations::ImageWriteRequest{ph, "perlin.bmp",}};
         image_operations::write_batch_to_disk(allocator, requests);
     }
 

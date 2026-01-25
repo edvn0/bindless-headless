@@ -1,7 +1,5 @@
 include_guard(GLOBAL)
 
-# --- CPM dependencies (yours, reorganized) ---
-
 CPMAddPackage(
   URI "gh:g-truc/glm#1.0.3"
   OPTIONS
@@ -61,16 +59,13 @@ CPMAddPackage(
   VERSION 3.3.0
 )
 
-# --- Non-CPM deps via find_package ---
 find_package(spdlog REQUIRED)
 
-# Tracy (optional)
 if (HAS_TRACY)
   set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
   CPMAddPackage(URI "gh:wolfpld/tracy#07147111b26ddaf43fb46fabbab42de4451fa567")
 endif()
 
-# Slang only needed for runtime path
 if (NOT ENGINE_OFFLINE_SHADERS)
   find_package(Slang CONFIG REQUIRED)
   set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")

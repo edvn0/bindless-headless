@@ -43,19 +43,24 @@ UV4 unpack_uv_8_8_8_8(uint packed)
     return r;
 }
 
-float4 unpackUnorm3x10_1x2(uint packed)
+float4 unpackSnorm3x10_1x2(uint packed)
 {
     // Extract 10-bit fields
-    uint x = packed & 0x3FF;           // bits 0..9
-    uint y = (packed >> 10) & 0x3FF;   // bits 10..19
-    uint z = (packed >> 20) & 0x3FF;   // bits 20..29
-    uint w = (packed >> 30) & 0x3;     // bits 30..31
+    int x = int(packed & 0x3FF);           // bits 0..9
+    int y = int((packed >> 10) & 0x3FF);   // bits 10..19
+    int z = int((packed >> 20) & 0x3FF);   // bits 20..29
+    int w = int((packed >> 30) & 0x3);     // bits 30..31
+
+    // Sign-extend 10-bit values
+    if (x >= 512) x -= 1024;
+    if (y >= 512) y -= 1024;
+    if (z >= 512) z -= 1024;
 
     // Convert to normalized floats
     return float4(
-        float(x) / 1023.0,
-        float(y) / 1023.0,
-        float(z) / 1023.0,
+        float(x) / 511.0,
+        float(y) / 511.0,
+        float(z) / 511.0,
         float(w) / 3.0
     );
 }

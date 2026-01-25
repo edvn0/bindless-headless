@@ -140,7 +140,7 @@ VertexOutput main_vs(
     o.world_pos = world_pos.xyz;
 
     // Normal
-    float3 local_normal = normalize(unpackUnorm3x10_1x2(input.normal).xyz);
+    float3 local_normal = normalize(unpackSnorm3x10_1x2(input.normal).xyz);
     o.normal = normalize(mul((float3x3)model, local_normal));
 
     // UVs
