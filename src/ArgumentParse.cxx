@@ -1,4 +1,7 @@
 #include "ArgumentParse.hxx"
+#include "Types.hxx"
+
+#include <volk.h>
 
  auto env_pipeline_cache_dir() -> std::optional<std::filesystem::path> {
     char* buf{};
@@ -11,6 +14,8 @@
     if (p.empty()) return std::nullopt;
     return p;
 }
+
+
 
  auto parse_cli(int argc, char** argv) -> CLIOptions {
     CLIOptions opt{};
@@ -36,7 +41,9 @@
     app.add_option("--vsync", opt.vsync, "Vsync'")->default_val(true);
 std::string new_cwd{};
      app.add_option("--cwd", new_cwd, "Set the current working directory")->default_val(std::string {});
-
+app.add_option("--msaa", opt.msaa, "MSAA sample count (1,2,4,8,16,32,64)")
+        ->default_val(1)
+        ->check(CLI::IsMember({1u, 2u, 4u, 8u, 16u, 32u, 64u}));
     app.allow_extras(false);
 
     try {

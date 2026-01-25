@@ -6,7 +6,6 @@
 #include <tl/expected.hpp>
 #include <type_traits>
 
-
 #include "Logger.hxx"
 #include "Types.hxx"
 
@@ -18,7 +17,6 @@ struct BufferCreateError {
 
     Type type{};
 };
-
 
 class Buffer {
     std::optional<u64> count;
@@ -35,9 +33,9 @@ public:
     [[nodiscard]] auto get_count() const noexcept -> u64 { return count.value_or(0); }
 
     template<typename T, std::size_t N = std::dynamic_extent>
-        requires std::is_trivial_v<T>
-    auto write_slice(VmaAllocator &alloc, std::span<T, N> slice, std::size_t offset = 0) {
-        auto *data = allocation_info.pMappedData;
+    requires std::is_trivial_v<T>
+    auto write_slice(VmaAllocator& alloc, std::span<T, N> slice, std::size_t offset = 0) {
+        auto* data = allocation_info.pMappedData;
         if (!data) {
             error("Trying to write into non-mapped memory. How?");
             return;
@@ -46,42 +44,53 @@ public:
             error("Trying to overwrite memory");
             return;
         }
-        const auto offset_data = static_cast<u8 *>(data) + offset;
+        const auto offset_data = static_cast<u8*>(data) + offset;
         std::memcpy(offset_data, slice.data(), slice.size_bytes());
         vk_check(vmaFlushAllocation(alloc, allocation(), static_cast<VkDeviceSize>(offset),
                                     static_cast<VkDeviceSize>(slice.size_bytes())));
     }
 
- template<typename T, std::size_t N = std::dynamic_extent>
+    template<typename T, std::size_t N = std::dynamic_extent>
     requires std::is_trivial_v<T>
-auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice, std::size_t offset = 0) -> void {
-    auto* data = allocation_info.pMappedData;
-    if (!data) {
-        error("Trying to write into non-mapped memory. How?");
-        return;
+    auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice, std::size_t offset = 0) -> void {
+        auto* data = allocation_info.pMappedData;
+        if (!data) {
+            error("Trying to write into non-mapped memory. How?");
+            return;
+        }
+        if (offset + slice.size_bytes() > size()) {
+            error("Trying to overwrite memory");
+            return;
+        }
+        auto* offset_data = static_cast<u8*>(data) + offset;
+        std::memcpy(offset_data, slice.data(), slice.size_bytes());
+        vk_check(vmaFlushAllocation(alloc,
+                                    allocation(),
+                                    static_cast<VkDeviceSize>(offset),
+                                    static_cast<VkDeviceSize>(slice.size_bytes())));
     }
-    if (offset + slice.size_bytes() > size()) {
-        error("Trying to overwrite memory");
-        return;
-    }
-    auto* offset_data = static_cast<u8*>(data) + offset;
-    std::memcpy(offset_data, slice.data(), slice.size_bytes());
-    vk_check(vmaFlushAllocation(alloc,
-                                allocation(),
-                                static_cast<VkDeviceSize>(offset),
-                                static_cast<VkDeviceSize>(slice.size_bytes())));
-}
 
     template<typename T>
-        requires std::is_trivial_v<T>
-    static auto from_slice(VmaAllocator &allocator, VkBufferCreateInfo ci, VmaAllocationCreateInfo ai,
+    requires std::is_trivial_v<T>
+    static auto from_slice(VmaAllocator& allocator, VkBufferCreateInfo ci, VmaAllocationCreateInfo ai,
                            const std::span<const T> slice, const std::string_view name)
             -> tl::expected<Buffer, BufferCreateError> {
         const auto size = slice.size_bytes();
+        
+        // Get physical device alignment requirements
+        VmaAllocatorInfo alloc_info{};
+        vmaGetAllocatorInfo(allocator, &alloc_info);
+        VkPhysicalDeviceProperties pd_props{};
+        vkGetPhysicalDeviceProperties(alloc_info.physicalDevice, &pd_props);
+        
+        // Align size to device requirements
+        const auto min_alignment = static_cast<u64>(pd_props.limits.minStorageBufferOffsetAlignment);
+        const auto aligned_size = (size + min_alignment - 1) & ~(min_alignment - 1);
+        
         ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         ci.pNext = nullptr;
         ci.flags = 0;
-        ci.size = size;
+        ci.size = aligned_size;
         ci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
         ai.usage = VMA_MEMORY_USAGE_AUTO;
@@ -98,21 +107,18 @@ auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice, std::size_t o
         buffer.count = slice.size();
         buffer.set_name(allocator, name);
 
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(allocator, &info);
-
         VkBufferDeviceAddressInfo dba_info{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-                .pNext = nullptr,
-                .buffer = buffer.vk_buffer,
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .pNext = nullptr,
+            .buffer = buffer.vk_buffer,
         };
 
-        buffer.dev_address = static_cast<DeviceAddress>(vkGetBufferDeviceAddress(info.device, &dba_info));
+        buffer.dev_address = static_cast<DeviceAddress>(vkGetBufferDeviceAddress(alloc_info.device, &dba_info));
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
-    return tl::unexpected{BufferCreateError{BufferCreateError::Type::CouldNotMapMemory}};
-}
+            return tl::unexpected{BufferCreateError{BufferCreateError::Type::CouldNotMapMemory}};
+        }
         std::memcpy(pointer, slice.data(), slice.size_bytes());
         vk_check(vmaFlushAllocation(allocator, buffer.allocation(), 0, VK_WHOLE_SIZE));
 
@@ -120,18 +126,28 @@ auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice, std::size_t o
     }
 
     template<typename T>
-        requires std::is_trivial_v<T>
-    static auto from_value(VmaAllocator &allocator, VkBufferCreateInfo ci, VmaAllocationCreateInfo ai, const T &value,
+    requires std::is_trivial_v<T>
+    static auto from_value(VmaAllocator& allocator, VkBufferCreateInfo ci, VmaAllocationCreateInfo ai, const T& value,
                            const std::string_view name) -> tl::expected<Buffer, BufferCreateError> {
         return from_slice<T>(allocator, ci, ai, std::span{&value, 1}, name);
     }
 
-    static auto zeroes(VmaAllocator &allocator, VkBufferCreateInfo ci, VmaAllocationCreateInfo ai,
+    static auto zeroes(VmaAllocator& allocator, VkBufferCreateInfo ci, VmaAllocationCreateInfo ai,
                        const std::size_t size, const std::string_view name) -> tl::expected<Buffer, BufferCreateError> {
+        // Get physical device alignment requirements
+        VmaAllocatorInfo alloc_info{};
+        vmaGetAllocatorInfo(allocator, &alloc_info);
+        VkPhysicalDeviceProperties pd_props{};
+        vkGetPhysicalDeviceProperties(alloc_info.physicalDevice, &pd_props);
+        
+        // Align size to device requirements
+        const auto min_alignment = static_cast<u64>(pd_props.limits.minStorageBufferOffsetAlignment);
+        const auto aligned_size = (size + min_alignment - 1) & ~(min_alignment - 1);
+        
         ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         ci.pNext = nullptr;
         ci.flags = 0;
-        ci.size = size;
+        ci.size = aligned_size;
         ci.usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
         ai.usage = VMA_MEMORY_USAGE_AUTO;
@@ -147,27 +163,24 @@ auto write_slice(VmaAllocator& alloc, std::span<const T, N> slice, std::size_t o
 
         buffer.set_name(allocator, name);
 
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(allocator, &info);
-
         VkBufferDeviceAddressInfo dba_info{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-                .pNext = nullptr,
-                .buffer = buffer.vk_buffer,
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .pNext = nullptr,
+            .buffer = buffer.vk_buffer,
         };
 
-        buffer.dev_address = static_cast<DeviceAddress>(vkGetBufferDeviceAddress(info.device, &dba_info));
+        buffer.dev_address = static_cast<DeviceAddress>(vkGetBufferDeviceAddress(alloc_info.device, &dba_info));
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
-    return tl::unexpected{BufferCreateError{BufferCreateError::Type::CouldNotMapMemory}};
-}
-        std::memset(pointer, 0, size);
+            return tl::unexpected{BufferCreateError{BufferCreateError::Type::CouldNotMapMemory}};
+        }
+        std::memset(pointer, 0, aligned_size);
         vk_check(vmaFlushAllocation(allocator, buffer.allocation(), 0, VK_WHOLE_SIZE));
 
         return buffer;
     }
 
 private:
-    auto set_name(VmaAllocator &, std::string_view) const -> void;
+    auto set_name(VmaAllocator&, std::string_view) const -> void;
 };

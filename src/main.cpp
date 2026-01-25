@@ -11,9 +11,9 @@
 #include "Pipelines.hxx"
 #include "Pool.hxx"
 #include "Reflection.hxx"
+#include "RenderContext.hxx"
 #include "ResizeableGraph.hxx"
 #include "Swapchain.hxx"
-#include "RenderContext.hxx"
 
 
 #include <GLFW/glfw3.h>
@@ -30,9 +30,67 @@
 
 #include "3PP/PerlinNoise.hpp"
 #include "Profiler.hxx"
+#include "vulkan/vulkan_core.h"
 
 #include <Windows.h>
 
+auto msaa_from_cli = [](u32 v) -> VkSampleCountFlagBits {
+    switch (v) {
+        case 1:
+            return VK_SAMPLE_COUNT_1_BIT;
+        case 2:
+            return VK_SAMPLE_COUNT_2_BIT;
+        case 4:
+            return VK_SAMPLE_COUNT_4_BIT;
+        case 8:
+            return VK_SAMPLE_COUNT_8_BIT;
+        case 16:
+            return VK_SAMPLE_COUNT_16_BIT;
+        case 32:
+            return VK_SAMPLE_COUNT_32_BIT;
+        case 64:
+            return VK_SAMPLE_COUNT_64_BIT;
+        case 0:
+            return VkSampleCountFlagBits{}; // treat 0 as "auto" if you want
+        default:
+            return VK_SAMPLE_COUNT_1_BIT; // or error out
+    }
+};
+
+auto clamp_msaa_samples = [](VkPhysicalDevice physical_device,
+                             VkSampleCountFlagBits requested) -> VkSampleCountFlagBits {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physical_device, &props);
+
+    const VkSampleCountFlags supported =
+            props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
+
+    // Always allow 1.
+    if (requested == VK_SAMPLE_COUNT_1_BIT) {
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+
+    // If requested is supported, accept it.
+    if ((supported & requested) != 0) {
+        return requested;
+    }
+
+    // Otherwise choose the next-lower supported sample count.
+    if ((supported & VK_SAMPLE_COUNT_64_BIT) && requested > VK_SAMPLE_COUNT_64_BIT)
+        return VK_SAMPLE_COUNT_64_BIT;
+    if ((supported & VK_SAMPLE_COUNT_32_BIT) && requested >= VK_SAMPLE_COUNT_32_BIT)
+        return VK_SAMPLE_COUNT_32_BIT;
+    if ((supported & VK_SAMPLE_COUNT_16_BIT) && requested >= VK_SAMPLE_COUNT_16_BIT)
+        return VK_SAMPLE_COUNT_16_BIT;
+    if ((supported & VK_SAMPLE_COUNT_8_BIT) && requested >= VK_SAMPLE_COUNT_8_BIT)
+        return VK_SAMPLE_COUNT_8_BIT;
+    if ((supported & VK_SAMPLE_COUNT_4_BIT) && requested >= VK_SAMPLE_COUNT_4_BIT)
+        return VK_SAMPLE_COUNT_4_BIT;
+    if ((supported & VK_SAMPLE_COUNT_2_BIT) && requested >= VK_SAMPLE_COUNT_2_BIT)
+        return VK_SAMPLE_COUNT_2_BIT;
+
+    return VK_SAMPLE_COUNT_1_BIT;
+};
 
 struct Mesh {
     BufferHandle vertex_buffer;
@@ -74,10 +132,14 @@ struct Vertex {
     uint32_t normal; // packed 10_10_10_2
     uint32_t uvs; // packed 8_8_8_8
 };
+static_assert(std::is_trivial_v<Vertex>);
+static_assert(sizeof(Vertex) == 20);
 
 
 // Generates a cube with 24 vertices and 36 indices using GLM packing
 inline void generate_cube(std::array<Vertex, 24> &out_vertices, std::array<uint16_t, 36> &out_indices) {
+    static_assert(std::is_trivial_v<Vertex>);
+
     struct Face {
         glm::vec3 normal;
         glm::vec3 v[4];
@@ -352,7 +414,7 @@ auto execute(int argc, char **argv) -> int {
 
     auto opts = parse_cli(argc, argv);
 
-    auto compiler = std::make_unique<Compiler>();
+    auto compiler = Compiler{};
 
     constexpr bool is_release = static_cast<bool>(IS_RELEASE);
 
@@ -368,7 +430,7 @@ auto execute(int argc, char **argv) -> int {
 
     if (auto name = vkGetInstanceProcAddr(instance.instance, "vkCmdDrawMeshTasksIndirectEXT");
         name && draw_mesh.empty()) {
-        draw_mesh = reinterpret_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(name);
+        draw_mesh = std::bit_cast<PFN_vkCmdDrawMeshTasksIndirectEXT>(name);
     }
 
     auto &&[physical_device, graphics_index, compute_index] = *could_choose;
@@ -411,23 +473,23 @@ auto execute(int argc, char **argv) -> int {
 
     std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
     std::array<ReflectionData, names.size()> reflection_data = {};
-    auto culling_code = compiler->compile_from_file("shaders/light_cull_compact_modern.slang", std::span(names),
-                                                    std::span(reflection_data));
+    auto culling_code = compiler.compile_from_file("shaders/light_cull_compact_modern.slang", std::span(names),
+                                                   std::span(reflection_data));
 
     std::array<const std::string_view, 2> point_light_names = {"main_vs", "main_fs"};
     std::array<ReflectionData, point_light_names.size()> point_light_reflection = {};
-    auto point_light_code = compiler->compile_from_file("shaders/point_light.slang", std::span(point_light_names),
-                                                        std::span(point_light_reflection));
+    auto point_light_code = compiler.compile_from_file("shaders/point_light.slang", std::span(point_light_names),
+                                                       std::span(point_light_reflection));
 
     std::array<const std::string_view, 2> predepth_names{"main_vs", "main_fs"};
     std::array<ReflectionData, predepth_names.size()> predepth_reflection{};
-    auto predepth_code = compiler->compile_from_file("shaders/predepth.slang", std::span(predepth_names),
-                                                     std::span(predepth_reflection));
+    auto predepth_code = compiler.compile_from_file("shaders/predepth.slang", std::span(predepth_names),
+                                                    std::span(predepth_reflection));
 
     std::array<const std::string_view, 2> tonemap_names{"vs_main", "fs_main"};
     std::array<ReflectionData, tonemap_names.size()> tonemap_reflection{};
-    auto tonemap_code = compiler->compile_from_file("shaders/tonemap.slang", std::span(tonemap_names),
-                                                    std::span(tonemap_reflection));
+    auto tonemap_code = compiler.compile_from_file("shaders/tonemap.slang", std::span(tonemap_names),
+                                                   std::span(tonemap_reflection));
 
     auto allocator = create_allocator(instance.instance, physical_device, device);
 
@@ -436,16 +498,22 @@ auto execute(int argc, char **argv) -> int {
 
     BindlessSet bindless{};
     bindless.init(device, query_bindless_caps(physical_device), 8u, 8u, 8u, 0u);
-
     bindless.grow_if_needed(300u, 40u, 32u, 8u);
+
+
+    const VkSampleCountFlagBits requested = msaa_from_cli(opts.msaa);
+    const VkSampleCountFlagBits msaa_samples = clamp_msaa_samples(physical_device, requested);
+    info("MSAA requested: {}, Engine supplied: {}", static_cast<u32>(requested), static_cast<u32>(msaa_samples));
+
 
     auto &&[flags_pipeline, compact_pipeline] = create_compute_pipelines(device, *pipeline_cache, bindless.layout,
                                                                          std::span(culling_code), std::span(names));
 
-    auto point_light_pipeline = create_mesh_pipeline(device, *pipeline_cache, bindless.layout, point_light_code.at(0),
-                                                     point_light_code.at(1), VK_FORMAT_R32G32B32A32_SFLOAT);
+    auto point_light_pipeline =
+            create_mesh_pipeline(device, *pipeline_cache, bindless.layout, point_light_code.at(0),
+                                 point_light_code.at(1), VK_FORMAT_R32G32B32A32_SFLOAT, msaa_samples);
     auto predepth_pipeline = create_predepth_pipeline(device, *pipeline_cache, bindless.layout, predepth_code.at(0),
-                                                      predepth_code.at(1), VK_FORMAT_D32_SFLOAT);
+                                                      predepth_code.at(1), VK_FORMAT_D32_SFLOAT, msaa_samples);
 
     auto tonemap_pipeline = create_tonemap_pipeline(device, *pipeline_cache, bindless.layout, tonemap_code.at(0),
                                                     tonemap_code.at(1), "vs_main", "fs_main", VK_FORMAT_R8G8B8A8_SRGB);
@@ -537,17 +605,20 @@ auto execute(int argc, char **argv) -> int {
     }
 
     ctx.create_texture(
-            create_offscreen_target(allocator, opts.width, opts.height, VK_FORMAT_R8G8B8A8_UNORM, "white-texture"));
+            create_offscreen_target(allocator, opts.width, opts.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "white-texture"));
     ctx.create_texture(
-            create_offscreen_target(allocator, opts.width, opts.height, VK_FORMAT_R8G8B8A8_UNORM, "black-texture"));
+            create_offscreen_target(allocator, opts.width, opts.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "black-texture"));
 
     const auto noise = generate_perlin(2048, 2048);
     auto perlin_handle = ctx.create_texture(create_image_from_span_v2(
             allocator, command_context, 2048u, 2048u, VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
 
+
     TextureHandle offscreen_target_handle;
+    TextureHandle msaa_offscreen_target_handle;
     TextureHandle tonemapped_target_handle;
     TextureHandle offscreen_depth_target_handle;
+    TextureHandle msaa_offscreen_depth_target_handle;
 
     ctx.create_sampler(
             VkSamplerCreateInfo{
@@ -693,14 +764,7 @@ auto execute(int argc, char **argv) -> int {
         f = glm::vec3(dist(rng), dist(rng), dist(rng));
     }
     auto cubes_transform_handle =
-            ctx.buffers.create(Buffer::from_slice<glm::mat4>(allocator,
-                                                             VkBufferCreateInfo{
-                                                                     .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                                              VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                             },
-                                                             VmaAllocationCreateInfo{}, mapped_to_transforms, "cubes")
-                                       .value());
+            AlignedRingBuffer<glm::mat4>::create(ctx, mapped_to_transforms.size(), 0u, "transforms");
 
     auto instance_count = static_cast<u32>(cubes.size());
 
@@ -720,7 +784,8 @@ auto execute(int argc, char **argv) -> int {
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
                                                        VkBufferCreateInfo{
                                                                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                        },
                                                        VmaAllocationCreateInfo{}, zeros_lights, "light_flags")
                                        .value());
@@ -728,18 +793,20 @@ auto execute(int argc, char **argv) -> int {
             ctx.buffers.create(Buffer::from_slice<u32>(allocator,
                                                        VkBufferCreateInfo{
                                                                .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                        },
                                                        VmaAllocationCreateInfo{}, zeros_lights, "light_prefix")
                                        .value());
 
     auto compact_lights_handle = ctx.buffers.create(
-            Buffer::from_slice<PointLight>(
-                    allocator,
-                    VkBufferCreateInfo{
-                            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    },
-                    VmaAllocationCreateInfo{}, all_point_lights_zero, "compact_lights")
+            Buffer::from_slice<PointLight>(allocator,
+                                           VkBufferCreateInfo{
+                                                   .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                           },
+                                           VmaAllocationCreateInfo{}, all_point_lights_zero, "compact_lights")
                     .value());
 
     auto aligned_frame_buffer_handle = AlignedRingBuffer<FrameUBO>::create(ctx, "aligned_frame_ubo_buffer").value();
@@ -749,8 +816,6 @@ auto execute(int argc, char **argv) -> int {
     auto prefix_addr = ctx.device_address(prefix_handle);
     auto compact_addr = ctx.device_address(compact_lights_handle);
     auto culled_light_count_addr = ctx.device_address(culled_light_count_handle);
-
-    auto cube_transforms_addr = ctx.device_address(cubes_transform_handle);
 
     auto stats = FrameStats{};
     FrameStats gpu_compute_ms{};
@@ -818,43 +883,53 @@ auto execute(int argc, char **argv) -> int {
                     const auto old_tonemap = tonemapped_target_handle;
 
                     tonemapped_target_handle = ctx.create_texture(create_offscreen_target(
-                            allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_SRGB, "tonemapped"));
+                            allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_SRGB, {}, "tonemapped"));
                     destroy(ctx, old_tonemap, resize_context.retire_value);
                 });
 
-        const auto offscreen_node =
-                resize_graph.add_node("offscreen_targets", [&](VkExtent2D e, const ResizeContext &resize_ctx) {
-                    const auto old_color = offscreen_target_handle;
-                    const auto old_depth = offscreen_depth_target_handle;
+        const auto offscreen_node = resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
+                                                                                   const ResizeContext &resize_ctx) {
+            const auto old_color = offscreen_target_handle;
+            const auto old_depth = offscreen_depth_target_handle;
+            const auto old_msaa_color = msaa_offscreen_target_handle;
+            const auto old_msaa_depth = msaa_offscreen_depth_target_handle;
 
-                    offscreen_target_handle = ctx.create_texture(create_offscreen_target(
-                            allocator, e.width, e.height, VK_FORMAT_R32G32B32A32_SFLOAT, "offscreen"));
+            offscreen_target_handle = ctx.create_texture(create_offscreen_target(
+                    allocator, e.width, e.height, VK_FORMAT_R32G32B32A32_SFLOAT, {}, "offscreen"));
+            offscreen_depth_target_handle = ctx.create_texture(create_depth_target(
+                    allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, msaa_samples, false, "offscreen_depth"));
+            msaa_offscreen_target_handle = ctx.create_texture(
+                    create_offscreen_target(allocator, e.width, e.height, VK_FORMAT_R32G32B32A32_SFLOAT, msaa_samples,
+                                            {.sampled_storage_transfer = 0b000}, "msaa_offscreen"));
+            msaa_offscreen_depth_target_handle = ctx.create_texture(create_depth_target(
+                    allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, msaa_samples, false, "msaa_offscreen_depth"));
 
-                    offscreen_depth_target_handle = ctx.create_texture(
-                            create_depth_target(allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, "offscreen_depth"));
 
-
-                    destroy(ctx, old_color, resize_ctx.retire_value);
-                    destroy(ctx, old_depth, resize_ctx.retire_value);
-                });
-
-        const auto uniforms_node = resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D e, const ResizeContext & resize_context) {
-            const float aspect_ratio = static_cast<float>(e.width) / static_cast<float>(e.height);
-
-            FrameUBO ubo_data{};
-            const auto camera_pos = glm::vec3{15, 10, -20};
-            ubo_data.view = glm::lookAt(camera_pos, glm::vec3{0, 0, 0}, glm::vec3{0, 1, 0});
-            ubo_data.projection = PerspectiveRH_ReverseZ_Inf(glm::radians(70.0f), aspect_ratio, 0.1F);
-            const auto frustum_projection = glm::perspectiveFov(glm::radians(70.0f), static_cast<float>(e.width),
-                                                                static_cast<float>(e.height), 0.1F, 1000.F);
-            ubo_data.inv_projection = glm::inverse(frustum_projection);
-            ubo_data.view_projection = ubo_data.projection * ubo_data.view;
-            ubo_data.camera_position = glm::vec4{camera_pos, 1.0};
-            const auto planes = extract_frustum_planes(ubo_data.inv_projection);
-            ubo_data.frustum_planes = {planes[0], planes[1], planes[2], planes[3], planes[4], planes[5]};
-
-aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
+            destroy(ctx, old_color, resize_ctx.retire_value);
+            destroy(ctx, old_depth, resize_ctx.retire_value);
+            destroy(ctx, old_msaa_color, resize_ctx.retire_value);
+            destroy(ctx, old_msaa_depth, resize_ctx.retire_value);
         });
+
+        const auto uniforms_node =
+                resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D e, const ResizeContext &resize_context) {
+                    const float aspect_ratio = static_cast<float>(e.width) / static_cast<float>(e.height);
+
+                    FrameUBO ubo_data{};
+                    const auto camera_pos = glm::vec3{15, 10, -20};
+                    ubo_data.view = glm::lookAt(camera_pos, glm::vec3{0, 0, 0}, glm::vec3{0, 1, 0});
+                    ubo_data.projection = PerspectiveRH_ReverseZ_Inf(glm::radians(70.0f), aspect_ratio, 0.0001F);
+                    const auto frustum_projection =
+                            glm::perspectiveFov(glm::radians(70.0f), static_cast<float>(e.width),
+                                                static_cast<float>(e.height), 0.1F, 1000.F);
+                    ubo_data.inv_projection = glm::inverse(frustum_projection);
+                    ubo_data.view_projection = ubo_data.projection * ubo_data.view;
+                    ubo_data.camera_position = glm::vec4{camera_pos, 1.0};
+                    const auto planes = extract_frustum_planes(ubo_data.inv_projection);
+                    ubo_data.frustum_planes = {planes[0], planes[1], planes[2], planes[3], planes[4], planes[5]};
+
+                    aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
+                });
 
 
         resize_graph.add_dependency(tonemapped_node, offscreen_node);
@@ -895,7 +970,7 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
         const auto bounded_frame_index = static_cast<u32>(frame_index % frames_in_flight);
 
         {
-            const double t = time_total * 0.2f;
+            const double t = glm::radians(73.0f);
             const glm::vec3 sun_dir = glm::normalize(glm::vec3(cos(t), sin(t), -0.4f));
 
             auto sun_direction_intensity = glm::vec4(sun_dir, 1.5f);
@@ -905,7 +980,7 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
             constexpr auto rotation_angle = glm::radians(0.5F);
             {
                 ZoneScopedNC("Rotate cubes", 0xff0013);
-                std::for_each(std::execution::par, mapped_to_transforms.begin(), mapped_to_transforms.end(),
+                std::for_each(std::execution::par_unseq, mapped_to_transforms.begin(), mapped_to_transforms.end(),
                               [&random_offset = random_factors, &m = mapped_to_transforms](glm::mat4 &transform) {
                                   // Apply rotation around Y-axis
                                   size_t index = &transform - m.data();
@@ -916,8 +991,7 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
                                   transform = glm::rotate(transform, rotation_angle * f.x, glm::vec3(1.0f, 0.0f, 1.0f));
                               });
             }
-            auto *buffer = ctx.buffers.get(cubes_transform_handle);
-            buffer->write_slice(ctx.allocator, std::span(mapped_to_transforms));
+            cubes_transform_handle->write_slot(ctx, bounded_frame_index, mapped_to_transforms);
         }
 
         bindless.repopulate_if_needed(ctx.textures, ctx.samplers);
@@ -984,8 +1058,10 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "Predepth");
-                    auto &&depth = ctx.textures.get(offscreen_depth_target_handle);
+                    auto depth_handle = (msaa_samples != VK_SAMPLE_COUNT_1_BIT) ? msaa_offscreen_depth_target_handle
+                                                                                : offscreen_depth_target_handle;
 
+                    auto &&depth = ctx.textures.get(depth_handle);
                     auto &&[verts, idx] = util::get_mesh_buffers(ctx, cube_predepth_mesh);
 
                     depth->transition_if_not_initialised(
@@ -994,7 +1070,7 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
 
                     VkRenderingAttachmentInfo depth_attachment{
                             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                            .imageView = depth->sampled_view,
+                            .imageView = depth->attachment_view,
                             .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -1013,7 +1089,7 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
 
                     PredepthPushConstants pc = {
                             .ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
-                            .transforms = cube_transforms_addr,
+                            .transforms = cubes_transform_handle->slot_device_address(bounded_frame_index),
                     };
 
                     VkViewport vp{
@@ -1021,13 +1097,17 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
                             .y = static_cast<float>(frame_extent.height),
                             .width = static_cast<float>(frame_extent.width),
                             .height = -static_cast<float>(frame_extent.height),
-                            .minDepth = 1.0f,
-                            .maxDepth = 0.0f,
+                            .minDepth = 0.0f,
+                            .maxDepth = 1.0f,
                     };
 
                     VkRect2D sc{.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
                     vkCmdSetViewport(cmd, 0, 1, &vp);
                     vkCmdSetScissor(cmd, 0, 1, &sc);
+                    vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
+                    vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
+                    vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
+                    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
                     vkCmdPushConstants(cmd, predepth_pipeline.layout,
                                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
 
@@ -1142,9 +1222,15 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "GBuffer");
                     auto &&[graphics_perf_query, graphics_stats] = ctx.query_pools.get_multiple(
                             graphics_query_pool[bounded_frame_index], graphics_stats_pool[bounded_frame_index]);
-                    auto &&[offscreen, depth] =
-                            ctx.textures.get_multiple(offscreen_target_handle, offscreen_depth_target_handle);
                     auto &&[verts, idx] = util::get_mesh_buffers(ctx, cube_mesh);
+
+                    const bool msaa_enabled = (msaa_samples != VK_SAMPLE_COUNT_1_BIT);
+
+                    auto &&resolve = ctx.textures.get(offscreen_target_handle);
+
+                    auto *color = msaa_enabled ? ctx.textures.get(msaa_offscreen_target_handle) : resolve;
+                    auto *depth = msaa_enabled ? ctx.textures.get(msaa_offscreen_depth_target_handle)
+                                               : ctx.textures.get(offscreen_depth_target_handle);
 
                     const VkQueryPool &graphics_perf_pool = graphics_perf_query->pool;
                     const VkQueryPool &graphics_pool_for_stats = graphics_stats->pool;
@@ -1154,22 +1240,38 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
                     vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, graphics_perf_pool, 0);
                     vkCmdBeginQuery(cmd, graphics_pool_for_stats, 0, 0);
 
-                    offscreen->transition_if_not_initialised(
+                    resolve->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT});
+                    color->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
                             {VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    depth->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT});
 
                     VkRenderingAttachmentInfo color_attachment{
                             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                            .imageView = offscreen->sampled_view,
                             .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                            .resolveMode = VK_RESOLVE_MODE_NONE,
+                            .resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL,
                             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                             .clearValue = {.color = {0.0f, 0.0f, 0.0f, 1.0f}},
                     };
 
+                    color_attachment.imageView = color->attachment_view;
+                    color_attachment.storeOp =
+                            msaa_enabled ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+
+                    if (msaa_enabled) {
+                        color_attachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+                        color_attachment.resolveImageView = resolve->attachment_view;
+                        color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    }
+
                     VkRenderingAttachmentInfo depth_attachment{
                             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                            .imageView = depth->sampled_view,
+                            .imageView = depth->attachment_view,
                             .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
                             .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
                             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -1190,7 +1292,7 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
 
                     const RenderingPushConstants pc{
                             .ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
-                            .transforms = cube_transforms_addr,
+                            .transforms = cubes_transform_handle->slot_device_address(bounded_frame_index),
                     };
 
                     VkViewport vp{
@@ -1198,14 +1300,18 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
                             .y = static_cast<float>(frame_extent.height),
                             .width = static_cast<float>(frame_extent.width),
                             .height = -static_cast<float>(frame_extent.height),
-                            .minDepth = 1.0f,
-                            .maxDepth = 0.0f,
+                            .minDepth = 0.0f,
+                            .maxDepth = 1.0f,
                     };
 
                     VkRect2D sc{.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
 
                     vkCmdSetViewport(cmd, 0, 1, &vp);
                     vkCmdSetScissor(cmd, 0, 1, &sc);
+                    vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_EQUAL);
+                    vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
+                    vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                    vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
                     vkCmdPushConstants(cmd, point_light_pipeline.layout,
                                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
                     vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT16);
@@ -1287,8 +1393,8 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
                             .y = static_cast<float>(frame_extent.height),
                             .width = static_cast<float>(frame_extent.width),
                             .height = -static_cast<float>(frame_extent.height),
-                            .minDepth = 1.0f,
-                            .maxDepth = 0.0f,
+                            .minDepth = 0.0f,
+                            .maxDepth = 1.0f,
                     };
 
                     VkRect2D sc{.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
@@ -1498,7 +1604,6 @@ aligned_frame_buffer_handle.write_all_slots(resize_context.ctx, ubo_data);
         image_operations::write_batch_to_disk(allocator, requests);
     }
 
-    compiler.reset();
     pipeline_cache.reset();
     ctx.clear_all();
 

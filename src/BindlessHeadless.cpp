@@ -19,6 +19,74 @@ auto vk_check(VkResult result) -> void {
     }
 }
 
+namespace {
+    auto format_supports_storage_image(VkPhysicalDevice physical_device, VkFormat format, VkImageTiling tiling)
+            -> bool {
+        // Prefer VkFormatProperties3 (core in Vulkan 1.3, also via VK_KHR_format_feature_flags2).
+        VkFormatProperties3 props3{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3, .pNext = nullptr};
+        VkFormatProperties2 props2{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &props3};
+        vkGetPhysicalDeviceFormatProperties2(physical_device, format, &props2);
+
+        const VkFormatFeatureFlags2 want = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
+
+        if (tiling == VK_IMAGE_TILING_OPTIMAL) {
+            return (props3.optimalTilingFeatures & want) != 0;
+        }
+        if (tiling == VK_IMAGE_TILING_LINEAR) {
+            return (props3.linearTilingFeatures & want) != 0;
+        }
+        return false;
+    }
+
+    auto make_color_image_usage(VkPhysicalDevice physical_device, VkFormat format, VkSampleCountFlagBits samples,
+                                bool want_sampled, bool want_storage, bool want_transfer) -> VkImageUsageFlags {
+        const bool is_msaa = samples != VK_SAMPLE_COUNT_1_BIT;
+
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+        if (!is_msaa) {
+            if (want_sampled) {
+                usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+            }
+
+            if (want_transfer) {
+                usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            }
+
+            if (want_storage) {
+                if (format_supports_storage_image(physical_device, format, VK_IMAGE_TILING_OPTIMAL)) {
+                    usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+                }
+            }
+        } else {
+            // Should we allow sampling from MSAA images? Nah.
+            (void) want_sampled;
+            (void) want_transfer;
+            (void) want_storage;
+        }
+
+        return usage;
+    }
+
+    auto make_depth_image_usage(VkSampleCountFlagBits samples, bool want_sampled) -> VkImageUsageFlags {
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+        // Same logic: only sample depth if it's single-sample unless you intentionally do MSAA depth sampling.
+        if (samples == VK_SAMPLE_COUNT_1_BIT && want_sampled) {
+            usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        }
+        return usage;
+    }
+
+    auto choose_depth_aspect(VkFormat format) -> VkImageAspectFlags {
+        VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT) {
+            aspect_mask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+        }
+        return aspect_mask;
+    }
+} // namespace
+
 namespace destruction {
     auto instance(InstanceWithDebug const &inst) -> void {
         if (inst.instance == VK_NULL_HANDLE) {
@@ -175,149 +243,131 @@ auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_vie
     return sampler;
 }
 
-auto create_offscreen_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format, std::string_view name)
-        -> OffscreenTarget {
+auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
+                             TargetSamplerConfiguration config, std::string_view name) -> OffscreenTarget {
     OffscreenTarget t{};
     t.width = width;
     t.height = height;
     t.format = format;
+    VmaAllocatorInfo ai{};
+    vmaGetAllocatorInfo(alloc, &ai);
 
-    VkImageUsageFlags flags = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                              VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    auto want_sampled = config.sampled_storage_transfer[0];
+    auto want_storage = config.sampled_storage_transfer[1];
+    auto want_transfer = config.sampled_storage_transfer[2];
+    const VkImageUsageFlags usage =
+            make_color_image_usage(ai.physicalDevice, format, samples, want_sampled, want_storage, want_transfer);
 
-    if (format != VK_FORMAT_R8G8B8A8_SRGB) {
-        flags |= VK_IMAGE_USAGE_STORAGE_BIT;
-    }
+    VkImageCreateInfo ici{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = format,
+            .extent = {width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = samples,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = usage,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
 
-    VkImageCreateInfo ici{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                          .pNext = nullptr,
-                          .flags = 0,
-                          .imageType = VK_IMAGE_TYPE_2D,
-                          .format = format,
-                          .extent = {width, height, 1},
-                          .mipLevels = 1,
-                          .arrayLayers = 1,
-                          .samples = VK_SAMPLE_COUNT_1_BIT,
-                          .tiling = VK_IMAGE_TILING_OPTIMAL,
-                          .usage = flags,
-                          .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                          .queueFamilyIndexCount = 0,
-                          .pQueueFamilyIndices = nullptr,
-                          .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
-
-    VmaAllocationCreateInfo aci{};
-    aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    VmaAllocationCreateInfo aci{.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     vk_check(vmaCreateImage(alloc, &ici, &aci, &t.image, &t.allocation, nullptr));
 
-    VmaAllocatorInfo info{};
-    vmaGetAllocatorInfo(alloc, &info);
 
-    // Create sampled view (for reading in shaders with samplers)
-    VkImageViewCreateInfo sampled_vci{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                      .pNext = nullptr,
-                                      .flags = 0,
-                                      .image = t.image,
-                                      .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                      .format = format,
-                                      .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                                                     VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
-                                      .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                           .baseMipLevel = 0,
-                                                           .levelCount = 1,
-                                                           .baseArrayLayer = 0,
-                                                           .layerCount = 1}};
-    vk_check(vkCreateImageView(info.device, &sampled_vci, nullptr, &t.sampled_view));
+    VkImageViewCreateInfo vci{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = t.image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = format,
+            .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                           VK_COMPONENT_SWIZZLE_IDENTITY},
+            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                 .baseMipLevel = 0,
+                                 .levelCount = 1,
+                                 .baseArrayLayer = 0,
+                                 .layerCount = 1},
+    };
 
-    if (format != VK_FORMAT_R8G8B8A8_SRGB) {
-        // Create storage view (for reading/writing in compute shaders)
-        VkImageViewCreateInfo storage_vci{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                          .pNext = nullptr,
-                                          .flags = 0,
-                                          .image = t.image,
-                                          .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                          .format = format,
-                                          .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                                                         VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
-                                          .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                               .baseMipLevel = 0,
-                                                               .levelCount = 1,
-                                                               .baseArrayLayer = 0,
-                                                               .layerCount = 1}};
-        vk_check(vkCreateImageView(info.device, &storage_vci, nullptr, &t.storage_view));
-        auto storage_view_name = std::format("{}_storage_view", name);
-        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, storage_view_name);
-    } else {
-        t.storage_view = VK_NULL_HANDLE;
+    // Attachment view always (because usage always contains COLOR_ATTACHMENT_BIT in make_color_image_usage()).
+    vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.attachment_view));
+
+    // Sampled view only if legal/declared.
+    if ((usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0) {
+        vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.sampled_view));
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
     }
 
+    // Storage view only if legal/declared.
+    if ((usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0) {
+        vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.storage_view));
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
+    }
 
-    auto sampled_view_name = std::format("{}_sampled_view", name);
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
-    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, sampled_view_name);
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
     vmaSetAllocationName(alloc, t.allocation, name.data());
 
     return t;
 }
 
-auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format, std::string_view name)
-        -> OffscreenTarget {
+auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
+                         bool want_sampled, // usually true only for single-sample depth you intend to sample later
+                         std::string_view name) -> OffscreenTarget {
     OffscreenTarget t{};
     t.width = width;
     t.height = height;
     t.format = format;
 
-    VkImageCreateInfo ici{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                          .pNext = nullptr,
-                          .flags = 0,
-                          .imageType = VK_IMAGE_TYPE_2D,
-                          .format = format,
-                          .extent = {width, height, 1},
-                          .mipLevels = 1,
-                          .arrayLayers = 1,
-                          .samples = VK_SAMPLE_COUNT_1_BIT,
-                          .tiling = VK_IMAGE_TILING_OPTIMAL,
-                          .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                          .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                          .queueFamilyIndexCount = 0,
-                          .pQueueFamilyIndices = nullptr,
-                          .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+    const VkImageUsageFlags usage = make_depth_image_usage(samples, want_sampled);
 
-    VmaAllocationCreateInfo aci{};
-    aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    VkImageCreateInfo ici{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = format,
+            .extent = {width, height, 1},
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = samples,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = usage,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+
+    VmaAllocationCreateInfo aci{.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     vk_check(vmaCreateImage(alloc, &ici, &aci, &t.image, &t.allocation, nullptr));
 
-    VmaAllocatorInfo info{};
-    vmaGetAllocatorInfo(alloc, &info);
+    VmaAllocatorInfo ai{};
+    vmaGetAllocatorInfo(alloc, &ai);
 
-    // Determine aspect mask based on format
-    VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    if (format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT) {
-        aspect_mask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    const VkImageAspectFlags aspect = choose_depth_aspect(format);
+
+    VkImageViewCreateInfo vci{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = t.image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = format,
+            .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                           VK_COMPONENT_SWIZZLE_IDENTITY},
+            .subresourceRange =
+                    {.aspectMask = aspect, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1},
+    };
+
+    // Attachment view always.
+    vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.attachment_view));
+
+    // Sampled view only if SAMPLED usage was requested and allowed by make_depth_image_usage.
+    if ((usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0) {
+        vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.sampled_view));
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
     }
-
-    // Create depth view (for use as depth attachment)
-    VkImageViewCreateInfo depth_vci{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                    .pNext = nullptr,
-                                    .flags = 0,
-                                    .image = t.image,
-                                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                    .format = format,
-                                    .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                                                   VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY},
-                                    .subresourceRange = {.aspectMask = aspect_mask,
-                                                         .baseMipLevel = 0,
-                                                         .levelCount = 1,
-                                                         .baseArrayLayer = 0,
-                                                         .layerCount = 1}};
-    vk_check(vkCreateImageView(info.device, &depth_vci, nullptr, &t.sampled_view));
 
     t.storage_view = VK_NULL_HANDLE;
 
-    // Set debug names
-    auto depth_view_name = std::format("{}_depth_view", name);
-
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
-    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, depth_view_name);
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
     vmaSetAllocationName(alloc, t.allocation, name.data());
 
     return t;
@@ -326,7 +376,7 @@ auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat for
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
                                std::string_view name) -> OffscreenTarget {
-    auto t = create_offscreen_target(alloc, width, height, format, name);
+    auto t = create_offscreen_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, {}, name);
 
     if (data.empty()) {
         return t;

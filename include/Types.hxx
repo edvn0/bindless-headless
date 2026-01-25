@@ -44,6 +44,7 @@ struct OffscreenTarget {
     VkImage image{};
     VkImageView sampled_view{};
     VkImageView storage_view{};
+    VkImageView attachment_view{};
     VkFormat format{};
     VmaAllocation allocation{};
     u32 width{};

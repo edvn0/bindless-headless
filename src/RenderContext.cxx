@@ -51,28 +51,55 @@ auto RenderContext::clear_all() -> void {
     query_pools.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
 }
 
+namespace {
+  template <std::size_t N>
+auto destroy_unique_image_views(VkDevice device, std::array<VkImageView, N> views) -> void {
+    std::ranges::sort(views);
+    VkImageView last = VK_NULL_HANDLE;
+    for (VkImageView v : views) {
+        if (v == VK_NULL_HANDLE) {
+            continue;
+        }
+        if (v == last) {
+            continue;
+        }
 
-auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void {
+        vkDestroyImageView(device, v, nullptr);
+        last = v;
+    }
+}
+}
+
+auto destroy(RenderContext& ctx, TextureHandle handle, u64 retire_value) -> void {
     auto impl = ctx.textures.take(handle);
     if (!impl) {
         return;
     }
 
-    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, img = std::move(*impl)]() {
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(alloc, &info);
-        if (img.storage_view == img.sampled_view && (img.sampled_view != VK_NULL_HANDLE && img.storage_view != VK_NULL_HANDLE)) {
-            vkDestroyImageView(info.device, img.sampled_view, nullptr);
-        } else {
-        if (img.storage_view)
-            vkDestroyImageView(info.device, img.storage_view, nullptr);
-        if (img.sampled_view)
-            vkDestroyImageView(info.device, img.sampled_view, nullptr);
+    ctx.destroy_queue.enqueue(
+        retire_value,
+        [alloc = ctx.allocator, img = std::move(*impl)]() mutable {
+            VmaAllocatorInfo info{};
+            vmaGetAllocatorInfo(alloc, &info);
+
+            destroy_unique_image_views(
+                info.device,
+                std::array<VkImageView, 3>{
+                    img.attachment_view,
+                    img.sampled_view,
+                    img.storage_view,
+                }
+            );
+
+            if (img.image != VK_NULL_HANDLE) {
+                vmaDestroyImage(alloc, img.image, img.allocation);
+                img.image = VK_NULL_HANDLE;
+                img.allocation = VK_NULL_HANDLE;
+            }
         }
-        if (img.image)
-            vmaDestroyImage(alloc, img.image, img.allocation);
-    });
+    );
 }
+
 
 auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void {
     auto impl = ctx.samplers.take(handle);

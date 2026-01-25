@@ -17,6 +17,7 @@ struct CLIOptions {
     std::uint32_t height {720};
     std::uint32_t light_count {50000};
     bool vsync {false};
+    std::uint32_t msaa {1};
 };
 
  auto parse_cli(int argc, char** argv) -> CLIOptions;

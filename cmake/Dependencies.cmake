@@ -29,6 +29,7 @@ CPMAddPackage(
 
 CPMAddPackage(
   URI "gh:TartanLlama/expected@1.3.1"
+  OPTIONS "BUILD_TESTING OFF"
 )
 
 CPMAddPackage(

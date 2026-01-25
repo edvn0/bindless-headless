@@ -14,6 +14,22 @@ struct BindlessCaps {
     u32 max_accel_structs;
 };
 
+namespace detail {
+
+    inline auto is_depth_format(VkFormat f) -> bool {
+        switch (f) {
+            case VK_FORMAT_D16_UNORM:
+            case VK_FORMAT_D32_SFLOAT:
+            case VK_FORMAT_D16_UNORM_S8_UINT:
+            case VK_FORMAT_D24_UNORM_S8_UINT:
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+        return true;
+        default:
+        return false;
+    }
+}
+}
+
 inline auto query_bindless_caps(VkPhysicalDevice pd) -> BindlessCaps {
     VkPhysicalDeviceVulkan12Properties props12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
 
@@ -121,42 +137,55 @@ struct BindlessSet {
         image_infos.reserve(texture_count * 2 + sampler_count);
 
         textures.for_each_live([&](auto handle, auto &texture) {
-            auto idx = handle.index();
+    const u32 idx = handle.index();
 
-            if (texture.sampled_view != VK_NULL_HANDLE) {
-                image_infos.push_back({.sampler = VK_NULL_HANDLE,
-                                       .imageView = texture.sampled_view,
-                                       .imageLayout = VK_IMAGE_LAYOUT_GENERAL});
+    if (texture.sampled_view != VK_NULL_HANDLE) {
+        const VkImageLayout layout =
+            (detail::is_depth_format(texture.format))
+                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-                writes.push_back({.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                  .pNext = nullptr,
-                                  .dstSet = set,
-                                  .dstBinding = 0,
-                                  .dstArrayElement = idx,
-                                  .descriptorCount = 1,
-                                  .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                                  .pImageInfo = &image_infos.back(),
-                                  .pBufferInfo = nullptr,
-                                  .pTexelBufferView = nullptr});
-            }
-
-            if (texture.storage_view != VK_NULL_HANDLE) {
-                image_infos.push_back({.sampler = VK_NULL_HANDLE,
-                                       .imageView = texture.storage_view,
-                                       .imageLayout = VK_IMAGE_LAYOUT_GENERAL});
-
-                writes.push_back({.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                  .pNext = nullptr,
-                                  .dstSet = set,
-                                  .dstBinding = 2,
-                                  .dstArrayElement = idx,
-                                  .descriptorCount = 1,
-                                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                                  .pImageInfo = &image_infos.back(),
-                                  .pBufferInfo = nullptr,
-                                  .pTexelBufferView = nullptr});
-            }
+        image_infos.push_back({
+            .sampler = VK_NULL_HANDLE,
+            .imageView = texture.sampled_view,
+            .imageLayout = layout
         });
+
+        writes.push_back({
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = set,
+            .dstBinding = 0,
+            .dstArrayElement = idx,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            .pImageInfo = &image_infos.back(),
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr,
+        });
+    }
+
+    if (texture.storage_view != VK_NULL_HANDLE) {
+        image_infos.push_back({
+            .sampler = VK_NULL_HANDLE,
+            .imageView = texture.storage_view,
+            .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+        });
+
+        writes.push_back({
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = set,
+            .dstBinding = 2,
+            .dstArrayElement = idx,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            .pImageInfo = &image_infos.back(),
+            .pBufferInfo = nullptr,
+            .pTexelBufferView = nullptr,
+        });
+    }
+});
 
         samplers.for_each_live([&](auto handle, auto &sampler) {
             image_infos.push_back(

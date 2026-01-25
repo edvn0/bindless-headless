@@ -1,6 +1,7 @@
 #include "Pipelines.hxx"
 #include "BindlessHeadless.hxx"
 #include "PipelineCache.hxx"
+#include "vulkan/vulkan_core.h"
 
 #include <glm/glm.hpp>
 
@@ -85,7 +86,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
 
 auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
                               const std::vector<uint32_t> &vert_code, const std::vector<uint32_t> &frag_code,
-                              VkFormat depth_format) -> CompiledPipeline {
+                              VkFormat depth_format, VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     VkShaderModuleCreateInfo create_info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                             .pNext = nullptr,
@@ -163,11 +164,20 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     // Viewport/Scissor setup (Standard)
     VkPipelineViewportStateCreateInfo vp{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
-    VkPipelineMultisampleStateCreateInfo ms{.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-                                            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
-    std::array dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineMultisampleStateCreateInfo ms{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = samples,
+    };
+    std::array dynamic_states = {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+            VK_DYNAMIC_STATE_DEPTH_BOUNDS,
+            VK_DYNAMIC_STATE_CULL_MODE,
+            VK_DYNAMIC_STATE_FRONT_FACE
+    };
     VkPipelineDynamicStateCreateInfo dy{.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-                                        .dynamicStateCount = 2,
+                                        .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
                                         .pDynamicStates = dynamic_states.data()};
 
     std::array<VkVertexInputBindingDescription, 1> binding_descriptions{
@@ -238,8 +248,8 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
 }
 
 auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
-                          const std::vector<u32> &vert_code, const std::vector<u32> &frag_code, VkFormat color_format)
-        -> CompiledPipeline {
+                          const std::vector<u32> &vert_code, const std::vector<u32> &frag_code, VkFormat color_format,
+                          VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     VkShaderModuleCreateInfo task_create_info{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                               .pNext = nullptr,
@@ -316,7 +326,7 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .pNext = nullptr,
             .flags = 0,
-            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .rasterizationSamples = samples,
             .sampleShadingEnable = VK_FALSE,
             .minSampleShading = 1.0f,
             .pSampleMask = nullptr,
@@ -362,7 +372,14 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
             .blendConstants = {0.0f, 0.0f, 0.0f, 0.0f},
     };
 
-    std::array dynamic_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    std::array dynamic_states{
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR,
+            VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+            VK_DYNAMIC_STATE_DEPTH_BOUNDS,
+            VK_DYNAMIC_STATE_CULL_MODE,
+            VK_DYNAMIC_STATE_FRONT_FACE
+    };
     VkPipelineDynamicStateCreateInfo dynamic_state{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
             .pNext = nullptr,
@@ -383,7 +400,7 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
     std::array<VkVertexInputBindingDescription, 1> binding_descriptions{
             VkVertexInputBindingDescription{
                     .binding = 0,
-                    .stride = sizeof(glm::vec3) + sizeof(u32)*2,
+                    .stride = sizeof(glm::vec3) + sizeof(u32) * 2,
                     .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
             },
     };
@@ -399,13 +416,13 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
                     .location = 1,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = 0,
+                    .offset = sizeof(glm::vec3),
             },
             VkVertexInputAttributeDescription{
                     .location = 2,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = 0,
+                    .offset = sizeof(glm::vec3) + sizeof(u32),
             },
     };
 

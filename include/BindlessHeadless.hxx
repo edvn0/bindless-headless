@@ -6,8 +6,10 @@
 #include "Pool.hxx"
 #include "Reflection.hxx"
 #include "Types.hxx"
+#include "vulkan/vulkan_core.h"
 
 
+#include <bitset>
 #include <volk.h>
 
 
@@ -23,8 +25,9 @@
 #include <string_view>
 #include <vector>
 
-#include <vk_mem_alloc.h>
 #include <tl/expected.hpp>
+#include <vk_mem_alloc.h>
+
 
 namespace detail {
     auto initialise_debug_name_func(VkInstance) -> void;
@@ -34,7 +37,7 @@ namespace detail {
 
     auto submit_and_wait(VkDevice device, VkCommandPool cmd_pool, VkQueue queue, auto &&record) -> void {
         VkCommandBufferAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = nullptr,
+                                       .pNext = nullptr,
                                        .commandPool = cmd_pool,
                                        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
                                        .commandBufferCount = 1};
@@ -43,8 +46,9 @@ namespace detail {
         vk_check(vkAllocateCommandBuffers(device, &ai, &cb));
 
         VkCommandBufferBeginInfo bi{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,.pInheritanceInfo = nullptr};
+                                    .pNext = nullptr,
+                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                                    .pInheritanceInfo = nullptr};
         vk_check(vkBeginCommandBuffer(cb, &bi));
 
         record(cb);
@@ -130,11 +134,58 @@ auto create_graphics_timeline(VkDevice device, VkQueue queue, u32 family_index) 
 
 auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler;
 
-auto create_offscreen_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format,
-                             std::string_view name = "Empty") -> OffscreenTarget;
 
-auto create_depth_target(VmaAllocator alloc, u32 width, u32 height, VkFormat format, std::string_view name)
-        -> OffscreenTarget;
+inline auto pick_msaa_samples(VkPhysicalDevice physical_device) -> VkSampleCountFlagBits {
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physical_device, &props);
+
+    const VkSampleCountFlags counts =
+            props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
+
+    if (counts & VK_SAMPLE_COUNT_8_BIT)
+        return VK_SAMPLE_COUNT_8_BIT;
+    if (counts & VK_SAMPLE_COUNT_4_BIT)
+        return VK_SAMPLE_COUNT_4_BIT;
+    if (counts & VK_SAMPLE_COUNT_2_BIT)
+        return VK_SAMPLE_COUNT_2_BIT;
+    return VK_SAMPLE_COUNT_1_BIT;
+}
+
+// By default, sets WANT_SAMPLED and WANT_STORAGE and WANT_TRANSFER.
+struct TargetSamplerConfiguration {
+    std::bitset<3> sampled_storage_transfer{0b111};
+};
+
+auto create_offscreen_target(VmaAllocator& alloc,
+    u32 width,
+    u32 height,
+    VkFormat format,
+    VkSampleCountFlagBits samples,
+    TargetSamplerConfiguration config,
+    std::string_view name) -> OffscreenTarget;
+   inline auto create_offscreen_target(VmaAllocator& alloc,
+    u32 width,
+    u32 height,
+    VkFormat format,
+    TargetSamplerConfiguration config,
+    std::string_view name) -> OffscreenTarget {
+    return create_offscreen_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, std::move(config), name);
+    }
+
+auto create_depth_target(    VmaAllocator& alloc,
+    u32 width,
+    u32 height,
+    VkFormat format,
+    VkSampleCountFlagBits samples,
+    bool want_sampled, // usually true only for single-sample depth you intend to sample later
+    std::string_view name) -> OffscreenTarget;
+inline auto create_depth_target(   VmaAllocator& alloc, 
+    u32 width,
+    u32 height,
+    VkFormat format,
+    std::string_view name) -> OffscreenTarget {
+    return create_depth_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, true, name);
+}
 
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
