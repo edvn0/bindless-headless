@@ -32,6 +32,7 @@ struct RenderingPushConstants {
     const DeviceAddress ubo;
     const DeviceAddress transforms;
     const DeviceAddress draw_material_ids;
+    const DeviceAddress materials;
     const u32 base_draw_id;
 };
 

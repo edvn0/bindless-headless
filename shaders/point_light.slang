@@ -17,8 +17,9 @@ struct VertexInput {
 
 struct PC {
     UBO* frame_ubo;
-    float4x4* transforms;
+    float3x4* transforms;
     uint* draw_material_ids;
+    Material* materials;
     uint  base_draw_id;
 };
 [shader("vertex")]
@@ -29,8 +30,13 @@ VertexOutput main_vs(
 ) {
     VertexOutput o = {};
 
-    float4x4 model = pc.transforms[instance];
-    float4 world_pos = mul(model, float4(input.position, 1.0));
+    float3x4 model_3x4 = pc.transforms[instance];
+       float4x4 model = float4x4(
+           model_3x4._m00_m01_m02_m03,
+           model_3x4._m10_m11_m12_m13,
+           model_3x4._m20_m21_m22_m23,
+           float4(0, 0, 0, 1)
+       );    float4 world_pos = mul(model, float4(input.position, 1.0));
 
     o.position  = mul(pc.frame_ubo->view_projection, world_pos);
     o.world_pos = world_pos.xyz;
@@ -64,7 +70,14 @@ VertexOutput main_vs_mdi(
 
     uint instance_index = instance_id + base_instance;
 
-    float4x4 model = pc.transforms[instance_index];
+    float3x4 model_3x4 = pc.transforms[instance_index];
+        float4x4 model = float4x4(
+            model_3x4._m00_m01_m02_m03,
+            model_3x4._m10_m11_m12_m13,
+            model_3x4._m20_m21_m22_m23,
+            float4(0, 0, 0, 1)
+        );
+
     float4 world_pos = mul(model, float4(input.position, 1.0));
 
     o.position  = mul(pc.frame_ubo->view_projection, world_pos);

@@ -61,25 +61,18 @@ struct MaterialData {
     glm::vec3 emissive_factor{0.0f};
 };
 
-// IMPORTANT: add padding so SSBO layout is sane (vec3 -> pad to 16 bytes).
 struct GPUMaterialData {
-    TextureHandle albedo_map{};
+    u32 albedo_map{};
     glm::vec4 albedo_factor{1.0f};
-
-    TextureHandle normal_map{};
-    TextureHandle roughness_map{};
+    u32 normal_map{};
+    u32 roughness_map{};
     float roughness_factor{1.0f};
-    float _pad0{0.0f};
-
-    TextureHandle metallic_map{};
+    u32 metallic_map{};
     float metallic_factor{1.0f};
-    float _pad1{0.0f};
-    float _pad2{0.0f};
-
-    TextureHandle occlusion_map{};
-    TextureHandle emissive_map{};
+    u32 occlusion_map{};
+    u32 emissive_map{};
     glm::vec3 emissive_factor{0.0f};
-    float _pad3{0.0f};
+    u32 _pad0{};  // Ensure struct size is multiple of 16
 };
 
 auto load_mtl(const std::filesystem::path& mtl_path) -> std::unordered_map<std::string, MaterialData> ;

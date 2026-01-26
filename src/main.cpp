@@ -864,9 +864,10 @@ auto execute(int argc, char **argv) -> int {
                                             cube.position_radius[2]
                                         });
                                     transform = glm::scale(transform, glm::vec3{cube.position_radius[3]});
-                                    return transform;
+                                    // Convert mat4 to mat3x4 by taking only the first 3 columns
+                                    return glm::mat3x4(transform);
                                 }) |
-                                std::ranges::to<std::vector<glm::mat4> >();
+                                std::ranges::to<std::vector<glm::mat3x4>>();
     std::vector<glm::vec3> random_factors(mapped_to_transforms.size());
 
     for (auto &f: random_factors) {
@@ -874,7 +875,7 @@ auto execute(int argc, char **argv) -> int {
         f = glm::vec3(dist(rng), dist(rng), dist(rng));
     }
     auto cubes_transform_handle =
-            AlignedRingBuffer<glm::mat4>::create(ctx, mapped_to_transforms.size(), 0u, "transforms");
+            AlignedRingBuffer<glm::mat3x4>::create(ctx, mapped_to_transforms.size(), 0u, "transforms");
 
     auto instance_count = static_cast<u32>(cubes.size());
 
@@ -1143,26 +1144,31 @@ auto execute(int argc, char **argv) -> int {
 
             auto sun_direction_intensity = glm::vec4(sun_dir, 1.5f);
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
-            aligned_frame_buffer_handle.write_field(ctx, bounded_frame_index, sun_direction_intensity, offset); {
-                ZoneScopedNC("Rotate cubes", 0xff0013);
-                std::for_each(
-                    std::execution::par_unseq, mapped_to_transforms.begin(), mapped_to_transforms.end(),
-                    [d = dt, &random_offset = random_factors, &m = mapped_to_transforms](glm::mat4 &transform) {
-                        // Apply rotation around Y-axis
-                        size_t index = &transform - m.data();
-                        const glm::vec3 &f = random_offset[index];
+            aligned_frame_buffer_handle.write_field(ctx, bounded_frame_index, sun_direction_intensity, offset);
+    {
+        ZoneScopedNC("Rotate cubes", 0xff0013);
+        std::for_each(
+            std::execution::par_unseq, mapped_to_transforms.begin(), mapped_to_transforms.end(),
+            [d = dt, &random_offset = random_factors, &m = mapped_to_transforms](glm::mat3x4 &transform) {
+                // Apply rotation around Y-axis
+                size_t index = &transform - m.data();
+                const glm::vec3 &f = random_offset[index];
+                auto dt_scaled_vec = f * static_cast<float>(d);
 
-                        auto dt_scaled_vec = f * static_cast<float>(d);
+                // Convert to mat4 for rotation operations
+                glm::mat4 transform_4x4 = glm::mat4(transform);
+                transform_4x4 = glm::rotate(transform_4x4, rads_per_seconds * dt_scaled_vec.y,
+                                            glm::vec3(0.0f, 1.0f, 0.0f));
+                transform_4x4 = glm::rotate(transform_4x4, rads_per_seconds * dt_scaled_vec.z,
+                                            glm::vec3(0.0f, 0.0f, 1.0f));
+                transform_4x4 = glm::rotate(transform_4x4, rads_per_seconds * dt_scaled_vec.x,
+                                            glm::vec3(1.0f, 0.0f, 0.0f));
 
-                        transform = glm::rotate(transform, rads_per_seconds * dt_scaled_vec.y,
-                                                glm::vec3(0.0f, 1.0f, 0.0f));
-                        transform = glm::rotate(transform, rads_per_seconds * dt_scaled_vec.z,
-                                                glm::vec3(0.0f, 0.0f, 1.0f));
-                        transform = glm::rotate(transform, rads_per_seconds * dt_scaled_vec.x,
-                                                glm::vec3(1.0f, 0.0f, 0.0f));
-                    });
-            }
-            cubes_transform_handle->write_slot(ctx, bounded_frame_index, mapped_to_transforms);
+                // Convert back to mat3x4
+                transform = glm::mat3x4(transform_4x4);
+            });
+    }
+    cubes_transform_handle->write_slot(ctx, bounded_frame_index, mapped_to_transforms);
         }
 
         const auto [base_draw, draw_count] = write_mesh_indirect(
@@ -1416,7 +1422,7 @@ vkCmdDrawIndexedIndirect(
                 TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "GBuffer");
                 auto &&[graphics_perf_query, graphics_stats] = ctx.query_pools.get_multiple(
                     graphics_query_pool[bounded_frame_index], graphics_stats_pool[bounded_frame_index]);
-                auto &&[indirect, verts, idx] = ctx.buffers.get_multiple( indirect_ring.handle(), cube_mesh.vertex_buffer, cube_mesh.index_buffer);
+                auto &&[indirect, verts, idx, materials] = ctx.buffers.get_multiple( indirect_ring.handle(), cube_mesh.vertex_buffer, cube_mesh.index_buffer,cube_mesh.material_buffer);
 
                 const bool msaa_enabled = (msaa_samples != VK_SAMPLE_COUNT_1_BIT);
 
@@ -1489,6 +1495,7 @@ vkCmdDrawIndexedIndirect(
                     .ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
                     .transforms = cubes_transform_handle->slot_device_address(bounded_frame_index),
                     .draw_material_ids = draw_material_id_ring.slot_device_address(bounded_frame_index),
+                    .materials = materials->device_address(),
                     .base_draw_id = base_draw,
                 };
 

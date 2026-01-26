@@ -83,7 +83,21 @@ struct IndirectMeshCommand {
 struct Cube {
     float4 pos_radius;
     float4 colour_intensity;
-}
+};
+
+struct Material {
+    uint albedo_map;
+    float4 albedo_factor;
+    uint normal_map;
+    uint roughness_map;
+    float roughness_factor;
+    uint metallic_map;
+    float metallic_factor;
+    uint occlusion_map;
+    uint emissive_map;
+    float3 emissive_factor;
+    uint _pad0;
+};
 
 [[vk::binding(0, 0)]]
 Texture2D<float4> sampled_images[];

@@ -32,11 +32,11 @@ auto build_loaded_texture_table(std::span<const TextureLoadPacket> textures,
 
 auto resolve_texture(const LoadedTextureTable& loaded,
                             const std::string& name,
-                            TextureHandle fallback) -> TextureHandle {
-    if (name.empty()) return fallback;
+                            TextureHandle fallback) -> u32 {
+    if (name.empty()) return fallback.index();
     auto it = loaded.by_name.find(name);
-    if (it != loaded.by_name.end()) return it->second;
-    return fallback;
+    if (it != loaded.by_name.end()) return it->second.index();
+    return fallback.index();
 }
 
 auto to_gpu_material(const MaterialData& m,
