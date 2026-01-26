@@ -124,18 +124,15 @@ public:
         buf->write_slice(ctx.allocator, std::span{&value, 1}, static_cast<std::size_t>(off));
     }
 
-    // Backwards compatibility: write to first element's field
     template<typename FieldT>
         requires std::is_trivial_v<FieldT>
     auto write_field(RenderContext &ctx, u64 slot_index, FieldT const &value, u64 field_offset_bytes) -> void {
         write_field(ctx, slot_index, 0, value, field_offset_bytes);
     }
 
-    // Create with runtime element count
     static auto create(RenderContext &ctx, u64 elements_per_slot, VkBufferUsageFlags extra_usage, std::string_view name)
             -> tl::expected<AlignedRingBuffer, BufferCreateError>;
 
-    // Convenience: single element per slot
     static auto create(RenderContext &ctx, VkBufferUsageFlags extra_usage, std::string_view name)
             -> tl::expected<AlignedRingBuffer, BufferCreateError> {
         return create(ctx, 1, extra_usage, name);

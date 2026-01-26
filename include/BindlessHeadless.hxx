@@ -174,6 +174,9 @@ inline auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFo
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
                                std::string_view name) -> OffscreenTarget;
+auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
+                               std::uint32_t height, VkFormat format, std::span<const std::byte> data,
+                               std::string_view name) -> OffscreenTarget;
 
 struct InstanceWithDebug {
     VkInstance instance{VK_NULL_HANDLE};

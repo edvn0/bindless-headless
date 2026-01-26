@@ -24,11 +24,15 @@ struct PointLightCullingPushConstants {
 struct PredepthPushConstants {
     const DeviceAddress ubo;
     const DeviceAddress transforms;
+    const DeviceAddress draw_material_ids;
+    const u32 base_draw_id;
 };
 
 struct RenderingPushConstants {
     const DeviceAddress ubo;
     const DeviceAddress transforms;
+    const DeviceAddress draw_material_ids;
+    const u32 base_draw_id;
 };
 
 struct TonemapPushConstants {

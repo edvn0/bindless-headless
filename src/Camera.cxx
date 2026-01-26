@@ -14,9 +14,9 @@ auto EditorCamera::set_from_orbit() -> void {
     const float pitch = glm::radians(pitch_deg);
 
     glm::vec3 f{};
-    f.x = cosf(pitch) * cosf(yaw);
-    f.y = sinf(pitch);
-    f.z = cosf(pitch) * sinf(yaw);
+    f.x = glm::cos(pitch) * glm::cos(yaw);
+    f.y = glm::sin(pitch);
+    f.z = glm::cos(pitch) * glm::sin(yaw);
     forward = glm::normalize(f);
 
     right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
@@ -31,9 +31,9 @@ auto EditorCamera::set_from_fly() -> void {
     const float pitch = glm::radians(pitch_deg);
 
     glm::vec3 f{};
-    f.x = cosf(pitch) * cosf(yaw);
-    f.y = sinf(pitch);
-    f.z = cosf(pitch) * sinf(yaw);
+    f.x = glm::cos(pitch) * glm::cos(yaw);
+    f.y = glm::sin(pitch);
+    f.z = glm::cos(pitch) * glm::sin(yaw);
     forward = glm::normalize(f);
 
     right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));

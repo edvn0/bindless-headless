@@ -74,7 +74,7 @@ private:
     std::uint32_t index_ = 0u;
     std::uint32_t generation = 0u;
 };
-
+static_assert(std::is_trivially_copyable_v<Handle<class Foo>>);
 static_assert(sizeof(Handle<class foo>) == sizeof(u64));
 
 template<typename ObjectType, typename ImplObjectType>

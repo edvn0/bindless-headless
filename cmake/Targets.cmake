@@ -3,7 +3,7 @@ include_guard(GLOBAL)
 add_executable(BindlessHeadless
   "src/main.cpp"
   "src/ArgumentParse.cxx"
-  "src/BindlessHeadless.cpp"
+  "src/BindlessHeadless.cxx"
   "src/RenderContext.cxx"
   "src/Types.cxx"
   "src/Profiler.cxx"
@@ -15,11 +15,13 @@ add_executable(BindlessHeadless
   "src/Logger.cxx"
   "src/Camera.cxx"
   "src/Compiler.cxx"
+  "src/Mesh.cxx"
   "src/GlobalCommandContext.cxx"
 )
 
 
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
+add_library(ThirdPartySTB STATIC "3PP/stb.c")
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
 
@@ -35,12 +37,16 @@ target_link_libraries(BindlessHeadlessAllocator PRIVATE
   VulkanMemoryAllocator
 )
 
+target_compile_definitions(ThirdPartySTB PRIVATE STB_IMAGE_IMPLEMENTATION)
+target_include_directories(ThirdPartySTB PUBLIC "3PP")
+
 target_link_libraries(BindlessHeadless PRIVATE
   volk
   volk::volk_headers
   BindlessHeadlessAllocator
   spdlog::spdlog
   efsw-static
+  ThirdPartySTB
   PUBLIC
   glm::glm
   CLI11::CLI11

@@ -30,10 +30,6 @@ auto parse_cli(int argc, char **argv) -> CLIOptions {
     app.add_option("-n,--iterations", opt.iteration_count, "Number of main frame iterations")
             ->check(CLI::Range(1u, 10000000u));
 
-    app.add_option("pipeline_cache_dir", opt.legacy_positional_dir,
-                   "Legacy positional cache directory (used if no --pipeline-cache-path)")
-            ->check(CLI::ExistingDirectory);
-
     app.add_option("-l,--light_count", opt.light_count, "Light count");
     app.add_option("--width", opt.width, "Width of 'window'")->default_val(1280);
     app.add_option("--height", opt.height, "Height of 'window'")->default_val(720);
@@ -54,8 +50,6 @@ auto parse_cli(int argc, char **argv) -> CLIOptions {
     // Precedence: flag > positional > env
     if (!flag_cache_dir.empty()) {
         opt.pipeline_cache_dir = flag_cache_dir;
-    } else if (!opt.legacy_positional_dir.empty()) {
-        opt.pipeline_cache_dir = opt.legacy_positional_dir;
     } else {
         opt.pipeline_cache_dir = env_pipeline_cache_dir();
     }

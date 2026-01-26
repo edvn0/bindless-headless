@@ -34,7 +34,7 @@ public:
     [[nodiscard]] auto get_count() const noexcept -> u64 { return count.value_or(0); }
 
     template<typename T, std::size_t N = std::dynamic_extent>
-        requires std::is_trivial_v<T>
+        requires std::is_trivially_copyable_v<T>
     auto write_slice(VmaAllocator &alloc, std::span<T, N> slice, std::size_t offset = 0) {
         auto *data = allocation_info.pMappedData;
         if (!data) {
@@ -52,7 +52,7 @@ public:
     }
 
     template<typename T, std::size_t N = std::dynamic_extent>
-        requires std::is_trivial_v<T>
+        requires std::is_trivially_copyable_v<T>
     auto write_slice(VmaAllocator &alloc, std::span<const T, N> slice, std::size_t offset = 0) -> void {
         auto *data = allocation_info.pMappedData;
         if (!data) {
@@ -70,7 +70,7 @@ public:
     }
 
     template<typename T>
-        requires std::is_trivial_v<T>
+        requires std::is_trivially_copyable_v<T>
     static auto from_slice(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::span<const T> slice,
                            const std::string_view name) -> tl::expected<Buffer, BufferCreateError> {
         const auto size = slice.size_bytes();
@@ -126,7 +126,7 @@ public:
     }
 
     template<typename T>
-        requires std::is_trivial_v<T>
+        requires std::is_trivially_copyable_v<T>
     static auto from_value(VmaAllocator &allocator, VkBufferUsageFlags ci, const T &value, const std::string_view name)
             -> tl::expected<Buffer, BufferCreateError> {
         return from_slice<T>(allocator, ci, std::span{&value, 1}, name);
