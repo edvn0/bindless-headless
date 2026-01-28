@@ -9,7 +9,7 @@
 #include <future>
 #include <vector>
 
-#include <tracy/Tracy.hpp>
+#include "Profiler.hxx"
 
 #ifdef __AVX2__
 #include <immintrin.h>
@@ -19,10 +19,10 @@ namespace image_operations {
 
     namespace {
         constexpr u32 SRGB_LUT_SIZE = 4096;
-        static std::array<u8, SRGB_LUT_SIZE> g_srgb_lut{};
-        static std::once_flag g_srgb_lut_once;
+        std::array<u8, SRGB_LUT_SIZE> g_srgb_lut{};
+        std::once_flag g_srgb_lut_once;
 
-        static void init_srgb_lut() {
+        void init_srgb_lut() {
             std::call_once(g_srgb_lut_once, [] {
                 ZoneScopedNC("init_srgb_lut", 0xAAAAFF);
 
@@ -40,7 +40,7 @@ namespace image_operations {
             });
         }
 
-        inline u8 float_to_srgb(float v) {
+        u8 float_to_srgb(float v) {
             if (!std::isfinite(v))
                 return 0;
 
@@ -320,16 +320,20 @@ namespace image_operations {
 
                 VkBufferCreateInfo buffer_create_info{
                         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                        .pNext = nullptr,
+                        .flags = 0,
                         .size = buffer_size,
                         .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                        .queueFamilyIndexCount = 0,
+                        .pQueueFamilyIndices = nullptr,
                 };
 
-                VmaAllocationCreateInfo alloc_create_info{
-                        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                        .usage = VMA_MEMORY_USAGE_AUTO,
-                };
+                VmaAllocationCreateInfo alloc_create_info{};
+                alloc_create_info.flags =
+                        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
+
 
                 StagingBuffer staging{};
                 auto result = vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &staging.buffer,
@@ -355,11 +359,10 @@ namespace image_operations {
         {
             ZoneScopedNC("create_command_pool", 0x4080FF);
 
-            VkCommandPoolCreateInfo info{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-                    .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
-                    .queueFamilyIndex = 0,
-            };
+            VkCommandPoolCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            info.queueFamilyIndex = 0;
 
             if (vkCreateCommandPool(allocator_info.device, &info, nullptr, &command_pool) != VK_SUCCESS) {
                 error("Failed to create command pool");
@@ -374,12 +377,11 @@ namespace image_operations {
         {
             ZoneScopedNC("allocate_command_buffer", 0x4080FF);
 
-            VkCommandBufferAllocateInfo info{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                    .commandPool = command_pool,
-                    .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                    .commandBufferCount = 1,
-            };
+            VkCommandBufferAllocateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            info.commandPool = command_pool;
+            info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            info.commandBufferCount = 1;
 
             if (vkAllocateCommandBuffers(allocator_info.device, &info, &command_buffer) != VK_SUCCESS) {
                 error("Failed to allocate command buffer");
@@ -394,10 +396,9 @@ namespace image_operations {
         {
             ZoneScopedNC("record_batch_commands", 0x40FFFF);
 
-            VkCommandBufferBeginInfo begin_info{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            };
+            VkCommandBufferBeginInfo begin_info{};
+            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
             vkBeginCommandBuffer(command_buffer, &begin_info);
 
@@ -408,29 +409,28 @@ namespace image_operations {
                 auto const &tex = *requests[i].texture;
                 auto const &staging = staging_buffers[i];
 
-                VkImageMemoryBarrier2 barrier{
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                        .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                        .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
-                        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                        .image = tex.image,
-                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-                };
+                VkImageMemoryBarrier2 barrier{};
+                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+                barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                barrier.image = tex.image;
+                barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-                VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                                     .imageMemoryBarrierCount = 1,
-                                     .pImageMemoryBarriers = &barrier};
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &barrier;
 
                 vkCmdPipelineBarrier2(command_buffer, &dep);
 
                 // Copy image to buffer
-                VkBufferImageCopy region{
-                        .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                        .imageExtent = {tex.width, tex.height, 1},
-                };
+                VkBufferImageCopy region{};
+                region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                region.imageExtent = {tex.width, tex.height, 1};
 
                 vkCmdCopyImageToBuffer(command_buffer, tex.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging.buffer,
                                        1, &region);
@@ -454,17 +454,17 @@ namespace image_operations {
             ZoneScopedNC("submit_batch_and_wait", 0xFFAA40);
 
             VkFence fence{};
-            VkFenceCreateInfo info{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            VkFenceCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             vkCreateFence(allocator_info.device, &info, nullptr, &fence);
 
             VkQueue queue{};
             vkGetDeviceQueue(allocator_info.device, 0, 0, &queue);
 
-            VkSubmitInfo submit{
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                    .commandBufferCount = 1,
-                    .pCommandBuffers = &command_buffer,
-            };
+            VkSubmitInfo submit{};
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command_buffer;
 
             vkQueueSubmit(queue, 1, &submit, fence);
             vkWaitForFences(allocator_info.device, 1, &fence, VK_TRUE, UINT64_MAX);
@@ -573,17 +573,16 @@ namespace image_operations {
         {
             ZoneScopedNC("create_staging_buffer", 0x4080FF);
 
-            VkBufferCreateInfo buffer_create_info{
-                    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                    .size = buffer_size,
-                    .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            };
+            VkBufferCreateInfo buffer_create_info{};
+            buffer_create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            buffer_create_info.size = buffer_size;
+            buffer_create_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            buffer_create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-            VmaAllocationCreateInfo alloc_create_info{
-                    .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                    .usage = VMA_MEMORY_USAGE_AUTO,
-            };
+            VmaAllocationCreateInfo alloc_create_info{};
+            alloc_create_info.flags =
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            alloc_create_info.usage = VMA_MEMORY_USAGE_AUTO;
 
             auto result = vmaCreateBuffer(allocator, &buffer_create_info, &alloc_create_info, &staging_buffer,
                                           &staging_allocation, &staging_alloc_info);
@@ -598,11 +597,10 @@ namespace image_operations {
         {
             ZoneScopedNC("create_command_pool", 0x4080FF);
 
-            VkCommandPoolCreateInfo info{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-                    .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
-                    .queueFamilyIndex = 0,
-            };
+            VkCommandPoolCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            info.queueFamilyIndex = 0;
 
             if (vkCreateCommandPool(allocator_info.device, &info, nullptr, &command_pool) != VK_SUCCESS) {
                 vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
@@ -614,12 +612,11 @@ namespace image_operations {
         {
             ZoneScopedNC("allocate_command_buffer", 0x4080FF);
 
-            VkCommandBufferAllocateInfo info{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                    .commandPool = command_pool,
-                    .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                    .commandBufferCount = 1,
-            };
+            VkCommandBufferAllocateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            info.commandPool = command_pool;
+            info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            info.commandBufferCount = 1;
 
             if (vkAllocateCommandBuffers(allocator_info.device, &info, &command_buffer) != VK_SUCCESS) {
                 vkDestroyCommandPool(allocator_info.device, command_pool, nullptr);
@@ -631,35 +628,33 @@ namespace image_operations {
         {
             ZoneScopedNC("record_commands", 0x40FFFF);
 
-            VkCommandBufferBeginInfo begin_info{
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            };
+            VkCommandBufferBeginInfo begin_info{};
+            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
             vkBeginCommandBuffer(command_buffer, &begin_info);
 
-            VkImageMemoryBarrier2 barrier{
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                    .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                    .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                    .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                    .dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    .image = tex.image,
-                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-            };
+            VkImageMemoryBarrier2 barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.image = tex.image;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-            VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                                 .imageMemoryBarrierCount = 1,
-                                 .pImageMemoryBarriers = &barrier};
+            VkDependencyInfo dep{};
+            dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dep.imageMemoryBarrierCount = 1;
+            dep.pImageMemoryBarriers = &barrier;
 
             vkCmdPipelineBarrier2(command_buffer, &dep);
 
-            VkBufferImageCopy region{
-                    .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                    .imageExtent = {tex.width, tex.height, 1},
-            };
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {tex.width, tex.height, 1};
 
             vkCmdCopyImageToBuffer(command_buffer, tex.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staging_buffer, 1,
                                    &region);
@@ -679,17 +674,17 @@ namespace image_operations {
             ZoneScopedNC("submit_and_wait", 0xFFAA40);
 
             VkFence fence{};
-            VkFenceCreateInfo info{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+            VkFenceCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             vkCreateFence(allocator_info.device, &info, nullptr, &fence);
 
             VkQueue queue{};
             vkGetDeviceQueue(allocator_info.device, 0, 0, &queue);
 
-            VkSubmitInfo submit{
-                    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                    .commandBufferCount = 1,
-                    .pCommandBuffers = &command_buffer,
-            };
+            VkSubmitInfo submit{};
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &command_buffer;
 
             vkQueueSubmit(queue, 1, &submit, fence);
             vkWaitForFences(allocator_info.device, 1, &fence, VK_TRUE, UINT64_MAX);

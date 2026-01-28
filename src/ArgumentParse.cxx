@@ -5,6 +5,8 @@
 
 #include "BindlessHeadless.hxx"
 
+#include <CLI/CLI.hpp>
+
 auto parse_cli(int argc, char **argv) -> CLIOptions {
     CLIOptions opt{};
 

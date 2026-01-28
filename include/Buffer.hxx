@@ -6,6 +6,7 @@
 #include <tl/expected.hpp>
 #include <type_traits>
 
+#include "CreateInfo.hxx"
 #include "Logger.hxx"
 #include "Types.hxx"
 #include "vulkan/vulkan_core.h"
@@ -85,14 +86,14 @@ public:
         const auto min_alignment = static_cast<u64>(pd_props.limits.minStorageBufferOffsetAlignment);
         const auto aligned_size = (size + min_alignment - 1) & ~(min_alignment - 1);
 
-        VkBufferCreateInfo ci{};
+        auto ci = create_info<VkBufferCreateInfo>();
         ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         ci.pNext = nullptr;
         ci.flags = 0;
         ci.size = aligned_size;
         ci.usage = usage_flags | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 
-        VmaAllocationCreateInfo ai{};
+        auto ai = create_info<VmaAllocationCreateInfo>();
         ai.usage = VMA_MEMORY_USAGE_AUTO;
         ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
         ai.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
@@ -107,13 +108,11 @@ public:
         buffer.count = slice.size();
         buffer.set_name(allocator, name);
 
-        VkBufferDeviceAddressInfo dba_info{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-                .pNext = nullptr,
-                .buffer = buffer.vk_buffer,
-        };
+        auto dba_info = create_info<VkBufferDeviceAddressInfo>();
+        dba_info.buffer = buffer.vk_buffer;
 
         buffer.dev_address = static_cast<DeviceAddress>(vkGetBufferDeviceAddress(alloc_info.device, &dba_info));
+        assert(buffer.dev_address != DeviceAddress::Invalid);
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {

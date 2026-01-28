@@ -1,26 +1,3 @@
-// Full drop-in style implementation that integrates everything into ONE loader:
-//
-// - Parses OBJ into ONE mesh-wide vertex/index buffer
-// - Emits Submesh records with index_offset/index_count/material_id
-// - Loads MTL + schedules texture loads (deduped) exactly like your code
-// - Creates Vulkan images -> TextureHandles for loaded textures
-// - Builds a dense GPUMaterialData array in material_id order
-// - Uploads it with Buffer<GPUMaterialData>::from_slice(span)
-//
-// Defaults (global indices): white=0, black=1, flat-normal=2.
-// Material defaults used:
-//   albedo -> white, normal -> flat-normal, roughness -> white, metallic -> black,
-//   occlusion -> white, emissive -> black.
-//
-// Notes:
-// - This assumes ctx.textures.handle_from_global_index(u32) exists.
-//   If your API differs, swap that helper.
-// - This assumes Buffer<T>::from_slice(allocator, span, usage) exists (or similar).
-//   If your signature differs, adapt the call site.
-// - Keeps your load_mtl() and load_texture_from_file() logic as-is.
-//
-// Output type changed to include GPU material buffer and mesh with submeshes.
-
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -121,7 +98,12 @@ struct Vertex {
     uint32_t normal; // packed 10_10_10_2
     uint32_t uvs; // packed 8_8_8_8
 
-    auto operator<=>(const Vertex &) const = default;
+    auto operator<=>(const Vertex &other) const {
+        return std::tie(position.x, position.y, position.z, normal, uvs) <=>
+               std::tie(other.position.x, other.position.y, other.position.z, other.normal, other.uvs);
+    }
+
+    bool operator==(const Vertex &other) const = default;
 };
 
 static_assert(std::is_trivial_v<Vertex>);

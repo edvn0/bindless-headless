@@ -31,12 +31,15 @@ namespace detail {
 } // namespace detail
 
 inline auto query_bindless_caps(VkPhysicalDevice pd) -> BindlessCaps {
-    VkPhysicalDeviceVulkan12Properties props12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES};
+    VkPhysicalDeviceVulkan12Properties props12{};
+    props12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES;
 
-    VkPhysicalDeviceAccelerationStructurePropertiesKHR accel_props{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR};
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR accel_props{};
+    accel_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
 
-    VkPhysicalDeviceProperties2 props2{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &props12};
+    VkPhysicalDeviceProperties2 props2{};
+    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props2.pNext = &props12;
 
     props12.pNext = &accel_props;
 
@@ -226,34 +229,40 @@ struct BindlessSet {
         VkWriteDescriptorSet writes[3]{};
         u32 num_writes = 0;
 
-        writes[num_writes++] = VkWriteDescriptorSet{
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = set,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = max_textures,
-                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                .pImageInfo = sampled_infos.data(),
-        };
+        writes[num_writes++] = VkWriteDescriptorSet{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                                    .pNext = nullptr,
+                                                    .dstSet = set,
+                                                    .dstBinding = 0,
+                                                    .dstArrayElement = 0,
+                                                    .descriptorCount = max_textures,
+                                                    .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                                                    .pImageInfo = sampled_infos.data(),
+                                                    .pBufferInfo = nullptr,
+                                                    .pTexelBufferView = nullptr};
+
+        writes[num_writes++] = VkWriteDescriptorSet{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                                    .pNext = nullptr,
+
+                                                    .dstSet = set,
+                                                    .dstBinding = 1,
+                                                    .dstArrayElement = 0,
+                                                    .descriptorCount = max_samplers,
+                                                    .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+                                                    .pImageInfo = sampler_infos.data(),
+                                                    .pBufferInfo = nullptr,
+                                                    .pTexelBufferView = nullptr};
 
         writes[num_writes++] = VkWriteDescriptorSet{
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = set,
-                .dstBinding = 1,
-                .dstArrayElement = 0,
-                .descriptorCount = max_samplers,
-                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
-                .pImageInfo = sampler_infos.data(),
-        };
-
-        writes[num_writes++] = VkWriteDescriptorSet{
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
                 .dstSet = set,
                 .dstBinding = 2,
                 .dstArrayElement = 0,
                 .descriptorCount = max_storage_images,
                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                 .pImageInfo = storage_infos.data(),
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
         };
 
         vkUpdateDescriptorSets(device, num_writes, writes, 0, nullptr);

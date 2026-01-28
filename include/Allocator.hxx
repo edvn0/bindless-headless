@@ -4,7 +4,7 @@
 #include <memory>
 #include <type_traits>
 
-#if defined(HAS_TRACY)
+#if defined(TRACY_ENABLE)
 #include <tracy/Tracy.hpp> // provides TracyAlloc/TracyFree (+ Secure variants)
 #endif
 
@@ -24,7 +24,7 @@ struct tracy_allocator {
         // Delegate actual allocation to std::allocator (which typically uses ::operator new).
         T *p = std::allocator<T>{}.allocate(n);
 
-#if defined(HAS_TRACY)
+#if defined(TRACY_ENABLE)
         if (p != nullptr && n != 0) {
             const std::size_t bytes = n * sizeof(T);
             if constexpr (Secure) {
@@ -39,7 +39,7 @@ struct tracy_allocator {
     }
 
     auto deallocate(T *p, std::size_t n) noexcept -> void {
-#if defined(HAS_TRACY)
+#if defined(TRACY_ENABLE)
         // Tracy requires a corresponding alloc/free pair for each tracked address.
         // Don't emit events for null pointers.
         if (p != nullptr) {
@@ -65,7 +65,7 @@ struct tracy_allocator {
 };
 
 // Convenience alias: when Tracy is off, you get the normal allocator.
-#if defined(HAS_TRACY)
+#if defined(TRACY_ENABLE)
 template<class T>
 using default_allocator = tracy_allocator<T, /*Secure=*/false>;
 #else

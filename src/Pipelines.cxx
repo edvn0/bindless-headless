@@ -34,45 +34,44 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pi_layout, entry_name);
 
-    std::array<u32, 2> data{MAX_WAVES_PER_GROUP, THREADS_PER_GROUP};
+    const std::array<u32, 2> data{MAX_WAVES_PER_GROUP, THREADS_PER_GROUP};
 
-    VkSpecializationMapEntry waves_per_group_spec_map_entry{
+    const VkSpecializationMapEntry waves_per_group_spec_map_entry{
             .constantID = 0,
             .offset = 0,
             .size = sizeof(u32),
     };
-    VkSpecializationInfo threads_per_group_spec_info{};
-    VkSpecializationMapEntry threads_per_group_spec_map_entry{
+    const VkSpecializationMapEntry threads_per_group_spec_map_entry{
             .constantID = 1,
             .offset = 0,
             .size = sizeof(u32),
     };
-    std::array entries{waves_per_group_spec_map_entry, threads_per_group_spec_map_entry};
+    const std::array entries{waves_per_group_spec_map_entry, threads_per_group_spec_map_entry};
     VkSpecializationInfo spec_info{};
     spec_info.mapEntryCount = 2;
     spec_info.pMapEntries = entries.data();
     spec_info.dataSize = 2 * sizeof(u32);
     spec_info.pData = data.data();
 
-    std::array spec_infos{spec_info};
+    const std::array spec_infos{spec_info};
 
 
-    VkComputePipelineCreateInfo cpci{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-                                     .pNext = nullptr,
-                                     .flags = 0,
-                                     .stage =
-                                             VkPipelineShaderStageCreateInfo{
-                                                     .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                                                     .pNext = nullptr,
-                                                     .flags = 0,
-                                                     .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-                                                     .module = compute_shader,
-                                                     .pName = entry_name.data(),
-                                                     .pSpecializationInfo = spec_infos.data(),
-                                             },
-                                     .layout = pi_layout,
-                                     .basePipelineHandle = VK_NULL_HANDLE,
-                                     .basePipelineIndex = -1};
+    const VkComputePipelineCreateInfo cpci{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+                                           .pNext = nullptr,
+                                           .flags = 0,
+                                           .stage =
+                                                   VkPipelineShaderStageCreateInfo{
+                                                           .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                                                           .pNext = nullptr,
+                                                           .flags = 0,
+                                                           .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                                                           .module = compute_shader,
+                                                           .pName = entry_name.data(),
+                                                           .pSpecializationInfo = spec_infos.data(),
+                                                   },
+                                           .layout = pi_layout,
+                                           .basePipelineHandle = VK_NULL_HANDLE,
+                                           .basePipelineIndex = -1};
     VkPipeline pipeline{VK_NULL_HANDLE};
     vk_check(vkCreateComputePipelines(device, cache, 1, &cpci, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, entry_name);
@@ -124,6 +123,8 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
                                    .size = sizeof(PredepthPushConstants)};
 
     VkPipelineLayoutCreateInfo layout_ci{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                                         .pNext = nullptr,
+                                         .flags = 0,
                                          .setLayoutCount = 1,
                                          .pSetLayouts = &bindless_layout,
                                          .pushConstantRangeCount = 1,
@@ -136,42 +137,58 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     // 3. Specialized Depth State
     VkPipelineDepthStencilStateCreateInfo ds{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
             .depthTestEnable = VK_TRUE,
             .depthWriteEnable = VK_TRUE,
             .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL, // Reverse-Z: Near is 1.0, Far is 0.0
+            .depthBoundsTestEnable = VkBool32{},
+            .stencilTestEnable = VkBool32{},
+            .front = {},
+            .back = {},
             .minDepthBounds = 0.0f,
             .maxDepthBounds = 1.0f,
     };
 
     // 4. No Color Attachments (The secret to Pre-Depth speed)
-    VkPipelineColorBlendStateCreateInfo cb{.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-                                           .attachmentCount = 0,
-                                           .pAttachments = nullptr};
+    VkPipelineColorBlendStateCreateInfo cb{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .logicOpEnable = VkBool32{},
+            .logicOp = VK_LOGIC_OP_MAX_ENUM,
+            .attachmentCount = 0,
+            .pAttachments = nullptr,
+            .blendConstants = {0, 0, 0, 0},
+    };
 
     // 5. Rasterization (Ensure Back-Face Culling is ON)
-    VkPipelineRasterizationStateCreateInfo rs{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                                              .cullMode = VK_CULL_MODE_BACK_BIT,
-                                              .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-                                              .lineWidth = 1.0f};
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
 
     // 6. Dynamic Rendering Info
-    VkPipelineRenderingCreateInfo rendering_info{.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-                                                 .colorAttachmentCount = 0,
-                                                 .depthAttachmentFormat = depth_format};
+    VkPipelineRenderingCreateInfo rendering_info{};
+    rendering_info.depthAttachmentFormat = depth_format;
+    rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
 
     // Viewport/Scissor setup (Standard)
-    VkPipelineViewportStateCreateInfo vp{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
-    VkPipelineMultisampleStateCreateInfo ms{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-            .rasterizationSamples = samples,
-    };
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = samples;
     std::array dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT,         VK_DYNAMIC_STATE_SCISSOR,
                                  VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_DEPTH_BOUNDS,
                                  VK_DYNAMIC_STATE_CULL_MODE,        VK_DYNAMIC_STATE_FRONT_FACE};
-    VkPipelineDynamicStateCreateInfo dy{.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-                                        .dynamicStateCount = static_cast<u32>(dynamic_states.size()),
-                                        .pDynamicStates = dynamic_states.data()};
+    VkPipelineDynamicStateCreateInfo dy{};
+    dy.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
+    dy.pDynamicStates = dynamic_states.data();
 
     std::array<VkVertexInputBindingDescription, 1> binding_descriptions{
             VkVertexInputBindingDescription{
@@ -200,33 +217,30 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
             .pVertexAttributeDescriptions = attribute_descriptions.data(),
     };
 
-    VkPipelineInputAssemblyStateCreateInfo assembly_state{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            .primitiveRestartEnable = VK_FALSE,
-    };
+    VkPipelineInputAssemblyStateCreateInfo assembly_state{};
+    assembly_state.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    assembly_state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    assembly_state.primitiveRestartEnable = VK_FALSE;
 
-    VkPipelineTessellationStateCreateInfo tesselation_state{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO,
-            .patchControlPoints = 0,
-    };
-
-    VkGraphicsPipelineCreateInfo ci{
-            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = &rendering_info,
-            .stageCount = static_cast<uint32_t>(stages.size()),
-            .pStages = stages.data(),
-            .pVertexInputState = &vertex_input,
-            .pInputAssemblyState = &assembly_state,
-            .pTessellationState = &tesselation_state,
-            .pViewportState = &vp,
-            .pRasterizationState = &rs,
-            .pMultisampleState = &ms,
-            .pDepthStencilState = &ds,
-            .pColorBlendState = &cb,
-            .pDynamicState = &dy,
-            .layout = layout,
-    };
+    VkGraphicsPipelineCreateInfo ci{.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                                    .pNext = &rendering_info,
+                                    .flags = 0,
+                                    .stageCount = static_cast<uint32_t>(stages.size()),
+                                    .pStages = stages.data(),
+                                    .pVertexInputState = &vertex_input,
+                                    .pInputAssemblyState = &assembly_state,
+                                    .pTessellationState = nullptr,
+                                    .pViewportState = &vp,
+                                    .pRasterizationState = &rs,
+                                    .pMultisampleState = &ms,
+                                    .pDepthStencilState = &ds,
+                                    .pColorBlendState = &cb,
+                                    .pDynamicState = &dy,
+                                    .layout = layout,
+                                    .renderPass = VK_NULL_HANDLE,
+                                    .subpass = 0,
+                                    .basePipelineHandle = VK_NULL_HANDLE,
+                                    .basePipelineIndex = -1};
 
     VkPipeline pipeline;
     vkCreateGraphicsPipelines(device, cache, 1, &ci, nullptr, &pipeline);
@@ -280,14 +294,24 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
 
 
     std::vector<VkPipelineShaderStageCreateInfo> stages = {
-            {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-             .stage = VK_SHADER_STAGE_VERTEX_BIT,
-             .module = vert_module,
-             .pName = "main_vs_mdi"},
-            {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-             .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-             .module = frag_module,
-             .pName = "main_fs"}};
+            {
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vert_module,
+                    .pName = "main_vs_mdi",
+                    .pSpecializationInfo = nullptr,
+            },
+            {
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = frag_module,
+                    .pName = "main_fs",
+                    .pSpecializationInfo = nullptr,
+            }};
 
     VkPipelineViewportStateCreateInfo viewport_state{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
@@ -424,11 +448,10 @@ auto create_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSet
             .pVertexAttributeDescriptions = attribute_descriptions.data(),
     };
 
-    VkPipelineInputAssemblyStateCreateInfo assembly_state{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-            .primitiveRestartEnable = VK_FALSE,
-    };
+    VkPipelineInputAssemblyStateCreateInfo assembly_state{};
+    assembly_state.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    assembly_state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    assembly_state.primitiveRestartEnable = VK_FALSE;
 
     VkGraphicsPipelineCreateInfo pipeline_info{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,

@@ -13,3 +13,5 @@ app_logs
 .zed
 CMakeUserPresets.json
 *.dot
+.venv
+venv

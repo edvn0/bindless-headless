@@ -25,11 +25,9 @@ struct PipelineCache {
         auto initial_data = read_cache();
         std::span<const std::uint8_t> s{initial_data};
 
-        VkPipelineCacheCreateInfo ci{.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
-                                     .pNext = nullptr,
-                                     .flags = 0U,
-                                     .initialDataSize = s.size_bytes(),
-                                     .pInitialData = s.empty() ? nullptr : s.data()};
+        auto ci = create_info<VkPipelineCacheCreateInfo>();
+        ci.initialDataSize = s.size_bytes();
+        ci.pInitialData = s.empty() ? nullptr : s.data();
 
         vk_check(vkCreatePipelineCache(device, &ci, nullptr, &cache));
     }

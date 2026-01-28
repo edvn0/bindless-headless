@@ -10,6 +10,7 @@
 // CPU
 #define ZoneScoped
 #define ZoneScopedN(x)
+#define ZoneScopedNC(x, y)
 #define FrameMark
 #define TracyMessageL(x)
 // GPU (compile out cleanly)

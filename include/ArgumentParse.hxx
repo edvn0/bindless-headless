@@ -1,5 +1,3 @@
-#include <CLI/CLI.hpp>
-
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>

@@ -7,6 +7,7 @@
 #include "PipelineCache.hxx"
 #include "Pool.hxx"
 #include "Reflection.hxx"
+#include "Swapchain.hxx"
 
 #include "3PP/PerlinNoise.hpp"
 
@@ -23,8 +24,11 @@ namespace {
     auto format_supports_storage_image(VkPhysicalDevice physical_device, VkFormat format, VkImageTiling tiling)
             -> bool {
         // Prefer VkFormatProperties3 (core in Vulkan 1.3, also via VK_KHR_format_feature_flags2).
-        VkFormatProperties3 props3{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3, .pNext = nullptr};
-        VkFormatProperties2 props2{.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &props3};
+        VkFormatProperties3 props3{};
+        props3.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3;
+        VkFormatProperties2 props2{};
+        props2.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+        props2.pNext = &props3;
         vkGetPhysicalDeviceFormatProperties2(physical_device, format, &props2);
 
         const VkFormatFeatureFlags2 want = VK_FORMAT_FEATURE_2_STORAGE_IMAGE_BIT;
@@ -94,14 +98,11 @@ namespace destruction {
         }
 
         if (inst.messenger != VK_NULL_HANDLE) {
-            auto destroy_debug = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-                    vkGetInstanceProcAddr(inst.instance, "vkDestroyDebugUtilsMessengerEXT"));
-            if (destroy_debug) {
-                destroy_debug(inst.instance, inst.messenger, nullptr);
-            }
+            vkDestroyDebugUtilsMessengerEXT(inst.instance, inst.messenger, nullptr);
         }
 
-        vkDestroyInstance(inst.instance, nullptr);
+        auto *destroy = vkDestroyInstance;
+        destroy(inst.instance, nullptr);
     }
 
     auto device(VkDevice &dev) -> void {
@@ -129,6 +130,9 @@ namespace destruction {
         }
         alloc = nullptr;
     }
+
+    auto swapchain(Swapchain &sc) -> void { sc.destroy(); }
+
 
     auto timeline_compute(VkDevice device, ComputeTimeline &comp) -> void {
         if (comp.pool)
@@ -224,7 +228,7 @@ namespace {
     }
 } // namespace
 
- auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
+auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
     char *buf{};
     size_t sz{};
     if (const auto ok = _dupenv_s(&buf, &sz, "BH_PIPE_CACHE_PATH") == 0 && buf; !ok)
@@ -268,37 +272,36 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
     const VkImageUsageFlags usage =
             make_color_image_usage(ai.physicalDevice, format, samples, want_sampled, want_storage, want_transfer);
 
-    VkImageCreateInfo ici{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = format,
-            .extent = {width, height, 1},
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = samples,
-            .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = usage,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    };
+    VkImageCreateInfo ici{};
+    ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = format;
+    ici.extent = {width, height, 1};
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = samples;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = usage;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    VmaAllocationCreateInfo aci{.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     vk_check(vmaCreateImage(alloc, &ici, &aci, &t.image, &t.allocation, nullptr));
 
 
-    VkImageViewCreateInfo vci{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = t.image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = format,
-            .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                           VK_COMPONENT_SWIZZLE_IDENTITY},
-            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                 .baseMipLevel = 0,
-                                 .levelCount = 1,
-                                 .baseArrayLayer = 0,
-                                 .layerCount = 1},
-    };
+    VkImageViewCreateInfo vci{};
+    vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vci.image = t.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = format;
+    vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                      VK_COMPONENT_SWIZZLE_IDENTITY};
+    vci.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .baseMipLevel = 0,
+                            .levelCount = 1,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1};
 
     // Attachment view always (because usage always contains COLOR_ATTACHMENT_BIT in make_color_image_usage()).
     vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.attachment_view));
@@ -332,21 +335,21 @@ auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat fo
 
     const VkImageUsageFlags usage = make_depth_image_usage(samples, want_sampled);
 
-    VkImageCreateInfo ici{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = format,
-            .extent = {width, height, 1},
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = samples,
-            .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = usage,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-    };
+    VkImageCreateInfo ici{};
+    ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = format;
+    ici.extent = {width, height, 1};
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = samples;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = usage;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    VmaAllocationCreateInfo aci{.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
     vk_check(vmaCreateImage(alloc, &ici, &aci, &t.image, &t.allocation, nullptr));
 
     VmaAllocatorInfo ai{};
@@ -354,16 +357,15 @@ auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat fo
 
     const VkImageAspectFlags aspect = choose_depth_aspect(format);
 
-    VkImageViewCreateInfo vci{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = t.image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = format,
-            .components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-                           VK_COMPONENT_SWIZZLE_IDENTITY},
-            .subresourceRange =
-                    {.aspectMask = aspect, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1},
-    };
+    VkImageViewCreateInfo vci{};
+    vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vci.image = t.image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = format;
+    vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                      VK_COMPONENT_SWIZZLE_IDENTITY};
+    vci.subresourceRange = {
+            .aspectMask = aspect, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1};
 
     // Attachment view always.
     vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.attachment_view));
@@ -427,20 +429,21 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
     vmaUnmapMemory(alloc, staging_alloc);
 
     auto submit_copy = [&](VkCommandBuffer cb) {
-        VkImageMemoryBarrier2 pre{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                                  .pNext = nullptr,
-                                  .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-                                  .srcAccessMask = 0,
-                                  .dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                  .dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                  .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                                  .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                  .image = t.image,
-                                  .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                       .baseMipLevel = 0,
-                                                       .levelCount = 1,
-                                                       .baseArrayLayer = 0,
-                                                       .layerCount = 1}};
+        VkImageMemoryBarrier2 pre{};
+        pre.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        pre.pNext = nullptr;
+        pre.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        pre.srcAccessMask = 0;
+        pre.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        pre.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        pre.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        pre.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        pre.image = t.image;
+        pre.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                .baseMipLevel = 0,
+                                .levelCount = 1,
+                                .baseArrayLayer = 0,
+                                .layerCount = 1};
 
         VkDependencyInfo di_pre{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                                 .pNext = nullptr,
@@ -466,20 +469,21 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 
         vkCmdCopyBufferToImage(cb, staging, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bic);
 
-        VkImageMemoryBarrier2 post{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                                   .pNext = nullptr,
-                                   .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                                   .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                   .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                   .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                                   .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   .newLayout = VK_IMAGE_LAYOUT_GENERAL, // We always use GENERAL. This is desktop safe.
-                                   .image = t.image,
-                                   .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        .baseMipLevel = 0,
-                                                        .levelCount = 1,
-                                                        .baseArrayLayer = 0,
-                                                        .layerCount = 1}};
+        VkImageMemoryBarrier2 post{};
+        post.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        post.pNext = nullptr;
+        post.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        post.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        post.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        post.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        post.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        post.newLayout = VK_IMAGE_LAYOUT_GENERAL; // We always use GENERAL. This is desktop safe.
+        post.image = t.image;
+        post.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                 .baseMipLevel = 0,
+                                 .levelCount = 1,
+                                 .baseArrayLayer = 0,
+                                 .layerCount = 1};
 
         VkDependencyInfo di_post{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
                                  .pNext = nullptr,
@@ -599,31 +603,27 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
             .primitiveFragmentShadingRate = VK_TRUE,
             .attachmentFragmentShadingRate = VK_TRUE};
 
-    VkPhysicalDeviceMeshShaderFeaturesEXT mesh_features = {
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
-            .pNext = &shading_rate_features_khr,
-            .taskShader = VK_TRUE, // Optional, but recommended for culling
-            .meshShader = VK_TRUE,
-            .primitiveFragmentShadingRateMeshShader = VK_TRUE,
-    };
-    VkPhysicalDeviceAccelerationStructureFeaturesKHR accel_features{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
-            .pNext = &mesh_features,
-    };
+    VkPhysicalDeviceMeshShaderFeaturesEXT mesh_features{};
+    mesh_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT;
+    mesh_features.pNext = &shading_rate_features_khr;
+    mesh_features.taskShader = VK_TRUE; // Optional; but recommended for culling
+    mesh_features.meshShader = VK_TRUE;
+    mesh_features.primitiveFragmentShadingRateMeshShader = VK_TRUE;
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accel_features{};
+    accel_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
+    accel_features.pNext = &mesh_features;
 
-    VkPhysicalDeviceVulkan11Features features11{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
-                                                .pNext = &accel_features};
+    VkPhysicalDeviceVulkan11Features features11{};
+    features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, features11.pNext = &accel_features;
 
-    VkPhysicalDeviceVulkan12Features features12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-                                                .pNext = &features11};
+    VkPhysicalDeviceVulkan12Features features12{};
+    features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, features12.pNext = &features11;
 
-    VkPhysicalDeviceVulkan13Features features13{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-                                                .pNext = &features12};
+    VkPhysicalDeviceVulkan13Features features13{};
+    features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, features13.pNext = &features12;
 
-    VkPhysicalDeviceFeatures2 features2{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            .pNext = &features13,
-    };
+    VkPhysicalDeviceFeatures2 features2{};
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, features2.pNext = &features13;
 
 
     vkGetPhysicalDeviceFeatures2(pd, &features2);
@@ -750,10 +750,12 @@ auto throttle(ComputeTimeline &tl, VkDevice device) -> void {
         return;
 
     const u64 wait_val = tl.value - limit;
-    VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                           .semaphoreCount = 1,
-                           .pSemaphores = &tl.timeline,
-                           .pValues = &wait_val};
+    const VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                                 .pNext = nullptr,
+                                 .flags = 0,
+                                 .semaphoreCount = 1,
+                                 .pSemaphores = &tl.timeline,
+                                 .pValues = &wait_val};
     vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
     tl.completed = wait_val;
 }
@@ -769,6 +771,8 @@ auto throttle(GraphicsTimeline &tl, VkDevice device) -> void {
 
     const u64 wait_val = tl.value - limit;
     VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                           .pNext = nullptr,
+                           .flags = 0,
                            .semaphoreCount = 1,
                            .pSemaphores = &tl.timeline,
                            .pValues = &wait_val};

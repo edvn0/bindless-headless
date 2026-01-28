@@ -1,5 +1,9 @@
 include_guard(GLOBAL)
 
+include(CMakePushCheckState)
+include(CheckCXXCompilerFlag)
+include(CheckCCompilerFlag)
+
 add_executable(BindlessHeadless
   "src/main.cpp"
   "src/ArgumentParse.cxx"
@@ -36,9 +40,27 @@ target_link_libraries(BindlessHeadlessAllocator PRIVATE
   volk::volk_headers
   VulkanMemoryAllocator
 )
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(BindlessHeadlessAllocator PRIVATE -Wno-nullability-completeness)
+endif()
 
 target_compile_definitions(ThirdPartySTB PRIVATE STB_IMAGE_IMPLEMENTATION)
 target_include_directories(ThirdPartySTB PUBLIC "3PP")
+
+cmake_push_check_state()
+set(ASAN_FLAG "-fsanitize=address")
+set(CMAKE_REQUIRED_FLAGS ${ASAN_FLAG})
+check_c_compiler_flag(${ASAN_FLAG} C__fsanitize_address_VALID)
+check_cxx_compiler_flag(${ASAN_FLAG} CXX__fsanitize_address_VALID)
+if(NOT C__fsanitize_address_VALID OR NOT CXX__fsanitize_address_VALID)
+  message(STATUS "ENABLE_ASAN was requested, but not supported!")
+endif()
+cmake_pop_check_state()
+
+if (MSVC)
+  add_compile_options(/bigobj)
+endif()
+
 
 target_link_libraries(BindlessHeadless PRIVATE
   volk
@@ -47,12 +69,15 @@ target_link_libraries(BindlessHeadless PRIVATE
   spdlog::spdlog
   efsw-static
   ThirdPartySTB
-  PUBLIC
-  glm::glm
   CLI11::CLI11
+  glm::glm
   glfw
-  expected 
+  expected
 )
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  target_compile_options(BindlessHeadless PRIVATE -ftime-trace)
+endif()
 
 # Slang runtime deps only when runtime path
 if (ENGINE_OFFLINE_SHADERS)

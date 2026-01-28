@@ -9,6 +9,7 @@
 #include <slang.h>
 #endif
 
+#if defined(ENGINE_OFFLINE_SHADERS)
 namespace {
 
     auto read_file_bytes(std::filesystem::path const &p) -> std::vector<std::byte> {
@@ -54,6 +55,7 @@ namespace {
     }
 
 } // namespace
+#endif
 
 struct detail::Impl {
     virtual ~Impl() = default;

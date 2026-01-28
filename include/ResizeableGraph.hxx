@@ -25,14 +25,14 @@ struct ResizeContext {
 struct ResizeGraph {
     using ResizeCallback = std::function<void(VkExtent2D, const ResizeContext &)>;
 
-    using NodeId = std::uint32_t;
+    using NodeId = u32;
 
     struct Node {
         NodeId id{0};
         std::string name{};
         std::vector<NodeId> deps{}; // edges: dep -> this
         ResizeCallback rebuild{}; // called in topo order
-        std::uint32_t insertion_index{0};
+        u32 insertion_index{0};
     };
 
     auto add_node(std::string_view name, ResizeCallback &&rebuild) -> NodeId {
@@ -42,7 +42,7 @@ struct ResizeGraph {
                 .name = std::string{name},
                 .deps = {},
                 .rebuild = std::move(rebuild),
-                .insertion_index = static_cast<std::uint32_t>(nodes.size()),
+                .insertion_index = static_cast<u32>(nodes.size()),
         });
         id_to_index[id] = nodes.size() - 1;
         return id;
@@ -89,7 +89,7 @@ private:
         std::unordered_map<NodeId, std::vector<NodeId>> outgoing{};
         outgoing.reserve(nodes.size());
 
-        std::unordered_map<NodeId, std::uint32_t> indegree{};
+        std::unordered_map<NodeId, u32> indegree{};
         indegree.reserve(nodes.size());
 
         for (auto &n: nodes) {
@@ -114,7 +114,7 @@ private:
             }
         }
 
-        auto insertion_index_of = [&](NodeId id) -> std::uint32_t { return nodes[id_to_index.at(id)].insertion_index; };
+        auto insertion_index_of = [&](NodeId id) -> u32 { return nodes[id_to_index.at(id)].insertion_index; };
 
         auto stable_ready_sort = [&] {
             std::ranges::sort(ready, [&](NodeId a, NodeId b) { return insertion_index_of(a) < insertion_index_of(b); });

@@ -158,6 +158,8 @@ auto Swapchain::create_swapchain_resources(VkExtent2D requested_extent, bool use
     const u32 image_count = choose_image_count(caps);
 
     VkSwapchainCreateInfoKHR sci{.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+                                 .pNext = nullptr,
+                                 .flags = 0,
                                  .surface = surface,
                                  .minImageCount = image_count,
                                  .imageFormat = surface_format.format,
@@ -200,6 +202,8 @@ auto Swapchain::create_swapchain_resources(VkExtent2D requested_extent, bool use
     std::vector<VkImageView> new_views(swap_image_count, VK_NULL_HANDLE);
     for (u32 i = 0; i < swap_image_count; ++i) {
         VkImageViewCreateInfo ivci{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                   .pNext = nullptr,
+                                   .flags = 0,
                                    .image = new_images[i],
                                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
                                    .format = surface_format.format,
@@ -233,7 +237,11 @@ auto Swapchain::create_swapchain_resources(VkExtent2D requested_extent, bool use
     }
     render_finished_semaphores.resize(swap_image_count);
 
-    VkSemaphoreCreateInfo sem_ci{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VkSemaphoreCreateInfo sem_ci{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+    };
 
     for (u32 i = 0; i < swap_image_count; ++i) {
         res = vkCreateSemaphore(device, &sem_ci, nullptr, &render_finished_semaphores[i]);
@@ -306,7 +314,11 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain,
 
     out.acquire_semaphores.resize(frames_in_flight);
 
-    VkSemaphoreCreateInfo sem_ci{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+    VkSemaphoreCreateInfo sem_ci{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+    };
 
     for (u32 fi = 0; fi < frames_in_flight; ++fi) {
         VkResult res = vkCreateSemaphore(ci.device, &sem_ci, nullptr, &out.acquire_semaphores[fi]);
@@ -355,6 +367,7 @@ auto Swapchain::present(VkQueue queue, u32 image_index, VkSemaphore render_finis
     }
 
     VkPresentInfoKHR pi{.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                        .pNext = nullptr,
                         .waitSemaphoreCount = render_finished ? 1u : 0u,
                         .pWaitSemaphores = render_finished ? &render_finished : nullptr,
                         .swapchainCount = 1u,

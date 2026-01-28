@@ -6,12 +6,9 @@
 #include "Pool.hxx"
 #include "Reflection.hxx"
 #include "Types.hxx"
-#include "vulkan/vulkan_core.h"
-
 
 #include <bitset>
 #include <volk.h>
-
 
 #include <GLFW/glfw3.h>
 #include <array>
@@ -27,6 +24,8 @@
 
 #include <tl/expected.hpp>
 #include <vk_mem_alloc.h>
+
+#include "CreateInfo.hxx"
 
 
 namespace detail {
@@ -60,7 +59,7 @@ namespace detail {
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cb;
 
-        VkFenceCreateInfo fci{.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .pNext = nullptr, .flags = 0};
+        auto fci = create_info<VkFenceCreateInfo>();
 
         VkFence fence{};
         vk_check(vkCreateFence(device, &fci, nullptr, &fence));
@@ -312,6 +311,8 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     const u64 last = tl.slot_last_signal[index];
     if (last != 0) {
         VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                               .pNext = nullptr,
+                               .flags = 0,
                                .semaphoreCount = 1,
                                .pSemaphores = &tl.timeline,
                                .pValues = &last};
@@ -321,7 +322,12 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
 
     vk_check(vkResetCommandBuffer(cmd, 0));
 
-    VkCommandBufferBeginInfo bi{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = 0};
+    VkCommandBufferBeginInfo bi{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .pInheritanceInfo = nullptr,
+    };
     vk_check(vkBeginCommandBuffer(cmd, &bi));
 
     record(cmd);
@@ -370,6 +376,7 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
 
     VkTimelineSemaphoreSubmitInfo timeline_info{
             .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .pNext = nullptr,
             .waitSemaphoreValueCount = static_cast<u32>(wait_values.size()),
             .pWaitSemaphoreValues = wait_values.empty() ? nullptr : wait_values.data(),
             .signalSemaphoreValueCount = static_cast<u32>(signal_values.size()),
@@ -401,7 +408,6 @@ namespace destruction {
     inline auto wsi(VkInstance &inst, VkSurfaceKHR &surf, GLFWwindow *win) -> void {
         vkDestroySurfaceKHR(inst, surf, nullptr);
         glfwDestroyWindow(win);
-        glfwTerminate();
     }
 
     auto device(VkDevice &dev) -> void;
@@ -409,6 +415,7 @@ namespace destruction {
     auto bindless_set(VkDevice device, BindlessSet &bs) -> void;
 
     auto allocator(VmaAllocator &alloc) -> void;
+    auto swapchain(Swapchain &) -> void;
 
     auto timeline_compute(VkDevice device, GraphicsTimeline &comp) -> void;
     auto timeline_compute(VkDevice device, ComputeTimeline &comp) -> void;

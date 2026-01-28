@@ -6,3 +6,4 @@ struct BindlessSet;
 struct ReflectionData;
 struct RenderContext;
 struct PipelineCache;
+class Swapchain;
