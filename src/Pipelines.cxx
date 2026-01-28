@@ -34,6 +34,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pi_layout, entry_name);
 
+    // u32, u32
     const std::array<u32, 2> data{MAX_WAVES_PER_GROUP, THREADS_PER_GROUP};
 
     const VkSpecializationMapEntry waves_per_group_spec_map_entry{
@@ -43,7 +44,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     };
     const VkSpecializationMapEntry threads_per_group_spec_map_entry{
             .constantID = 1,
-            .offset = 0,
+            .offset = sizeof(u32),
             .size = sizeof(u32),
     };
     const std::array entries{waves_per_group_spec_map_entry, threads_per_group_spec_map_entry};

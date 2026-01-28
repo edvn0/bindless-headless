@@ -30,6 +30,10 @@ struct UV4
     float2 uv1;
 };
 
+struct Transform {
+    float3x4 m;
+};
+
 UV4 unpack_uv_8_8_8_8(uint packed)
 {
     float u0 = float( packed        & 0xFF) / 255.0;

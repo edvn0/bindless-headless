@@ -210,8 +210,6 @@ namespace image_operations {
         // ============================
 
         void convert_pixels_mt(std::vector<u8> &out, const u8 *pixel_data, u32 width, u32 height, VkFormat format) {
-            ZoneScopedNC("convert_pixels_mt", 0xFFFFFF);
-
             init_srgb_lut();
 
             const u32 threads = std::max(1u, std::thread::hardware_concurrency());
@@ -497,11 +495,19 @@ namespace image_operations {
 
                     const u8 *pixel_data = static_cast<const u8 *>(staging.alloc_info.pMappedData);
 
-                    write_bmp_headers(output, staging.width, staging.height);
-                    convert_pixels_mt(cpu_pixels, pixel_data, staging.width, staging.height, staging.format);
+                    {
+                        ZoneScopedNC("Write BMP headers", 0xFF1000);
+                        write_bmp_headers(output, staging.width, staging.height);
+                    }
+                    {
+                        ZoneScopedNC("Write pixels", 0xFFFF00);
+                        convert_pixels_mt(cpu_pixels, pixel_data, staging.width, staging.height, staging.format);
+                    }
 
-                    output.write(reinterpret_cast<char *>(cpu_pixels.data()), cpu_pixels.size());
-                    output.close();
+                    {
+                        ZoneScopedNC("Generic IO, write bytes", 0xFF00FF);
+                        output.write(reinterpret_cast<char *>(cpu_pixels.data()), cpu_pixels.size());
+                    }
                 }));
             }
 
