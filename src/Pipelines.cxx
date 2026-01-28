@@ -34,29 +34,27 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pi_layout, entry_name);
 
-    VkSpecializationInfo waves_per_group_spec_info{};
+    std::array<u32, 2> data{MAX_WAVES_PER_GROUP, THREADS_PER_GROUP};
+
     VkSpecializationMapEntry waves_per_group_spec_map_entry{
             .constantID = 0,
             .offset = 0,
             .size = sizeof(u32),
     };
-    waves_per_group_spec_info.mapEntryCount = 1;
-    waves_per_group_spec_info.pMapEntries = &waves_per_group_spec_map_entry;
-    waves_per_group_spec_info.dataSize = sizeof(u32);
-    waves_per_group_spec_info.pData = &MAX_WAVES_PER_GROUP;
-
     VkSpecializationInfo threads_per_group_spec_info{};
     VkSpecializationMapEntry threads_per_group_spec_map_entry{
             .constantID = 1,
             .offset = 0,
             .size = sizeof(u32),
     };
-    threads_per_group_spec_info.mapEntryCount = 1;
-    threads_per_group_spec_info.pMapEntries = &threads_per_group_spec_map_entry;
-    threads_per_group_spec_info.dataSize = sizeof(u32);
-    threads_per_group_spec_info.pData = &THREADS_PER_GROUP;
+    std::array entries{waves_per_group_spec_map_entry, threads_per_group_spec_map_entry};
+    VkSpecializationInfo spec_info{};
+    spec_info.mapEntryCount = 2;
+    spec_info.pMapEntries = entries.data();
+    spec_info.dataSize = 2 * sizeof(u32);
+    spec_info.pData = data.data();
 
-    std::array spec_infos{waves_per_group_spec_info, threads_per_group_spec_info};
+    std::array spec_infos{spec_info};
 
 
     VkComputePipelineCreateInfo cpci{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,

@@ -11,7 +11,7 @@ class AlignedRingBuffer {
     u64 element_count{1}; // Number of T elements per slot
     std::array<DeviceAddress, N> slot_addresses{};
 
-    auto base_address() const noexcept -> DeviceAddress { return slot_addresses[0]; }
+    [[nodiscard]] auto base_address() const noexcept -> DeviceAddress { return slot_addresses[0]; }
 
 public:
     static constexpr u64 slot_count{N};

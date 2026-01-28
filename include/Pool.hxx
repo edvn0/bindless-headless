@@ -74,8 +74,23 @@ private:
     std::uint32_t index_ = 0u;
     std::uint32_t generation = 0u;
 };
-static_assert(std::is_trivially_copyable_v<Handle<class Foo>>);
-static_assert(sizeof(Handle<class foo>) == sizeof(u64));
+static_assert(std::is_trivially_copyable_v<Handle<class DebugFoo>>);
+static_assert(sizeof(Handle<class DebugFoo>) == sizeof(u64));
+
+template<typename T>
+class Holder {
+    RenderContext *context;
+    Handle<T> handle{};
+
+public:
+    explicit Holder(RenderContext &ctx, Handle<T> h) : context(&ctx), handle(h) {}
+    ~Holder() { destroy(context, handle, std::numeric_limits<u64>::max()); }
+
+    Holder(const Holder &) = delete;
+    auto operator=(const Holder &) = delete;
+    Holder(Holder &&) = delete;
+    auto operator=(Holder &&) = delete;
+};
 
 template<typename ObjectType, typename ImplObjectType>
 class Pool {
@@ -89,6 +104,7 @@ class Pool {
         ImplObjectType object{};
         std::uint32_t generation = 1u;
         std::uint32_t next_free = list_end;
+        bool live{false};
     };
 
 public:
@@ -98,9 +114,11 @@ public:
             idx = free_list_head;
             free_list_head = entries[idx].next_free;
             entries[idx].object = std::move(obj);
+            entries[idx].live = true;
         } else {
             idx = static_cast<std::uint32_t>(entries.size());
-            entries.emplace_back(std::move(obj));
+            auto &object = entries.emplace_back(std::move(obj));
+            object.live = true;
         }
         ++object_count;
         return Handle<ObjectType>(idx, entries[idx].generation);
@@ -117,6 +135,7 @@ public:
         assert(handle.gen() == entries[index].generation);
 
         entries[index].object = ImplObjectType{};
+        entries[index].live = false;
         ++entries[index].generation;
         entries[index].next_free = free_list_head;
         free_list_head = index;
@@ -134,6 +153,7 @@ public:
 
         ImplObjectType obj = std::move(entries[index].object);
         entries[index].object = ImplObjectType{};
+        entries[index].live = false;
         ++entries[index].generation;
         entries[index].next_free = free_list_head;
         free_list_head = index;
@@ -176,14 +196,10 @@ public:
 
     template<typename Fn>
     auto for_each_live(Fn &&fn) -> void {
-        for (std::uint32_t i = 0u; i < entries.size(); ++i) {
-            auto const &e = entries[i];
-            if (e.generation == 0u) {
+        for (u32 i = 0; i < entries.size(); ++i) {
+            if (!entries[i].live)
                 continue;
-            }
-            if (!is_free(i)) {
-                fn(get_handle(i), e.object);
-            }
+            fn(get_handle(i), entries[i].object);
         }
     }
 
@@ -195,9 +211,7 @@ public:
 
     [[nodiscard]] auto num_objects() const -> std::uint32_t { return object_count; }
 
-    [[nodiscard]] auto data() -> std::vector<PoolEntry> & { return entries; }
-
-    [[nodiscard]] auto data() const -> std::vector<PoolEntry> const & { return entries; }
+    [[nodiscard]] auto data() const -> std::span<const PoolEntry> { return std::span<const PoolEntry>{entries}; }
 
 private:
     std::vector<PoolEntry> entries{};

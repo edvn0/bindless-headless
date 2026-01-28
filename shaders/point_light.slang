@@ -6,7 +6,7 @@ struct VertexOutput {
     float3 world_pos : TEXCOORD0;
     float3 normal    : TEXCOORD1;
     float2 uv        : TEXCOORD2;
-    uint   material  : TEXCOORD3; // pass along if you want
+   nointerpolation uint   material  : TEXCOORD3; // pass along if you want
 };
 
 struct VertexInput {

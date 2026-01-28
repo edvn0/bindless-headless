@@ -35,9 +35,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include "RenderContext.hxx"
 #include "BindlessHeadless.hxx"
 #include "Constants.hxx"
+#include "RenderContext.hxx"
 
 #include <3PP/stb_image.h>
 #include <glm/glm.hpp>
@@ -72,10 +72,10 @@ struct GPUMaterialData {
     u32 occlusion_map{};
     u32 emissive_map{};
     glm::vec3 emissive_factor{0.0f};
-    u32 _pad0{};  // Ensure struct size is multiple of 16
+    u32 _pad0{}; // Ensure struct size is multiple of 16
 };
 
-auto load_mtl(const std::filesystem::path& mtl_path) -> std::unordered_map<std::string, MaterialData> ;
+auto load_mtl(const std::filesystem::path &mtl_path) -> std::unordered_map<std::string, MaterialData>;
 
 // -----------------------------------------------------------------------------
 // Textures
@@ -87,8 +87,10 @@ struct TextureLoadPacket {
 
     auto to_format() const -> VkFormat {
         switch (type) {
-            case Type::Linear: return VK_FORMAT_R8G8B8A8_UNORM;
-            case Type::SRGB:   return VK_FORMAT_R8G8B8A8_SRGB;
+            case Type::Linear:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+            case Type::SRGB:
+                return VK_FORMAT_R8G8B8A8_SRGB;
         }
         return VK_FORMAT_R8G8B8A8_UNORM;
     }
@@ -101,18 +103,17 @@ struct TextureLoadPacket {
     std::string name{};
 };
 
-auto load_texture_from_file(const std::filesystem::path& texture_path,
-                            const TextureLoadPacket::Type type,
-                            const TextureLoadPacket::Class texture_class) -> TextureLoadPacket ;
+auto load_texture_from_file(const std::filesystem::path &texture_path, const TextureLoadPacket::Type type,
+                            const TextureLoadPacket::Class texture_class) -> TextureLoadPacket;
 
 // -----------------------------------------------------------------------------
 // Mesh layout: one big buffer + submeshes
 // -----------------------------------------------------------------------------
 
 struct Submesh {
-    u32 index_offset {0};
-    u32 index_count {0};
-    u32 material_id {0};
+    u32 index_offset{0};
+    u32 index_count{0};
+    u32 material_id{0};
 };
 
 struct Vertex {
@@ -162,7 +163,6 @@ struct LoadedTextureTable {
 };
 
 
-
 // -----------------------------------------------------------------------------
 // Loader return type: mesh + GPU material buffer + debug info
 // -----------------------------------------------------------------------------
@@ -186,6 +186,5 @@ struct LoadedObj {
 // OBJ loader (full integration)
 // -----------------------------------------------------------------------------
 
-auto load_obj(RenderContext& ctx,
-              GlobalCommandContext& cmd_ctx,
-              const std::filesystem::path& obj_path) -> std::optional<LoadedObj> ;
+auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::filesystem::path &obj_path)
+        -> std::optional<LoadedObj>;

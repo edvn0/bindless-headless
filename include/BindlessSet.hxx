@@ -121,87 +121,145 @@ struct BindlessSet {
         return true;
     }
 
+
     auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers) -> void {
         if (!need_repopulate) [[likely]]
             return;
 
+        // Ensure descriptor arrays are big enough for current pools (your existing policy)
         grow_if_needed(textures.num_objects(), samplers.num_objects(), textures.num_objects(), 0u);
 
-        std::vector<VkWriteDescriptorSet> writes;
-        std::vector<VkDescriptorImageInfo> image_infos;
+        // Guard slot 0 must exist and be valid
+        auto &dummy_sampler = *samplers.get(samplers.get_handle(0));
+        auto &dummy_texture = *textures.get(textures.get_handle(0));
 
-        auto texture_count = textures.num_objects();
-        auto sampler_count = samplers.num_objects();
-        writes.reserve(texture_count * 2 + sampler_count);
-        image_infos.reserve(texture_count * 2 + sampler_count);
+        const VkImageView &dummy_sampled_view = dummy_texture.sampled_view;
+        const VkImageView &dummy_storage_view = (dummy_texture.storage_view != VK_NULL_HANDLE)
+                                                        ? dummy_texture.storage_view
+                                                        : dummy_texture.sampled_view;
+        const VkSampler &dummy_vk_sampler = dummy_sampler;
 
-        textures.for_each_live([&](auto handle, auto &texture) {
-            const u32 idx = handle.index();
+        // Fill whole descriptor arrays with defaults (no sparse holes)
+        std::vector<VkDescriptorImageInfo> sampled_infos(max_textures);
+        std::vector<VkDescriptorImageInfo> storage_infos(max_storage_images);
+        std::vector<VkDescriptorImageInfo> sampler_infos(max_samplers);
 
-            if (texture.sampled_view != VK_NULL_HANDLE) {
-                const VkImageLayout layout = (detail::is_depth_format(texture.format))
-                                                     ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                                                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-                image_infos.push_back(
-                        {.sampler = VK_NULL_HANDLE, .imageView = texture.sampled_view, .imageLayout = layout});
-
-                writes.push_back({
-                        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                        .pNext = nullptr,
-                        .dstSet = set,
-                        .dstBinding = 0,
-                        .dstArrayElement = idx,
-                        .descriptorCount = 1,
-                        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                        .pImageInfo = &image_infos.back(),
-                        .pBufferInfo = nullptr,
-                        .pTexelBufferView = nullptr,
-                });
-            }
-
-            if (texture.storage_view != VK_NULL_HANDLE) {
-                image_infos.push_back({.sampler = VK_NULL_HANDLE,
-                                       .imageView = texture.storage_view,
-                                       .imageLayout = VK_IMAGE_LAYOUT_GENERAL});
-
-                writes.push_back({
-                        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                        .pNext = nullptr,
-                        .dstSet = set,
-                        .dstBinding = 2,
-                        .dstArrayElement = idx,
-                        .descriptorCount = 1,
-                        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                        .pImageInfo = &image_infos.back(),
-                        .pBufferInfo = nullptr,
-                        .pTexelBufferView = nullptr,
-                });
-            }
-        });
-
-        samplers.for_each_live([&](auto handle, auto &sampler) {
-            image_infos.push_back(
-                    {.sampler = sampler, .imageView = VK_NULL_HANDLE, .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED});
-
-            writes.push_back({.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                              .pNext = nullptr,
-                              .dstSet = set,
-                              .dstBinding = 1,
-                              .dstArrayElement = handle.index(),
-                              .descriptorCount = 1,
-                              .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
-                              .pImageInfo = &image_infos.back(),
-                              .pBufferInfo = nullptr,
-                              .pTexelBufferView = nullptr});
-        });
-
-        if (!writes.empty()) {
-            vkUpdateDescriptorSets(device, static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+        for (u32 i = 0; i < max_textures; ++i) {
+            sampled_infos[i] = VkDescriptorImageInfo{
+                    .sampler = VK_NULL_HANDLE,
+                    .imageView = dummy_sampled_view,
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            };
         }
 
+        for (u32 i = 0; i < max_storage_images; ++i) {
+            storage_infos[i] = VkDescriptorImageInfo{
+                    .sampler = VK_NULL_HANDLE,
+                    .imageView = dummy_storage_view,
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            };
+        }
+
+        for (u32 i = 0; i < max_samplers; ++i) {
+            sampler_infos[i] = VkDescriptorImageInfo{
+                    .sampler = dummy_vk_sampler,
+                    .imageView = VK_NULL_HANDLE,
+                    .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            };
+        }
+
+        // Now overwrite defaults for slots we actually have, CLAMPED to descriptor sizes.
+        // Important: descriptor index == pool slot index.
+        {
+            u32 idx = 0;
+            const u32 limit = std::min<u32>(static_cast<u32>(textures.data().size()), max_textures);
+
+            for (const auto &tex_entry: textures.data()) {
+                if (idx >= limit) {
+                    break;
+                }
+
+                const auto &texture = tex_entry.object;
+
+                // If your pool can contain invalid entries, keep dummy for those.
+                // (You can add your own "is_valid" predicate here if you have one.)
+                if (texture.sampled_view != VK_NULL_HANDLE) {
+                    sampled_infos[idx] = VkDescriptorImageInfo{
+                            .sampler = VK_NULL_HANDLE,
+                            .imageView = texture.sampled_view,
+                            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    };
+                }
+
+                if (idx < max_storage_images && texture.storage_view != VK_NULL_HANDLE) {
+                    storage_infos[idx] = VkDescriptorImageInfo{
+                            .sampler = VK_NULL_HANDLE,
+                            .imageView = texture.storage_view,
+                            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    };
+                }
+
+                ++idx;
+            }
+        }
+
+        {
+            u32 idx = 0;
+            const u32 limit = std::min<u32>(static_cast<u32>(samplers.data().size()), max_samplers);
+
+            for (const auto &sampler_entry: samplers.data()) {
+                if (idx >= limit) {
+                    break;
+                }
+
+                const VkSampler s = sampler_entry.object;
+                sampler_infos[idx] = VkDescriptorImageInfo{
+                        .sampler = (s != VK_NULL_HANDLE) ? s : dummy_vk_sampler,
+                        .imageView = VK_NULL_HANDLE,
+                        .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                };
+
+                ++idx;
+            }
+        }
+
+        VkWriteDescriptorSet writes[3]{};
+        u32 num_writes = 0;
+
+        writes[num_writes++] = VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = max_textures,
+                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                .pImageInfo = sampled_infos.data(),
+        };
+
+        writes[num_writes++] = VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = max_samplers,
+                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+                .pImageInfo = sampler_infos.data(),
+        };
+
+        writes[num_writes++] = VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = set,
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = max_storage_images,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .pImageInfo = storage_infos.data(),
+        };
+
+        vkUpdateDescriptorSets(device, num_writes, writes, 0, nullptr);
         need_repopulate = false;
     }
+
 
 private:
     auto recreate() -> void {

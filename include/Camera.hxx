@@ -1,9 +1,9 @@
 #pragma once
 
 #include <GLFW/glfw3.h>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
-#include <glm/gtc/constants.hpp>
 
 struct CameraInput {
     bool lmb{false};
@@ -14,7 +14,7 @@ struct CameraInput {
     bool ctrl{false};
 
     glm::vec2 mouse_delta{0.0f, 0.0f}; // pixels
-    float scroll_delta{0.0f};          // y scroll units
+    float scroll_delta{0.0f}; // y scroll units
 };
 
 struct EditorCamera {
@@ -35,9 +35,9 @@ struct EditorCamera {
     glm::vec3 up{0.0f, 1.0f, 0.0f};
 
     // Tunables
-    float orbit_sensitivity{0.12f};  // deg / pixel
-    float pan_sensitivity{1.0f};     // unitless, scaled by distance
-    float dolly_sensitivity{0.12f};  // exponential zoom
+    float orbit_sensitivity{0.12f}; // deg / pixel
+    float pan_sensitivity{1.0f}; // unitless, scaled by distance
+    float dolly_sensitivity{0.12f}; // exponential zoom
     float fly_look_sensitivity{0.12f}; // deg / pixel
 
     float fly_speed{10.0f};
@@ -60,6 +60,6 @@ struct EditorCamera {
     auto apply_dolly(float scroll_y) -> void;
     auto apply_fly_look(const glm::vec2 delta_px) -> void;
 
-    auto update_fly_move(GLFWwindow* window, double dt, bool fast) -> void;
-    auto update(GLFWwindow* window, double dt, CameraInput& in) -> void ;
+    auto update_fly_move(GLFWwindow *window, double dt, bool fast) -> void;
+    auto update(GLFWwindow *window, double dt, CameraInput &in) -> void;
 };

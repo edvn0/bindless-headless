@@ -76,6 +76,8 @@ auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void
         return;
     }
 
+    ctx.bindless_set->need_repopulate = true;
+
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, img = std::move(*impl)]() mutable {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
@@ -100,6 +102,8 @@ auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void
     if (!impl) {
         return;
     }
+
+    ctx.bindless_set->need_repopulate = true;
 
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, samp = std::move(*impl)]() {
         VmaAllocatorInfo info{};

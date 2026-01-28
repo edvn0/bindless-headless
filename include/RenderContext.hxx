@@ -42,7 +42,6 @@ struct RenderContext {
     auto device_address(BufferHandle) const -> DeviceAddress;
     auto clear_all() -> void;
 
-private:
     [[nodiscard]] auto get_device() const -> VkDevice;
 };
 

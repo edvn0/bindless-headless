@@ -376,7 +376,7 @@ auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat fo
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::byte> data,
                                std::string_view name) -> OffscreenTarget {
-    std::span<const u8> data_as_u8 = std::span(std::bit_cast<const u8*>(data.data()), data.size());
+    std::span<const u8> data_as_u8 = std::span(std::bit_cast<const u8 *>(data.data()), data.size());
     return create_image_from_span_v2(alloc, cmd_ctx, width, height, format, data_as_u8, name);
 }
 

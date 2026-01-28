@@ -1,12 +1,8 @@
 #include "Camera.hxx"
 
-auto EditorCamera::view_matrix() const -> glm::mat4 {
-    return glm::lookAtRH(position, position + forward, up);
-}
+auto EditorCamera::view_matrix() const -> glm::mat4 { return glm::lookAtRH(position, position + forward, up); }
 
-auto EditorCamera::camera_position() const -> glm::vec3 {
-    return position;
-}
+auto EditorCamera::camera_position() const -> glm::vec3 { return position; }
 
 auto EditorCamera::set_from_orbit() -> void {
     // Convert yaw/pitch to forward
@@ -20,7 +16,7 @@ auto EditorCamera::set_from_orbit() -> void {
     forward = glm::normalize(f);
 
     right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
-    up    = glm::normalize(glm::cross(right, forward));
+    up = glm::normalize(glm::cross(right, forward));
 
     // Orbit camera sits back along forward from pivot
     position = pivot - forward * distance;
@@ -37,7 +33,7 @@ auto EditorCamera::set_from_fly() -> void {
     forward = glm::normalize(f);
 
     right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
-    up    = glm::normalize(glm::cross(right, forward));
+    up = glm::normalize(glm::cross(right, forward));
 }
 
 auto EditorCamera::clamp_pitch() -> void {
@@ -46,7 +42,7 @@ auto EditorCamera::clamp_pitch() -> void {
 }
 
 auto EditorCamera::apply_orbit(const glm::vec2 delta_px) -> void {
-    yaw_deg   += delta_px.x * orbit_sensitivity;
+    yaw_deg += delta_px.x * orbit_sensitivity;
     pitch_deg += -delta_px.y * orbit_sensitivity;
     clamp_pitch();
     set_from_orbit();
@@ -67,35 +63,44 @@ auto EditorCamera::apply_dolly(float scroll_y) -> void {
 }
 
 auto EditorCamera::apply_fly_look(const glm::vec2 delta_px) -> void {
-    yaw_deg   += delta_px.x * fly_look_sensitivity;
+    yaw_deg += delta_px.x * fly_look_sensitivity;
     pitch_deg += -delta_px.y * fly_look_sensitivity;
     clamp_pitch();
     set_from_fly();
 }
 
-auto EditorCamera::update_fly_move(GLFWwindow* window, double dt, bool fast) -> void {
+auto EditorCamera::update_fly_move(GLFWwindow *window, double dt, bool fast) -> void {
     const float speed = (fast ? fly_speed_fast : fly_speed) * static_cast<float>(dt);
 
-    constexpr auto key = [&](auto* w,int k) { return glfwGetKey(w, k) == GLFW_PRESS; };
+    constexpr auto key = [&](auto *w, int k) { return glfwGetKey(w, k) == GLFW_PRESS; };
 
     glm::vec3 move{0.0f};
-    if (key(window, GLFW_KEY_W)) move += forward;
-    if (key(window, GLFW_KEY_S)) move -= forward;
-    if (key(window, GLFW_KEY_D)) move += right;
-    if (key(window, GLFW_KEY_A)) move -= right;
-    if (key(window, GLFW_KEY_E)) move += glm::vec3(0.0f, 1.0f, 0.0f);
-    if (key(window, GLFW_KEY_Q)) move -= glm::vec3(0.0f, 1.0f, 0.0f);
+    if (key(window, GLFW_KEY_W))
+        move += forward;
+    if (key(window, GLFW_KEY_S))
+        move -= forward;
+    if (key(window, GLFW_KEY_D))
+        move += right;
+    if (key(window, GLFW_KEY_A))
+        move -= right;
+    if (key(window, GLFW_KEY_E))
+        move += glm::vec3(0.0f, 1.0f, 0.0f);
+    if (key(window, GLFW_KEY_Q))
+        move -= glm::vec3(0.0f, 1.0f, 0.0f);
 
     if (glm::length2(move) > 0.0f) {
         position += glm::normalize(move) * speed;
     }
 }
 
-auto EditorCamera::update(GLFWwindow* window, double dt, CameraInput& in) -> void {
+auto EditorCamera::update(GLFWwindow *window, double dt, CameraInput &in) -> void {
     // Determine modifiers via GLFW for robustness
-    in.alt   = (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) || (glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
-    in.shift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) || (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
-    in.ctrl  = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) || (glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS);
+    in.alt = (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) ||
+             (glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS);
+    in.shift = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ||
+               (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+    in.ctrl = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) ||
+              (glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS);
 
     // Editor-ish mapping:
     //   Alt + LMB: orbit
