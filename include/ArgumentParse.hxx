@@ -8,7 +8,6 @@
 
 #include "Logger.hxx"
 
-auto env_pipeline_cache_dir() -> std::optional<std::filesystem::path>;
 struct CLIOptions {
     std::optional<std::filesystem::path> pipeline_cache_dir;
     std::uint32_t iteration_count = 5;

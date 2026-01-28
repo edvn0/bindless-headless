@@ -3,19 +3,7 @@
 
 #include <volk.h>
 
-auto env_pipeline_cache_dir() -> std::optional<std::filesystem::path> {
-    char *buf{};
-    size_t sz{};
-    if (const auto ok = _dupenv_s(&buf, &sz, "BH_PIPE_CACHE_PATH") == 0 && buf; !ok) {
-        return std::nullopt;
-    }
-    std::filesystem::path p{buf};
-    free(buf);
-    if (p.empty())
-        return std::nullopt;
-    return p;
-}
-
+#include "BindlessHeadless.hxx"
 
 auto parse_cli(int argc, char **argv) -> CLIOptions {
     CLIOptions opt{};
@@ -51,7 +39,7 @@ auto parse_cli(int argc, char **argv) -> CLIOptions {
     if (!flag_cache_dir.empty()) {
         opt.pipeline_cache_dir = flag_cache_dir;
     } else {
-        opt.pipeline_cache_dir = env_pipeline_cache_dir();
+        opt.pipeline_cache_dir = pipeline_cache_path();
     }
 
     std::filesystem::path current{std::filesystem::current_path()};

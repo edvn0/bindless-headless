@@ -134,6 +134,7 @@ auto create_graphics_timeline(VkDevice device, VkQueue queue, u32 family_index) 
 
 auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler;
 
+auto pipeline_cache_path() -> std::optional<std::filesystem::path>;
 
 inline auto pick_msaa_samples(VkPhysicalDevice physical_device) -> VkSampleCountFlagBits {
     VkPhysicalDeviceProperties props{};

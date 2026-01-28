@@ -9,20 +9,6 @@
 
 #include "Logger.hxx"
 
-inline auto pipeline_cache_path(std::int32_t argc, char **argv) -> std::optional<std::filesystem::path> {
-    if (argc > 1)
-        return std::filesystem::path{argv[1]};
-
-    char *buf{};
-    size_t sz{};
-    if (const auto ok = _dupenv_s(&buf, &sz, "BH_PIPE_CACHE_PATH") == 0 && buf; !ok)
-        return std::nullopt;
-
-    auto p = std::filesystem::path{buf};
-    free(buf);
-    return p;
-}
-
 struct PipelineCache {
     VkDevice device{VK_NULL_HANDLE};
     VkPipelineCache cache{VK_NULL_HANDLE};
@@ -76,7 +62,7 @@ struct PipelineCache {
     ~PipelineCache() noexcept { destroy(); }
 
     auto get() const noexcept -> VkPipelineCache { return cache; }
-    operator VkPipelineCache() const noexcept { return cache; }
+    explicit(false) operator VkPipelineCache() const noexcept { return cache; }
 
 private:
     auto read_cache() const -> std::vector<std::uint8_t> {

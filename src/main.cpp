@@ -506,8 +506,6 @@ auto execute(int argc, char **argv) -> int {
 
     auto swapchain = std::move(maybe_swapchain.value());
 
-
-    auto cache_path = pipeline_cache_path(argc, argv);
     auto pipeline_cache = std::make_unique<PipelineCache>(device, opts.pipeline_cache_dir);
 
     auto command_context = create_global_cmd_context(device, graphics_queue, graphics_index);
