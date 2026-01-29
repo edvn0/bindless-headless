@@ -100,7 +100,7 @@ struct Material {
     uint occlusion_map;
     uint emissive_map;
     float3 emissive_factor;
-    uint _pad0;
+    uint flags;
 };
 
 [[vk::binding(0, 0)]]
@@ -111,3 +111,11 @@ SamplerState samplers[];
 
 [[vk::binding(2, 0)]]
 RWTexture2D<float4> storage_images[];
+
+float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0)
+{
+    uint tex_idx = NonUniformResourceIndex(image_index);
+    uint samp_idx = NonUniformResourceIndex(sampler_index);
+    
+    return sampled_images[tex_idx].Sample(samplers[samp_idx], uv);
+}

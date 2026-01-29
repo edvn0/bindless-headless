@@ -1096,6 +1096,8 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "RotateCubesGPU");
 
+                    auto *buffer = ctx.buffers.get(cubes_transform_handle->handle());
+
                     RotateCubesPushConstant pc{
                             .cube_count = instance_count,
                             .delta_time = static_cast<float>(dt),
@@ -1110,26 +1112,25 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     const u32 groups = (instance_count + 63u) / 64u;
                     vkCmdDispatch(cmd, groups, 1, 1);
 
-                    /*  VkBufferMemoryBarrier2 mem_barrier{};
-                      mem_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                      mem_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                      mem_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                      mem_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                      mem_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-                      mem_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                      mem_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                      mem_barrier.buffer = buffer->buffer();
-                      mem_barrier.offset =
-                              static_cast<VkDeviceSize>(cubes_transform_handle->slot_offset_bytes(bounded_frame_index));
-                      mem_barrier.size = static_cast<VkDeviceSize>(instance_count * sizeof(glm::mat4x3));
+                    VkBufferMemoryBarrier2 mem_barrier{};
+                    mem_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                    mem_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    mem_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    mem_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    mem_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                    mem_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    mem_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    mem_barrier.buffer = buffer->buffer();
+                    mem_barrier.offset =
+                            static_cast<VkDeviceSize>(cubes_transform_handle->slot_offset_bytes(bounded_frame_index));
+                    mem_barrier.size = static_cast<VkDeviceSize>(instance_count * sizeof(glm::mat4x3));
 
-                      VkDependencyInfo dep_info{};
-                      dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                      dep_info.bufferMemoryBarrierCount = 1;
-                      dep_info.pBufferMemoryBarriers = &mem_barrier;
+                    VkDependencyInfo dep_info{};
+                    dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep_info.bufferMemoryBarrierCount = 1;
+                    dep_info.pBufferMemoryBarriers = &mem_barrier;
 
-                      vkCmdPipelineBarrier2(cmd, &dep_info);
-                      */
+                    vkCmdPipelineBarrier2(cmd, &dep_info);
                 },
                 no_waits);
         fs.timeline_values[stage_index(Stage::CubeRotation)] = rotate_cubes_gpu_val;
@@ -1195,7 +1196,8 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     const VkDeviceSize indirect_offset_bytes =
                             static_cast<VkDeviceSize>(indirect_ring.slot_offset_bytes(bounded_frame_index)) +
                             static_cast<VkDeviceSize>(base_draw) * sizeof(VkDrawIndexedIndirectCommand);
-
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth_pipeline.layout, 0, 1,
+                                            &bindless.set, 0, nullptr);
                     vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), indirect_offset_bytes, draw_count,
                                              sizeof(VkDrawIndexedIndirectCommand));
 
@@ -1286,6 +1288,11 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                         .value = fs.timeline_values[stage_index(Stage::LightCulling)],
                         .semaphore = tl_compute.timeline,
                         .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                },
+                TimelineWait{
+                        .value = fs.timeline_values[stage_index(Stage::Predepth)],
+                        .semaphore = tl_graphics.timeline,
+                        .stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, // Need transforms before vertex shader
                 },
         };
 
@@ -1380,6 +1387,9 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                             .draw_material_ids = draw_material_id_ring.slot_device_address(bounded_frame_index),
                             .materials = materials->device_address(),
                             .base_draw_id = base_draw,
+                            .lights = compact_addr,
+                            .culled_light_count = culled_light_count_addr,
+                            .ambient_light_strength = 0.1f,
                     };
                     vkCmdPushConstants(cmd, point_light_pipeline.layout,
                                        VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
@@ -1390,6 +1400,8 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     const VkDeviceSize indirect_offset_bytes =
                             static_cast<VkDeviceSize>(indirect_ring.slot_offset_bytes(bounded_frame_index)) +
                             static_cast<VkDeviceSize>(base_draw) * sizeof(VkDrawIndexedIndirectCommand);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline.layout, 0, 1,
+                                            &bindless.set, 0, nullptr);
 
                     vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), indirect_offset_bytes, draw_count,
                                              sizeof(VkDrawIndexedIndirectCommand));
@@ -1628,6 +1640,9 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                 });
 
         fs.frame_done_value = swapchain_val;
+
+        throttle(tl_compute, ctx.get_device());
+        throttle(tl_graphics, ctx.get_device());
 
         const auto completed = std::min(tl_compute.completed, tl_graphics.completed);
         ctx.destroy_queue.retire(completed);

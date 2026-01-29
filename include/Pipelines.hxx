@@ -34,6 +34,9 @@ struct RenderingPushConstants {
     const DeviceAddress draw_material_ids;
     const DeviceAddress materials;
     const u32 base_draw_id;
+    const DeviceAddress lights;
+    const DeviceAddress culled_light_count;
+    const f32 ambient_light_strength;
 };
 
 struct TonemapPushConstants {

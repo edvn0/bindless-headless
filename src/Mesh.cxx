@@ -45,19 +45,25 @@ namespace {
         GPUMaterialData out{};
         out.albedo_map = resolve_texture(loaded, m.albedo_map, defs.white);
         out.albedo_factor = m.albedo_factor;
+        out.set_albedo_map(out.albedo_map != defs.white.index());
 
         out.normal_map = resolve_texture(loaded, m.normal_map, defs.flat_normal);
+        out.set_normal_map(out.normal_map != defs.flat_normal.index());
 
         out.roughness_map = resolve_texture(loaded, m.roughness_map, defs.white);
         out.roughness_factor = m.roughness_factor;
+        out.set_roughness_map(out.roughness_map != defs.white.index());
 
         out.metallic_map = resolve_texture(loaded, m.metallic_map, defs.black);
         out.metallic_factor = m.metallic_factor;
+        out.set_metallic_map(out.metallic_map != defs.black.index());
 
         out.occlusion_map = resolve_texture(loaded, m.occlusion_map, defs.white);
+        out.set_occlusion_map(out.occlusion_map != defs.white.index());
 
         out.emissive_map = resolve_texture(loaded, m.emissive_map, defs.black);
         out.emissive_factor = m.emissive_factor;
+        out.set_emissive_map(out.emissive_map != defs.black.index());
 
         return out;
     }
