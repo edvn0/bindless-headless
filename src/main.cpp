@@ -38,6 +38,7 @@
 
 #include "Constants.hxx"
 #include "Mesh.hxx"
+#include "vulkan/vulkan_core.h"
 
 auto msaa_from_cli = [](u32 v) -> VkSampleCountFlagBits {
     switch (v) {
@@ -242,6 +243,21 @@ glm::mat4 PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNea
 
 auto fill_zeros(VkCommandBuffer cmd, auto &buffers_ctx, auto &&...buffer_handles) {
     (vkCmdFillBuffer(cmd, buffers_ctx.get(buffer_handles)->buffer(), 0, VK_WHOLE_SIZE, 0), ...);
+}
+
+constexpr auto viewport_scissors(VkExtent2D extent) {
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = static_cast<float>(extent.height);
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = -static_cast<float>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = extent;
+    return std::make_pair(viewport, scissor);
 }
 
 auto extract_frustum_planes = [](const glm::mat4 &inv_proj) -> std::array<FrustumPlane, 6> {
@@ -502,7 +518,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     auto point_light_code = compiler->compile_from_file("shaders/point_light.slang", std::span(point_light_names),
                                                         std::span(point_light_reflection));
 
-    std::array<const std::string_view, 2> predepth_names{"main_vs_mdi", "main_fs"};
+    std::array<const std::string_view, 1> predepth_names{"main_vs_mdi"};
     std::array<ReflectionData, predepth_names.size()> predepth_reflection{};
     auto predepth_code = compiler->compile_from_file("shaders/predepth.slang", std::span(predepth_names),
                                                      std::span(predepth_reflection));
@@ -511,6 +527,11 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     std::array<ReflectionData, tonemap_names.size()> tonemap_reflection{};
     auto tonemap_code = compiler->compile_from_file("shaders/tonemap.slang", std::span(tonemap_names),
                                                     std::span(tonemap_reflection));
+
+    std::array<const std::string_view, 1> rotate_cubes_names{"rotate_cs"};
+    std::array<ReflectionData, rotate_cubes_names.size()> rotate_cubes_reflection{};
+    auto rotate_cubes_code = compiler->compile_from_file("shaders/rotate_cubes.slang", std::span(rotate_cubes_names),
+                                                         std::span(rotate_cubes_reflection));
 
     auto allocator = create_allocator(instance.instance, physical_device, device);
 
@@ -530,11 +551,14 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     auto &&[flags_pipeline, compact_pipeline] = create_compute_pipelines(device, *pipeline_cache, bindless.layout,
                                                                          std::span(culling_code), std::span(names));
 
+    auto &&[cube_rotation_pipeline] = create_compute_pipelines(
+            device, *pipeline_cache, bindless.layout, std::span(rotate_cubes_code), std::span(rotate_cubes_names));
+
     auto point_light_pipeline =
             create_mesh_pipeline(device, *pipeline_cache, bindless.layout, point_light_code.at(0),
                                  point_light_code.at(1), VK_FORMAT_R32G32B32A32_SFLOAT, msaa_samples);
     auto predepth_pipeline = create_predepth_pipeline(device, *pipeline_cache, bindless.layout, predepth_code.at(0),
-                                                      predepth_code.at(1), VK_FORMAT_D32_SFLOAT, msaa_samples);
+                                                      VK_FORMAT_D32_SFLOAT, msaa_samples);
 
     auto tonemap_pipeline = create_tonemap_pipeline(device, *pipeline_cache, bindless.layout, tonemap_code.at(0),
                                                     tonemap_code.at(1), "vs_main", "fs_main", VK_FORMAT_R8G8B8A8_SRGB);
@@ -775,8 +799,9 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     }
     auto cubes_transform_handle =
             AlignedRingBuffer<glm::mat4x3>::create(ctx, mapped_to_transforms.size(), 0u, "transforms");
+    cubes_transform_handle->write_all_slots(ctx, std::span(mapped_to_transforms));
 
-    auto instance_count = static_cast<u32>(cubes.size());
+    auto instance_count = static_cast<u32>(mapped_to_transforms.size());
 
     auto maybe_cube_mesh = load_obj(ctx, command_context, "assets/meshes/SimpleCube.obj");
     if (!maybe_cube_mesh) {
@@ -958,7 +983,6 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     double dt = 0.0;
 
     while (!glfwWindowShouldClose(window)) {
-
         const u64 completed_now = std::min(tl_compute.completed, tl_graphics.completed);
         glfwPollEvents();
         if (const auto extent = current_extent(window);
@@ -985,6 +1009,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
         const auto frame_extent = swapchain.extent();
         auto start_time = std::chrono::high_resolution_clock::now();
         const auto bounded_frame_index = static_cast<u32>(frame_index % frames_in_flight);
+        const auto last_frame_index = static_cast<u32>((frame_index + frames_in_flight - 1u) % frames_in_flight);
         draw_stream.begin_frame();
         app_state.cam.update(window, dt, app_state.cam_in);
         constexpr float fov_y = glm::radians(70.0f);
@@ -999,42 +1024,6 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
             auto sun_direction_intensity = glm::vec4(sun_dir, 1.5f);
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
             aligned_frame_buffer_handle.write_field(ctx, bounded_frame_index, sun_direction_intensity, offset);
-            {
-                ZoneScopedNC("Rotate cubes", 0xff0013);
-                /*  std::for_each(
-                          std::execution::par_unseq, mapped_to_transforms.begin(), mapped_to_transforms.end(),
-                          [d = dt, &random_offset = random_factors, &m = mapped_to_transforms](glm::mat4x3 &transform) {
-                              // Apply rotation around Y-axis
-                              size_t index = &transform - m.data();
-                              const glm::vec3 &f = random_offset[index];
-                              auto dt_scaled_vec = f * static_cast<float>(d);
-
-                              // Convert to mat4 for rotation operations
-                              auto transform_4x4 = glm::mat4(transform);
-                              transform_4x4 = glm::rotate(transform_4x4, rads_per_seconds * dt_scaled_vec.y,
-                                                          glm::vec3(0.0f, 1.0f, 0.0f));
-                              transform_4x4 = glm::rotate(transform_4x4, rads_per_seconds * dt_scaled_vec.z,
-                                                          glm::vec3(0.0f, 0.0f, 1.0f));
-                              transform_4x4 = glm::rotate(transform_4x4, rads_per_seconds * dt_scaled_vec.x,
-                                                          glm::vec3(1.0f, 0.0f, 0.0f));
-
-                              // Convert back to mat4x3
-                              transform = glm::mat4x3(transform_4x4);
-                          });
-                           */
-                std::size_t index = 0;
-                for (auto &transform: mapped_to_transforms) {
-                    glm::vec3 angles = rads_per_seconds * static_cast<float>(dt) * random_factors.at(index);
-
-                    glm::quat q = glm::angleAxis(angles.y, glm::vec3(0, 1, 0)) *
-                                  glm::angleAxis(angles.z, glm::vec3(0, 0, 1)) *
-                                  glm::angleAxis(angles.x, glm::vec3(1, 0, 0));
-                    glm::mat4 rot = glm::mat4_cast(q);
-                    transform = glm::mat4x3(rot * glm::mat4(transform));
-                    index++;
-                }
-            }
-            cubes_transform_handle->write_slot(ctx, bounded_frame_index, mapped_to_transforms);
         }
 
         const auto [base_draw, draw_count] =
@@ -1102,6 +1091,53 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
         const auto swap_image_index = acquired->image_index;
         const auto frame_sync = acquired->sync;
 
+        auto rotate_cubes_gpu_val = submit_stage(
+                tl_compute, device,
+                [&](VkCommandBuffer cmd) {
+                    TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "RotateCubesGPU");
+
+                    RotateCubesPushConstant pc{
+                            .cube_count = instance_count,
+                            .delta_time = static_cast<float>(dt),
+                            .rads_per_second = glm::radians(20.0f),
+                            .transforms = cubes_transform_handle->slot_device_address(bounded_frame_index),
+                            .previous_frame_transforms = cubes_transform_handle->slot_device_address(last_frame_index),
+                    };
+
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cube_rotation_pipeline.pipeline);
+                    vkCmdPushConstants(cmd, cube_rotation_pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc),
+                                       &pc);
+                    const u32 groups = (instance_count + 63u) / 64u;
+                    vkCmdDispatch(cmd, groups, 1, 1);
+
+                    /*  VkBufferMemoryBarrier2 mem_barrier{};
+                      mem_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                      mem_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                      mem_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                      mem_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                      mem_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                      mem_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                      mem_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                      mem_barrier.buffer = buffer->buffer();
+                      mem_barrier.offset =
+                              static_cast<VkDeviceSize>(cubes_transform_handle->slot_offset_bytes(bounded_frame_index));
+                      mem_barrier.size = static_cast<VkDeviceSize>(instance_count * sizeof(glm::mat4x3));
+
+                      VkDependencyInfo dep_info{};
+                      dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                      dep_info.bufferMemoryBarrierCount = 1;
+                      dep_info.pBufferMemoryBarriers = &mem_barrier;
+
+                      vkCmdPipelineBarrier2(cmd, &dep_info);
+                      */
+                },
+                no_waits);
+        fs.timeline_values[stage_index(Stage::CubeRotation)] = rotate_cubes_gpu_val;
+
+        const std::array cube_rotate_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::CubeRotation)],
+                                                        .semaphore = tl_compute.timeline,
+                                                        .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}};
+
         auto predepth_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
@@ -1142,24 +1178,14 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                             .base_draw_id = base_draw,
                     };
 
-                    VkViewport vp{
-                            .x = 0,
-                            .y = static_cast<float>(frame_extent.height),
-                            .width = static_cast<float>(frame_extent.width),
-                            .height = -static_cast<float>(frame_extent.height),
-                            .minDepth = 0.0f,
-                            .maxDepth = 1.0f,
-                    };
-
-                    VkRect2D sc{.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
+                    auto &&[vp, sc] = viewport_scissors(frame_extent);
                     vkCmdSetViewport(cmd, 0, 1, &vp);
                     vkCmdSetScissor(cmd, 0, 1, &sc);
                     vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
                     vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
                     vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                     vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
-                    vkCmdPushConstants(cmd, predepth_pipeline.layout,
-                                       VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+                    vkCmdPushConstants(cmd, predepth_pipeline.layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
 
                     vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
                     std::array<VkBuffer, 1> buffers = {verts->buffer()};
@@ -1175,7 +1201,9 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
                     vkCmdEndRendering(cmd);
                 },
-                no_waits);
+                SubmitSynchronisation{
+                        .timeline_waits = cube_rotate_waits,
+                });
         fs.timeline_values[stage_index(Stage::Predepth)] = predepth_val;
 
         const std::array culling_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
@@ -1300,7 +1328,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                     color_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                    color_attachment.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
+                    color_attachment.clearValue = {.color = {.float32 = {0.1f, 0.1f, 0.1f, 1.0f}}};
 
                     color_attachment.imageView = color->attachment_view;
                     color_attachment.storeOp =
@@ -1334,17 +1362,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline.pipeline);
 
 
-                    VkViewport vp{
-                            .x = 0,
-                            .y = static_cast<float>(frame_extent.height),
-                            .width = static_cast<float>(frame_extent.width),
-                            .height = -static_cast<float>(frame_extent.height),
-                            .minDepth = 0.0f,
-                            .maxDepth = 1.0f,
-                    };
-
-                    VkRect2D sc{.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
-
+                    auto &&[vp, sc] = viewport_scissors(frame_extent);
                     vkCmdSetViewport(cmd, 0, 1, &vp);
                     vkCmdSetScissor(cmd, 0, 1, &sc);
                     vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_EQUAL);
@@ -1437,16 +1455,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     };
 
 
-                    VkViewport vp{
-                            .x = 0,
-                            .y = static_cast<float>(frame_extent.height),
-                            .width = static_cast<float>(frame_extent.width),
-                            .height = -static_cast<float>(frame_extent.height),
-                            .minDepth = 0.0f,
-                            .maxDepth = 1.0f,
-                    };
-
-                    VkRect2D sc{.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
+                    auto &&[vp, sc] = viewport_scissors(frame_extent);
                     vkCmdSetViewport(cmd, 0, 1, &vp);
                     vkCmdSetScissor(cmd, 0, 1, &sc);
 
@@ -1682,7 +1691,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
     vkDeviceWaitIdle(device);
     destruction::pipeline(device, flags_pipeline, compact_pipeline, predepth_pipeline, tonemap_pipeline,
-                          point_light_pipeline);
+                          point_light_pipeline, cube_rotation_pipeline);
     destruction::global_command_context(command_context);
     destruction::bindless_set(device, bindless);
     destruction::timeline_compute(device, tl_graphics);

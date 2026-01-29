@@ -31,9 +31,24 @@ struct ReflectionData {
         std::unordered_map<std::string, BindingInfo, string_hash, string_eq> bindings;
     };
 
+    struct IOFieldInfo {
+        std::string name;
+        std::string semantic;
+        std::string type_name;
+        uint32_t location = ~0u;
+        bool is_builtin = false;
+    };
+
+
     struct EntryInfo {
         std::string name; // entry-point function name (backend-specific)
         std::string stage_name; // "compute", "vertex", ...
+        bool writes_position = false; // VS
+        bool has_outputs = false;
+        bool has_inputs = false;
+
+        std::vector<IOFieldInfo> inputs;
+        std::vector<IOFieldInfo> outputs;
 
         std::unordered_map<std::string, PushConstantInfo, string_hash, string_eq> push_constants;
         std::unordered_map<std::string, SetInfo, string_hash, string_eq> descriptor_sets;

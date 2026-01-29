@@ -2,7 +2,7 @@ import common;
 import maths;
 
 struct VertexOutput {
-    float4 position;
+    float4 position : SV_Position;
 };
 
 struct VertexInput {
@@ -49,9 +49,4 @@ float4 main_vs(VertexInput input,  uint instance: SV_InstanceID, uniform PC pc):
            float4(0, 0, 0, 1)
        );    float4 world_pos = mul(model, float4(input.position, 1.0));
     return mul(pc.frame_ubo->view_projection,world_pos );
-}
-
-[shader("fragment")]
-void main_fs() {
-
 }

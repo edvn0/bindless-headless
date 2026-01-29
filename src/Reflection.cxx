@@ -1,4 +1,6 @@
 #include "Reflection.hxx"
+#include <slang.h>
+#include "ReflectionData.hxx"
 
 #if !defined(ENGINE_OFFLINE_SHADERS)
 
@@ -88,7 +90,7 @@ namespace {
             const int cat_count = var_layout->getCategoryCount();
             for (int ci = 0; ci < cat_count; ++ci) {
                 auto const cat = var_layout->getCategoryByIndex(ci);
-                if (cat == C::PushConstantBuffer) {
+                if (cat == C::PushConstantBuffer || cat == C::Uniform) {
                     ReflectionData::PushConstantInfo pc{};
                     pc.name = param_name.empty() ? "push_constants" : param_name;
                     pc.offset = static_cast<u32>(var_layout->getOffset(cat));
@@ -150,28 +152,89 @@ namespace {
         if (!entry_point)
             return;
 
-        auto const stage_sv = stage_to_string_slang(entry_point->getStage());
-        std::string stage_key{stage_sv};
+        auto stage_key = stage_to_string_slang(entry_point->getStage());
+        auto it = out.entries.find(stage_key);
 
-        auto &e = out.entries[stage_key];
-
-        if (auto const *n = entry_point->getName()) {
-            e.name = n;
-        } else {
-            e.name = stage_key;
+        if (it == out.entries.end()) {
+            // Insert if it doesn't exist
+            it = out.entries.emplace(stage_key, ReflectionData::EntryInfo{}).first;
         }
+        auto &e = it->second;
+
         e.stage_name = stage_key;
-        e.stage_flags.insert(stage_key);
-
-        const u32 param_count = static_cast<u32>(entry_point->getParameterCount());
-        for (u32 i = 0; i < param_count; ++i) {
-            auto *param_layout = entry_point->getParameterByIndex(i);
-            reflect_parameter_into_entry(e, param_layout);
+        if (!e.stage_flags.contains(stage_key)) {
+            e.stage_flags.insert(std::string{stage_key});
         }
-    }
+
+        if (auto *n = entry_point->getName())
+            e.name = n;
+        else
+            e.name = stage_key;
+
+        // -------------------------
+        // Inputs (parameters)
+        // -------------------------
+        int paramCount = entry_point->getParameterCount();
+        for (int i = 0; i < paramCount; ++i) {
+            auto *param = entry_point->getParameterByIndex(i);
+            if (!param)
+                continue;
+
+            reflect_parameter_into_entry(e, param);
+            e.has_inputs = true;
+        }
+
+        // -------------------------
+        // Outputs (result type)
+        // -------------------------
+        auto *resultType = entry_point->getResultVarLayout()->getTypeLayout();
+        if (!resultType)
+            return;
+
+        e.has_outputs = true;
+
+        const int fieldCount = resultType->getFieldCount();
+
+        if (fieldCount > 0) {
+            // Struct / aggregate return
+            for (int i = 0; i < fieldCount; ++i) {
+                auto field = resultType->getFieldByIndex(i);
+
+                ReflectionData::IOFieldInfo outField{};
+                if (auto *name = field->getName())
+                    outField.name = name;
+
+                if (auto *sem = field->getSemanticName())
+                    outField.semantic = sem;
+
+                outField.is_builtin = outField.semantic.rfind("SV_", 0) == 0;
+
+                e.outputs.push_back(outField);
+
+                if (entry_point->getStage() == SLANG_STAGE_VERTEX && outField.semantic == "SV_Position") {
+                    e.writes_position = true;
+                }
+            }
+        } else {
+            // Scalar return (e.g. float4 : SV_Position)
+            ReflectionData::IOFieldInfo outField{};
+            outField.name = "result";
+
+            if (auto *sem = entry_point->getResultVarLayout()->getSemanticName())
+                outField.semantic = sem;
+
+            outField.is_builtin = outField.semantic.rfind("SV_", 0) == 0;
+
+            e.outputs.push_back(outField);
+
+            if (entry_point->getStage() == SLANG_STAGE_VERTEX && outField.semantic == "SV_Position") {
+                e.writes_position = true;
+            }
+        }
+
+    } // namespace
 
 } // namespace
-
 auto reflect_program(Slang::ComPtr<slang::IComponentType> const &program, int target_index) -> ReflectionData {
     ReflectionData result{};
 

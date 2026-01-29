@@ -42,6 +42,14 @@ struct TonemapPushConstants {
     const u32 sampler_index;
 };
 
+struct RotateCubesPushConstant {
+    u32 cube_count;
+    f32 delta_time;
+    f32 rads_per_second;
+    const DeviceAddress transforms;
+    const DeviceAddress previous_frame_transforms;
+};
+
 struct CompiledPipeline {
     VkPipeline pipeline{VK_NULL_HANDLE};
     VkPipelineLayout layout{VK_NULL_HANDLE};
@@ -66,9 +74,8 @@ auto create_compute_pipelines(VkDevice device, PipelineCache &cache, VkDescripto
 }
 
 
-auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &,
-                              const std::vector<uint32_t> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)
-        -> CompiledPipeline;
+auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &, VkFormat,
+                              VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
 
 auto create_mesh_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,
                           const std::vector<u32> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)

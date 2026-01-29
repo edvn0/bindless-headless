@@ -35,7 +35,6 @@ public:
         return spirv;
     }
 
-    // Useful if you later want dynamic entry lists
     auto compile_from_file(std::string_view path, std::span<const std::string_view> entries,
                            std::span<ReflectionData> reflection_data) -> std::vector<std::vector<u32>>;
 
@@ -46,7 +45,6 @@ private:
     auto compile_from_file_impl(std::string_view path, std::span<const std::string_view, N> entries,
                                 std::span<ReflectionData, N> reflection_data,
                                 std::array<std::vector<u32>, N> &out_spirv) -> void {
-        // Adapter to the dynamic function to avoid duplicating backend logic
         std::vector<std::string_view> dyn_entries(entries.begin(), entries.end());
         std::vector<ReflectionData> dyn_refl(reflection_data.begin(), reflection_data.end());
 

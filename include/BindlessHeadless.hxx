@@ -89,9 +89,10 @@ enum class Stage : u32 {
     GBuffer = 1,
     Predepth = 2,
     Tonemapping = 3,
+    CubeRotation = 4,
 };
 
-constexpr auto stage_count = static_cast<u32>(Stage::Tonemapping) + 1;
+constexpr auto stage_count = static_cast<u32>(Stage::CubeRotation) + 1;
 
 struct FrameState {
     std::array<u64, stage_count> timeline_values{};
@@ -126,7 +127,7 @@ struct Timeline {
 };
 
 using GraphicsTimeline = Timeline<4>;
-using ComputeTimeline = Timeline<1>;
+using ComputeTimeline = Timeline<2>;
 
 auto create_compute_timeline(VkDevice device, VkQueue queue, u32 family_index) -> ComputeTimeline;
 auto create_graphics_timeline(VkDevice device, VkQueue queue, u32 family_index) -> GraphicsTimeline;

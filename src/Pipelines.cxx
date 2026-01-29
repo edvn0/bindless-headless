@@ -83,8 +83,8 @@ auto create_compute_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
 }
 
 auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
-                              const std::vector<uint32_t> &vert_code, const std::vector<uint32_t> &frag_code,
-                              VkFormat depth_format, VkSampleCountFlagBits samples) -> CompiledPipeline {
+                              const std::vector<uint32_t> &vert_code, VkFormat depth_format,
+                              VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     VkShaderModuleCreateInfo create_info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                             .pNext = nullptr,
@@ -93,43 +93,34 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
                                             .pCode = vert_code.data()};
     vk_check(vkCreateShaderModule(device, &create_info, nullptr, &vert_module));
 
-    VkShaderModule frag_module{};
-    create_info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                   .pNext = nullptr,
-                   .flags = 0,
-                   .codeSize = frag_code.size() * sizeof(u32),
-                   .pCode = frag_code.data()};
-    vk_check(vkCreateShaderModule(device, &create_info, nullptr, &frag_module));
-
     std::array stages = {
-            VkPipelineShaderStageCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                                            .pNext = nullptr,
-                                            .flags = 0,
-                                            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                                            .module = vert_module,
-                                            .pName = "main_vs_mdi",
-                                            .pSpecializationInfo = nullptr},
-            VkPipelineShaderStageCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                                            .pNext = nullptr,
-                                            .flags = 0,
-                                            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                                            .module = frag_module,
-                                            .pName = "main_fs",
-                                            .pSpecializationInfo = nullptr},
+            VkPipelineShaderStageCreateInfo{
+                    .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vert_module,
+                    .pName = "main_vs_mdi",
+                    .pSpecializationInfo = nullptr,
+            },
     };
 
     // 2. Pipeline Layout (Inherit bindless + push constants)
-    VkPushConstantRange push_range{.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   .offset = 0,
-                                   .size = sizeof(PredepthPushConstants)};
+    VkPushConstantRange push_range{
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .offset = 0,
+            .size = sizeof(PredepthPushConstants),
+    };
 
-    VkPipelineLayoutCreateInfo layout_ci{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                                         .pNext = nullptr,
-                                         .flags = 0,
-                                         .setLayoutCount = 1,
-                                         .pSetLayouts = &bindless_layout,
-                                         .pushConstantRangeCount = 1,
-                                         .pPushConstantRanges = &push_range};
+    VkPipelineLayoutCreateInfo layout_ci{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &bindless_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_range,
+    };
     VkPipelineLayout layout;
     vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, "predepth");
@@ -250,7 +241,6 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
 
     // Cleanup local modules
     vkDestroyShaderModule(device, vert_module, nullptr);
-    vkDestroyShaderModule(device, frag_module, nullptr);
 
     return {pipeline, layout};
 }
