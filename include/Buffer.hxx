@@ -9,7 +9,6 @@
 #include "CreateInfo.hxx"
 #include "Logger.hxx"
 #include "Types.hxx"
-#include "vulkan/vulkan_core.h"
 
 struct BufferCreateError {
     enum class Type : u64 {

@@ -1659,15 +1659,12 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
         const auto as_string = output_dir.string();
         ZoneScopedNC("batch_write_images", 0xFF00AA);
         std::vector requests{image_operations::ImageWriteRequest{oth, std::format("{}/output.bmp", as_string)},
-                            image_operations::ImageWriteRequest{
-                                    ph,
-                                    std::format("{}/perlin.bmp", as_string),
-                            }};
-        for (const auto i : std::views::iota(0u, 200u)) {
-            requests.push_back(image_operations::ImageWriteRequest{oth, std::format("{}/output{}.bmp", as_string, i)});
-            requests.push_back(image_operations::ImageWriteRequest{ph, std::format("{}/perlin{}.bmp", as_string, i)});
-        }
-        image_operations::write_batch_to_disk(allocator, requests);
+                             image_operations::ImageWriteRequest{
+                                     ph,
+                                     std::format("{}/perlin.bmp", as_string),
+                             }};
+        image_operations::write_batch_to_disk(
+                allocator, requests, [](float progress) { info("Image write progress: {:.2f} %", progress * 100.0f); });
     }
 
     pipeline_cache.reset();

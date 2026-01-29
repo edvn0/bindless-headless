@@ -1,6 +1,6 @@
-#include "../include/BindlessHeadless.hxx"
-#include "../include/BindlessSet.hxx"
-#include "../include/Pool.hxx"
+#include "BindlessHeadless.hxx"
+#include "BindlessSet.hxx"
+#include "Pool.hxx"
 
 
 auto RenderContext::get_device() const -> VkDevice {
@@ -18,7 +18,6 @@ auto RenderContext::create_sampler(VkSampler &&sampler) -> SamplerHandle {
     bindless_set->need_repopulate = true;
     return samplers.create(std::move(sampler));
 }
-
 
 auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::string_view name) -> SamplerHandle {
     bindless_set->need_repopulate = true;

@@ -1,5 +1,7 @@
 include_guard(GLOBAL)
 
+include(cmake/CompileOptions.cmake)
+
 include(CMakePushCheckState)
 include(CheckCXXCompilerFlag)
 include(CheckCCompilerFlag)
@@ -14,13 +16,13 @@ add_executable(BindlessHeadless
   "src/Pipelines.cxx"
   "src/ResizeableGraph.cxx"
   "src/Swapchain.cxx"
-  "src/ImageOperations.cxx"
   "src/Buffer.cxx"
   "src/Logger.cxx"
   "src/Camera.cxx"
   "src/Compiler.cxx"
   "src/Mesh.cxx"
   "src/GlobalCommandContext.cxx"
+  "src/ThreadPool.cxx"
 )
 
 
@@ -35,11 +37,11 @@ target_include_directories(BindlessHeadless PRIVATE
 )
 
 # Link base deps
-target_link_libraries(BindlessHeadlessAllocator PRIVATE
-  volk
+target_link_libraries(BindlessHeadlessAllocator PUBLIC
   volk::volk_headers
   VulkanMemoryAllocator
 )
+
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(BindlessHeadlessAllocator PRIVATE -Wno-nullability-completeness)
 endif()
@@ -62,9 +64,37 @@ if (MSVC)
 endif()
 
 
+
+
+find_package(OpenMP)
+if(OpenMP_CXX_FOUND)
+    add_library(ImageOperationsOpenMP
+        "src/ImageOperations_OpenMP.cxx"
+    )
+    target_include_directories(ImageOperationsOpenMP PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(ImageOperationsOpenMP PUBLIC
+        OpenMP::OpenMP_CXX
+        BindlessHeadlessAllocator
+    )
+    add_library(ImageOperations ALIAS ImageOperationsOpenMP)
+DEFAULT_COMPILE_OPTIONS(ImageOperationsOpenMP)
+    
+    message(STATUS "Building ImageOperations with OpenMP support")
+else()
+add_library(ImageOperationsThreadPool
+    "src/ImageOperations.cxx"
+)
+target_include_directories(ImageOperationsThreadPool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ImageOperationsThreadPool PUBLIC
+    BindlessHeadlessAllocator
+)
+DEFAULT_COMPILE_OPTIONS(ImageOperationsThreadPool)
+    add_library(ImageOperations ALIAS ImageOperationsThreadPool)
+    message(STATUS "OpenMP not found, only thread pool version will be built")
+endif()
+
 target_link_libraries(BindlessHeadless PRIVATE
   volk
-  volk::volk_headers
   BindlessHeadlessAllocator
   spdlog::spdlog
   efsw-static
@@ -73,6 +103,7 @@ target_link_libraries(BindlessHeadless PRIVATE
   glm::glm
   glfw
   expected
+  ImageOperations
 )
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -95,3 +126,14 @@ if (HAS_TRACY)
   target_link_libraries(BindlessHeadless PRIVATE Tracy::TracyClient)
   target_compile_definitions(BindlessHeadless PRIVATE TRACY_ENABLE)
 endif ()
+
+DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
+
+target_compile_definitions(BindlessHeadlessAllocator PUBLIC VK_NO_PROTOTYPES)
+
+target_compile_definitions(BindlessHeadless PRIVATE
+  SLANG_DISABLE_EXCEPTIONS=1
+  GLM_FORCE_DEPTH_ZERO_TO_ONE
+  GLM_ENABLE_EXPERIMENTAL
+  ${VOLK_PLATFORM_DEFINE}
+)

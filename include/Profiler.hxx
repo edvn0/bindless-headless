@@ -1,7 +1,9 @@
 #pragma once
 
+#include <optional>
 #include <volk.h>
 #include "Types.hxx"
+
 
 #if defined(TRACY_ENABLE)
 #include <tracy/Tracy.hpp>

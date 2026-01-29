@@ -8,32 +8,38 @@ CPMAddPackage(
     "GLM_ENABLE_SIMD_AVX ON"
     "GLM_ENABLE_SIMD_SSE4_2 ON"
     "GLM_ENABLE_SIMD_SSE2 ON"
+  GIT_SHALLOW YES  
 )
 
 CPMAddPackage(
   URI "gh:SpartanJ/efsw#1.5.1"
   OPTIONS "BUILD_SHARED_LIBS OFF"
+  GIT_SHALLOW YES
 )
 
 CPMAddPackage(
   NAME CLI11
   GITHUB_REPOSITORY CLIUtils/CLI11
   VERSION 2.6.1
+  GIT_SHALLOW YES
 )
 
 CPMAddPackage(
   URI "gh:glfw/glfw#3.4"
+  GIT_SHALLOW YES
 )
 
 CPMAddPackage(
   URI "gh:TartanLlama/expected@1.3.1"
   OPTIONS "BUILD_TESTING OFF"
+  GIT_SHALLOW YES
 )
 
 CPMAddPackage(
   NAME Vulkan-Headers
   GITHUB_REPOSITORY KhronosGroup/Vulkan-Headers
   GIT_TAG vulkan-sdk-1.4.335.0
+  GIT_SHALLOW YES
 )
 
 get_target_property(VULKAN_HEADERS_INCLUDE Vulkan::Headers INTERFACE_INCLUDE_DIRECTORIES)
@@ -46,6 +52,7 @@ CPMAddPackage(
   NAME volk
   GITHUB_REPOSITORY zeux/volk
   GIT_TAG vulkan-sdk-1.4.335.0
+  GIT_SHALLOW YES
   OPTIONS
     "VOLK_STATIC_DEFINES=${VOLK_PLATFORM_DEFINE}"
 )
@@ -57,13 +64,16 @@ CPMAddPackage(
   NAME VulkanMemoryAllocator
   GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
   VERSION 3.3.0
+  GIT_SHALLOW YES
 )
 
 find_package(spdlog REQUIRED)
 
 if (HAS_TRACY)
   set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
-  CPMAddPackage(URI "gh:wolfpld/tracy#07147111b26ddaf43fb46fabbab42de4451fa567")
+  CPMAddPackage(
+    URI "gh:wolfpld/tracy#07147111b26ddaf43fb46fabbab42de4451fa567"
+  )
 endif()
 
 if (NOT ENGINE_OFFLINE_SHADERS)

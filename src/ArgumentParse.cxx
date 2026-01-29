@@ -31,11 +31,8 @@ auto parse_cli(int argc, char **argv) -> CLIOptions {
             ->check(CLI::IsMember({1u, 2u, 4u, 8u, 16u, 32u, 64u}));
     app.allow_extras(false);
 
-    try {
-        app.parse(argc, argv);
-    } catch (const CLI::ParseError &e) {
-        std::exit(app.exit(e));
-    }
+    // Abort on fail.
+    app.parse(argc, argv);
 
     // Precedence: flag > positional > env
     if (!flag_cache_dir.empty()) {

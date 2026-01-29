@@ -1,15 +1,16 @@
 #include "ImageOperations.hxx"
 #include "Logger.hxx"
-#include "ThreadPool.hxx"
 
+#include <algorithm>
 #include <array>
-#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <vector>
 
+
 #include "Profiler.hxx"
+#include "Types.hxx"
 
 #ifdef __AVX2__
 #include <immintrin.h>
@@ -21,13 +22,6 @@ namespace image_operations {
         constexpr u32 SRGB_LUT_SIZE = 4096;
         std::array<u8, SRGB_LUT_SIZE> g_srgb_lut{};
         std::once_flag g_srgb_lut_once;
-
-        ThreadPool *g_thread_pool = nullptr;
-        std::once_flag g_pool_once;
-
-        void init_thread_pool() {
-            std::call_once(g_pool_once, [] { g_thread_pool = new ThreadPool(std::thread::hardware_concurrency()); });
-        }
 
         void init_srgb_lut() {
             std::call_once(g_srgb_lut_once, [] {
@@ -145,16 +139,17 @@ namespace image_operations {
 #endif
 
         // ============================
-        // Format-specific converters
+        // Format-specific converters (OpenMP versions)
         // ============================
 
-        void convert_rgba8_rows(u8 *dst, const u8 *src, u32 width, u32 height, u32 y_begin, u32 y_end) {
-            ZoneScopedNC("convert_rgba8_rows", 0x40FF80);
+        void convert_rgba8_all_rows(u8 *dst, const u8 *src, u32 width, u32 height) {
+            ZoneScopedNC("convert_rgba8_all_rows", 0x40FF80);
 
             const u32 dst_stride = ((width * 3 + 3) / 4) * 4;
             const u32 src_stride = width * 4;
 
-            for (u32 y = y_begin; y < y_end; ++y) {
+#pragma omp parallel for schedule(dynamic, 16)
+            for (i32 y = 0; y < static_cast<i32>(height); ++y) {
                 const u8 *s = src + (height - 1 - y) * src_stride;
                 u8 *d = dst + y * dst_stride;
 
@@ -172,12 +167,13 @@ namespace image_operations {
             }
         }
 
-        void convert_rgba32f_rows(u8 *dst, const float *src, u32 width, u32 height, u32 y_begin, u32 y_end) {
-            ZoneScopedNC("convert_rgba32f_rows", 0xFF8844);
+        void convert_rgba32f_all_rows(u8 *dst, const float *src, u32 width, u32 height) {
+            ZoneScopedNC("convert_rgba32f_all_rows", 0xFF8844);
 
             const u32 dst_stride = ((width * 3 + 3) / 4) * 4;
 
-            for (u32 y = y_begin; y < y_end; ++y) {
+#pragma omp parallel for schedule(dynamic, 16)
+            for (auto y = 0; y < static_cast<i32>(height); ++y) {
                 const float *s = src + (height - 1 - y) * width * 4;
                 u8 *d = dst + y * dst_stride;
 
@@ -191,13 +187,14 @@ namespace image_operations {
             }
         }
 
-        void convert_r8_rows(u8 *dst, const u8 *src, u32 width, u32 height, u32 y_begin, u32 y_end) {
-            ZoneScopedNC("convert_r8_rows", 0x80FF80);
+        void convert_r8_all_rows(u8 *dst, const u8 *src, u32 width, u32 height) {
+            ZoneScopedNC("convert_r8_all_rows", 0x80FF80);
 
             const u32 dst_stride = ((width * 3 + 3) / 4) * 4;
             const u32 src_stride = width;
 
-            for (u32 y = y_begin; y < y_end; ++y) {
+#pragma omp parallel for schedule(dynamic, 16)
+            for (auto y = 0; y < static_cast<i32>(height); ++y) {
                 const u8 *s = src + (height - 1 - y) * src_stride;
                 u8 *d = dst + y * dst_stride;
 
@@ -215,48 +212,29 @@ namespace image_operations {
         // Dispatcher
         // ============================
 
-        void convert_pixels_threaded(std::vector<u8> &out, const u8 *pixel_data, u32 width, u32 height,
-                                     VkFormat format) {
+        void convert_pixels_omp(std::vector<u8> &out, const u8 *pixel_data, u32 width, u32 height, VkFormat format) {
             init_srgb_lut();
-            init_thread_pool();
 
-            const u32 min_rows_per_task = 32;
-            const u32 num_threads = std::thread::hardware_concurrency();
-            const u32 max_tasks = std::min(num_threads, (height + min_rows_per_task - 1) / min_rows_per_task);
-            const u32 rows_per_task = (height + max_tasks - 1) / max_tasks;
-
-            for (u32 t = 0; t < max_tasks; ++t) {
-                u32 y0 = t * rows_per_task;
-                u32 y1 = std::min(height, y0 + rows_per_task);
-                if (y0 >= y1)
+            switch (format) {
+                case VK_FORMAT_R8G8B8A8_UNORM:
+                case VK_FORMAT_R8G8B8A8_SRGB:
+                    convert_rgba8_all_rows(out.data(), pixel_data, width, height);
                     break;
 
-                g_thread_pool->enqueue([=, &out] {
-                    switch (format) {
-                        case VK_FORMAT_R8G8B8A8_UNORM:
-                        case VK_FORMAT_R8G8B8A8_SRGB:
-                            convert_rgba8_rows(out.data(), pixel_data, width, height, y0, y1);
-                            break;
+                case VK_FORMAT_R32G32B32A32_SFLOAT:
+                    convert_rgba32f_all_rows(out.data(), reinterpret_cast<const float *>(pixel_data), width, height);
+                    break;
 
-                        case VK_FORMAT_R32G32B32A32_SFLOAT:
-                            convert_rgba32f_rows(out.data(), reinterpret_cast<const float *>(pixel_data), width, height,
-                                                 y0, y1);
-                            break;
+                case VK_FORMAT_R8_UNORM:
+                case VK_FORMAT_R8_SRGB:
+                case VK_FORMAT_R8_UINT:
+                case VK_FORMAT_R8_SINT:
+                    convert_r8_all_rows(out.data(), pixel_data, width, height);
+                    break;
 
-                        case VK_FORMAT_R8_UNORM:
-                        case VK_FORMAT_R8_SRGB:
-                        case VK_FORMAT_R8_UINT:
-                        case VK_FORMAT_R8_SINT:
-                            convert_r8_rows(out.data(), pixel_data, width, height, y0, y1);
-                            break;
-
-                        default:
-                            break;
-                    }
-                });
+                default:
+                    break;
             }
-
-            g_thread_pool->wait_all();
         }
 
     } // anonymous namespace
@@ -274,15 +252,14 @@ namespace image_operations {
         VkFormat format;
     };
 
-    // Batch write multiple images
-    void write_batch_to_disk(VmaAllocator &allocator, std::span<const ImageWriteRequest> requests, ProgressFn) {
+    // Batch write multiple images (OpenMP version)
+    void write_batch_to_disk(VmaAllocator &allocator, std::span<const ImageWriteRequest> requests,
+                             ProgressFn report_progress) {
         ZoneScopedNC("write_batch_to_disk", 0x8050FF);
 
         if (requests.empty()) {
             return;
         }
-
-        init_thread_pool();
 
         VmaAllocatorInfo allocator_info{};
         vmaGetAllocatorInfo(allocator, &allocator_info);
@@ -476,45 +453,51 @@ namespace image_operations {
             vkDestroyFence(allocator_info.device, fence, nullptr);
         }
 
-        // Now process all images in parallel on CPU
+        // Now process all images in parallel on CPU using OpenMP
         {
             ZoneScopedNC("parallel_cpu_processing", 0x40FF40);
 
-            for (size_t i = 0; i < staging_buffers.size(); ++i) {
-                g_thread_pool->enqueue([&, i]() {
-                    ZoneScopedNC("process_single_image", 0xFF40FF);
+            std::atomic<u32> images_done = 0;
+            const u32 total_images = static_cast<u32>(staging_buffers.size());
 
-                    auto const &staging = staging_buffers[i];
-                    auto const &req = requests[i];
+#pragma omp parallel for schedule(dynamic)
+            for (auto i = 0; i < static_cast<i32>(staging_buffers.size()); ++i) {
+                ZoneScopedNC("process_single_image", 0xFF40FF);
 
-                    std::ofstream output(req.filename, std::ios::binary);
-                    if (!output) {
-                        error("Failed to open {}", req.filename);
-                        return;
-                    }
+                auto const &staging = staging_buffers[i];
+                auto const &req = requests[i];
 
-                    const u32 row_size = ((staging.width * 3 + 3) / 4) * 4;
-                    std::vector<u8> cpu_pixels(row_size * staging.height);
+                std::ofstream output(req.filename, std::ios::binary);
+                if (!output) {
+                    error("Failed to open {}", req.filename);
+                    continue;
+                }
 
-                    const u8 *pixel_data = static_cast<const u8 *>(staging.alloc_info.pMappedData);
+                const u32 row_size = ((staging.width * 3 + 3) / 4) * 4;
+                std::vector<u8> cpu_pixels(row_size * staging.height);
 
-                    {
-                        ZoneScopedNC("Write BMP headers", 0xFF1000);
-                        write_bmp_headers(output, staging.width, staging.height);
-                    }
-                    {
-                        ZoneScopedNC("Write pixels", 0xFFFF00);
-                        convert_pixels_threaded(cpu_pixels, pixel_data, staging.width, staging.height, staging.format);
-                    }
+                const u8 *pixel_data = static_cast<const u8 *>(staging.alloc_info.pMappedData);
 
-                    {
-                        ZoneScopedNC("Generic IO, write bytes", 0xFF00FF);
-                        output.write(reinterpret_cast<char *>(cpu_pixels.data()), cpu_pixels.size());
-                    }
-                });
+                {
+                    ZoneScopedNC("Write BMP headers", 0xFF1000);
+                    write_bmp_headers(output, staging.width, staging.height);
+                }
+                {
+                    ZoneScopedNC("Write pixels", 0xFFFF00);
+                    convert_pixels_omp(cpu_pixels, pixel_data, staging.width, staging.height, staging.format);
+                }
+
+                {
+                    ZoneScopedNC("Generic IO, write bytes", 0xFF00FF);
+                    output.write(reinterpret_cast<char *>(cpu_pixels.data()), cpu_pixels.size());
+                }
+
+                auto done = ++images_done;
+
+                // Optional callback / logging
+                if (report_progress)
+                    report_progress(float(done) / float(total_images));
             }
-
-            g_thread_pool->wait_all();
         }
 
         {
@@ -702,7 +685,7 @@ namespace image_operations {
         const u8 *pixel_data = static_cast<const u8 *>(staging_alloc_info.pMappedData);
 
         write_bmp_headers(output, tex.width, tex.height);
-        convert_pixels_threaded(cpu_pixels, pixel_data, tex.width, tex.height, tex.format);
+        convert_pixels_omp(cpu_pixels, pixel_data, tex.width, tex.height, tex.format);
 
         {
             ZoneScopedNC("disk_write", 0xFF00FF);
