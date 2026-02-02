@@ -4,15 +4,18 @@
 #include "Compiler.hxx"
 #include "GlobalCommandContext.hxx"
 #include "ImageOperations.hxx"
+#include "Logger.hxx"
 #include "PipelineCache.hxx"
 #include "Pool.hxx"
 #include "Reflection.hxx"
 #include "Swapchain.hxx"
-#include "Logger.hxx"
 
 #include "3PP/PerlinNoise.hpp"
 
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
 
 auto vk_check(VkResult result) -> void {
     if (result != VK_SUCCESS) {
@@ -174,8 +177,8 @@ namespace detail {
         }
     }
 
-    auto set_debug_name_impl(VkDevice dev, VkObjectType object_type, std::uint64_t object_handle,
-                             std::string_view name) -> void {
+    auto set_debug_name_impl(VkDevice dev, VkObjectType object_type, std::uint64_t object_handle, std::string_view name)
+            -> void {
         VkDebugUtilsObjectNameInfoEXT name_info{.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                 .pNext = nullptr,
                                                 .objectType = object_type,
@@ -198,7 +201,7 @@ namespace detail {
 
 namespace {
     template<typename TL>
-    auto create_timeline(VkDevice device, VkQueue queue, u32 family_index, const std::string_view name  ) -> TL {
+    auto create_timeline(VkDevice device, VkQueue queue, u32 family_index, const std::string_view name) -> TL {
         TL t{};
         t.queue = queue;
         t.family_index = family_index;
@@ -231,16 +234,26 @@ namespace {
     }
 } // namespace
 
+
 auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
+#if defined(_MSC_VER)
+    // MSVC: use _dupenv_s
     char *buf{};
     size_t sz{};
     if (const auto ok = _dupenv_s(&buf, &sz, "BH_PIPE_CACHE_PATH") == 0 && buf; !ok)
         return std::nullopt;
-
     auto p = std::filesystem::path{buf};
     free(buf);
     return p;
+#else
+    // MinGW, GCC, Clang: use std::getenv
+    const char *env_val = std::getenv("BH_PIPE_CACHE_PATH");
+    if (!env_val)
+        return std::nullopt;
+    return std::filesystem::path{env_val};
+#endif
 }
+
 auto create_graphics_timeline(VkDevice device, VkQueue queue, u32 family_index) -> GraphicsTimeline {
     return create_timeline<GraphicsTimeline>(device, queue, family_index, "graphics");
 }
@@ -743,7 +756,7 @@ constexpr auto max_in_flight_submits() -> u64 {
     return static_cast<u64>(max_in_flight_frames) * TL::submits_per_frame;
 }
 
-auto throttle(auto& tl, VkDevice device) -> void {
+auto throttle(auto &tl, VkDevice device) -> void {
     u64 current = 0;
     vk_check(vkGetSemaphoreCounterValue(device, tl.timeline, &current));
     tl.completed = current;
@@ -763,10 +776,6 @@ auto throttle(auto& tl, VkDevice device) -> void {
     tl.completed = wait_val;
 }
 
-auto throttle(ComputeTimeline &tl, VkDevice device) -> void {
-    return throttle<ComputeTimeline>(tl, device);
-}
+auto throttle(ComputeTimeline &tl, VkDevice device) -> void { return throttle<ComputeTimeline>(tl, device); }
 
-auto throttle(GraphicsTimeline &tl, VkDevice device) -> void {
-    return throttle<GraphicsTimeline>(tl, device);
-}
+auto throttle(GraphicsTimeline &tl, VkDevice device) -> void { return throttle<GraphicsTimeline>(tl, device); }

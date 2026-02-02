@@ -14,6 +14,7 @@ struct CLIOptions {
     std::uint32_t light_count{50'000};
     bool vsync{false};
     std::uint32_t msaa{1};
+    std::optional<bool> validation_layers{};
 };
 
 auto parse_cli(int argc, char **argv) -> CLIOptions;

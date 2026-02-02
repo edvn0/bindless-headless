@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
-#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -90,7 +89,7 @@ enum class Stage : u32 {
     Predepth = 2,
     Tonemapping = 3,
     CubeRotation = 4,
-    DeferredLighting=5,
+    DeferredLighting = 5,
     Count,
 };
 
@@ -188,28 +187,57 @@ struct InstanceWithDebug {
     explicit(false) operator VkInstance() const { return instance; }
 };
 
-auto create_instance_with_debug(auto &callback, std::span<const std::string_view> surface_required_extensions,
-                                bool is_release) -> InstanceWithDebug {
+inline auto create_instance(std::span<const std::string_view> surface_required_extensions) -> VkInstance {
     vk_check(volkInitialize());
 
-    VkApplicationInfo app_info{.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                               .pNext = nullptr,
-                               .pApplicationName = "HeadlessBindless",
-                               .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-                               .pEngineName = "None",
-                               .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-                               .apiVersion = VK_API_VERSION_1_3};
+    auto app_info = create_info<VkApplicationInfo>();
+    app_info.pApplicationName = "HeadlessBindless";
+    app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    app_info.pEngineName = "None";
+    app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    app_info.apiVersion = VK_API_VERSION_1_3;
+
+    std::vector<const char *> enabled_extensions;
+    for (const auto &required_extension: surface_required_extensions) {
+        enabled_extensions.push_back(required_extension.data());
+    }
+
+    auto instance_ci = create_info<VkInstanceCreateInfo>();
+    instance_ci.pApplicationInfo = &app_info;
+    instance_ci.enabledLayerCount = 0;
+    instance_ci.ppEnabledLayerNames = nullptr;
+    instance_ci.enabledExtensionCount = static_cast<u32>(enabled_extensions.size());
+    instance_ci.ppEnabledExtensionNames = enabled_extensions.data();
+
+    VkInstance instance{};
+    vk_check(vkCreateInstance(&instance_ci, nullptr, &instance));
+    volkLoadInstance(instance);
+
+    detail::initialise_debug_name_func(instance);
+
+    return instance;
+}
+
+inline auto create_instance_with_debug(auto &callback, std::span<const std::string_view> surface_required_extensions)
+        -> InstanceWithDebug {
+    vk_check(volkInitialize());
+
+    auto app_info = create_info<VkApplicationInfo>();
+    app_info.pApplicationName = "HeadlessBindless";
+    app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    app_info.pEngineName = "None";
+    app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    app_info.apiVersion = VK_API_VERSION_1_3;
 
     std::array<const char *, 1> enabled_layers = {"VK_LAYER_KHRONOS_validation"};
 
     std::vector<const char *> enabled_extensions;
-
     for (const auto &required_extension: surface_required_extensions) {
         enabled_extensions.push_back(required_extension.data());
     }
 
     bool has_debug_utils = false;
-    if (!is_release) {
+    {
         u32 ext_count{};
         vkEnumerateInstanceExtensionProperties(nullptr, &ext_count, nullptr);
         std::vector<VkExtensionProperties> extensions(ext_count);
@@ -229,32 +257,26 @@ auto create_instance_with_debug(auto &callback, std::span<const std::string_view
 
     info("Validation layers status: '{}'", has_debug_utils ? "Enabled" : "Disabled");
 
-    VkInstanceCreateInfo create_info{.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-                                     .pNext = nullptr,
-                                     .flags = 0,
-                                     .pApplicationInfo = &app_info,
-                                     .enabledLayerCount = is_release ? 0 : static_cast<u32>(enabled_layers.size()),
-                                     .ppEnabledLayerNames = enabled_layers.data(),
-                                     .enabledExtensionCount = static_cast<u32>(enabled_extensions.size()),
-                                     .ppEnabledExtensionNames = enabled_extensions.data()};
+    auto instance_ci = create_info<VkInstanceCreateInfo>();
+    instance_ci.pApplicationInfo = &app_info;
+    instance_ci.enabledLayerCount = static_cast<u32>(enabled_layers.size());
+    instance_ci.ppEnabledLayerNames = enabled_layers.data();
+    instance_ci.enabledExtensionCount = static_cast<u32>(enabled_extensions.size());
+    instance_ci.ppEnabledExtensionNames = enabled_extensions.data();
 
     InstanceWithDebug result{};
-    vk_check(vkCreateInstance(&create_info, nullptr, &result.instance));
+    vk_check(vkCreateInstance(&instance_ci, nullptr, &result.instance));
     volkLoadInstance(result.instance);
 
     if (has_debug_utils) {
-        VkDebugUtilsMessengerCreateInfoEXT debug_ci{.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-                                                    .pNext = nullptr,
-                                                    .flags = 0,
-                                                    .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-                                                                       VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-                                                                       VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                                                                       VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-                                                    .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                                                                   VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                                                                   VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
-                                                    .pfnUserCallback = &callback,
-                                                    .pUserData = nullptr};
+        auto debug_ci = create_info<VkDebugUtilsMessengerCreateInfoEXT>();
+        debug_ci.messageSeverity =
+                VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debug_ci.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                               VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                               VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        debug_ci.pfnUserCallback = &callback;
 
         auto create_debug = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
                 vkGetInstanceProcAddr(result.instance, "vkCreateDebugUtilsMessengerEXT"));
@@ -289,20 +311,20 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
 auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device) -> VmaAllocator;
 
 struct TimelineWait {
-    u64 value {0};
-    VkSemaphore semaphore {VK_NULL_HANDLE};
-    VkPipelineStageFlags2 stage {VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+    u64 value{0};
+    VkSemaphore semaphore{VK_NULL_HANDLE};
+    VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
 };
 
 struct BinaryWait {
-    VkSemaphore semaphore {VK_NULL_HANDLE};
-    VkPipelineStageFlags2 stage {VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+    VkSemaphore semaphore{VK_NULL_HANDLE};
+    VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
 };
 
 struct SubmitSynchronisation {
-    std::span<const TimelineWait> timeline_waits {};
-    std::span<const BinaryWait> binary_waits {};
-    std::span<const VkSemaphore> binary_signals {};
+    std::span<const TimelineWait> timeline_waits{};
+    std::span<const BinaryWait> binary_waits{};
+    std::span<const VkSemaphore> binary_signals{};
 };
 
 inline constexpr auto no_waits = SubmitSynchronisation{{}, {}, {}};
@@ -315,12 +337,12 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     const u64 last = tl.slot_last_signal[index];
     if (last != 0) {
         VkSemaphoreWaitInfo wi{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .semaphoreCount = 1,
-            .pSemaphores = &tl.timeline,
-            .pValues = &last,
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .semaphoreCount = 1,
+                .pSemaphores = &tl.timeline,
+                .pValues = &last,
         };
         vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
         tl.completed = std::max(tl.completed, last);
@@ -329,10 +351,10 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     vk_check(vkResetCommandBuffer(cmd, 0));
 
     VkCommandBufferBeginInfo bi{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .pInheritanceInfo = nullptr,
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .pInheritanceInfo = nullptr,
     };
     vk_check(vkBeginCommandBuffer(cmd, &bi));
     record(cmd);
@@ -347,28 +369,28 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     std::vector<VkSemaphoreSubmitInfo> wait_infos;
     wait_infos.reserve(bwc + twc);
 
-    for (const auto &w : sync.binary_waits) {
+    for (const auto &w: sync.binary_waits) {
         wait_infos.push_back(VkSemaphoreSubmitInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .semaphore = w.semaphore,
-            .value = 0,
-            .stageMask = w.stage,
-            .deviceIndex = 0,
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .pNext = nullptr,
+                .semaphore = w.semaphore,
+                .value = 0,
+                .stageMask = w.stage,
+                .deviceIndex = 0,
         });
     }
 
-    for (const auto &w : sync.timeline_waits) {
+    for (const auto &w: sync.timeline_waits) {
         /*if (w.semaphore == tl.timeline)
             continue;*/
 
         wait_infos.push_back(VkSemaphoreSubmitInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .semaphore = w.semaphore,
-            .value = w.value,
-            .stageMask = w.stage,
-            .deviceIndex = 0,
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .pNext = nullptr,
+                .semaphore = w.semaphore,
+                .value = w.value,
+                .stageMask = w.stage,
+                .deviceIndex = 0,
         });
     }
 
@@ -377,43 +399,43 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
 
     // Always signal the timeline
     signal_infos.push_back(VkSemaphoreSubmitInfo{
-        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-        .pNext = nullptr,
-        .semaphore = tl.timeline,
-        .value = signal_val,
-        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, // conservative; or tighten if you want
-        .deviceIndex = 0,
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .semaphore = tl.timeline,
+            .value = signal_val,
+            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, // conservative; or tighten if you want
+            .deviceIndex = 0,
     });
 
     // Signal any binary semaphores
-    for (VkSemaphore s : sync.binary_signals) {
+    for (VkSemaphore s: sync.binary_signals) {
         signal_infos.push_back(VkSemaphoreSubmitInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .semaphore = s,
-            .value = 0,
-            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            .deviceIndex = 0,
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .pNext = nullptr,
+                .semaphore = s,
+                .value = 0,
+                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                .deviceIndex = 0,
         });
     }
 
     VkCommandBufferSubmitInfo cmd_info{
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-        .pNext = nullptr,
-        .commandBuffer = cmd,
-        .deviceMask = 0,
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+            .pNext = nullptr,
+            .commandBuffer = cmd,
+            .deviceMask = 0,
     };
 
     VkSubmitInfo2 submit{
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        .pNext = nullptr,
-        .flags = 0,
-        .waitSemaphoreInfoCount = static_cast<u32>(wait_infos.size()),
-        .pWaitSemaphoreInfos = wait_infos.empty() ? nullptr : wait_infos.data(),
-        .commandBufferInfoCount = 1,
-        .pCommandBufferInfos = &cmd_info,
-        .signalSemaphoreInfoCount = static_cast<u32>(signal_infos.size()),
-        .pSignalSemaphoreInfos = signal_infos.empty() ? nullptr : signal_infos.data(),
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            .pNext = nullptr,
+            .flags = 0,
+            .waitSemaphoreInfoCount = static_cast<u32>(wait_infos.size()),
+            .pWaitSemaphoreInfos = wait_infos.empty() ? nullptr : wait_infos.data(),
+            .commandBufferInfoCount = 1,
+            .pCommandBufferInfos = &cmd_info,
+            .signalSemaphoreInfoCount = static_cast<u32>(signal_infos.size()),
+            .pSignalSemaphoreInfos = signal_infos.empty() ? nullptr : signal_infos.data(),
     };
 
     vk_check(vkQueueSubmit2(tl.queue, 1, &submit, VK_NULL_HANDLE));

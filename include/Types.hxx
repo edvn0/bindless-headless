@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <numeric>
 #include <string_view>
@@ -53,7 +55,8 @@ struct OffscreenTarget {
     auto is_depth() const -> bool;
     auto is_stencil() const -> bool;
     auto transition_if_not_initialised(VkCommandBuffer, VkImageLayout,
-                                       std::pair<VkAccessFlagBits2, VkPipelineStageFlagBits2> destination_flags) -> void;
+                                       std::pair<VkAccessFlagBits2, VkPipelineStageFlagBits2> destination_flags)
+            -> void;
 };
 
 struct FrameStats {
@@ -120,7 +123,7 @@ private:
         if (!sorted_dirty)
             return;
         sorted = samples;
-        std::ranges::sort(sorted);
+        std::sort(sorted.begin(), sorted.end());
         sorted_dirty = false;
     }
 

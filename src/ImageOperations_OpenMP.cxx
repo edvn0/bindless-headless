@@ -7,7 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <vector>
-
+#include <atomic>
 
 #include "Profiler.hxx"
 #include "Types.hxx"

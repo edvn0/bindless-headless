@@ -12,6 +12,15 @@ struct CreateInfoFor<VmaAllocationCreateInfo> {
     }
 };
 
+template<>
+struct CreateInfoFor<VkDebugUtilsMessengerCreateInfoEXT> {
+    static consteval VkDebugUtilsMessengerCreateInfoEXT default_() {
+        VkDebugUtilsMessengerCreateInfoEXT ci{};
+        ci.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        return ci;
+    }
+};
+
 template<typename T>
 [[nodiscard]] consteval T create_info() {
     return CreateInfoFor<T>::default_();

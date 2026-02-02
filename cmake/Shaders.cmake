@@ -9,14 +9,14 @@ if (ENGINE_OFFLINE_SHADERS)
 
   # Explicit shader list
   set(SHADER_LIGHT_CULL   "${SHADER_SRC_DIR}/light_cull_compact_modern.slang")
-  set(SHADER_POINT_LIGHT  "${SHADER_SRC_DIR}/point_light.slang")
+  set(SHADER_POINT_LIGHT  "${SHADER_SRC_DIR}/gbuffer.slang")
   set(SHADER_PREDEPTH     "${SHADER_SRC_DIR}/predepth.slang")
   set(SHADER_TONEMAP      "${SHADER_SRC_DIR}/tonemap.slang")
 
   # Entry points (must match your C++ expectations)
   set(LIGHT_CULL_ENTRIES    LightFlagsCS LightCompactCS)
-  set(POINT_LIGHT_ENTRIES   main_vs main_fs)
-  set(PREDEPTH_ENTRIES      main_vs main_fs)
+  set(POINT_LIGHT_ENTRIES   main_vs_mdi main_fs_mdi vs_fullscreen_main fs_fullscreen_main)
+  set(PREDEPTH_ENTRIES      main_vs)
   set(TONEMAP_ENTRIES       vs_main fs_main)
 
   function(add_slang_spv slang_file)

@@ -6,6 +6,7 @@
 #include "Buffer.hxx"
 #include "Camera.hxx"
 #include "Compiler.hxx"
+#include "CompilerGlue.hxx"
 #include "GlobalCommandContext.hxx"
 #include "ImageOperations.hxx"
 #include "Logger.hxx"
@@ -34,8 +35,6 @@
 #include "3PP/PerlinNoise.hpp"
 #include "3PP/stb_image.h"
 #include "Profiler.hxx"
-
-#include <Windows.h>
 
 #include "Constants.hxx"
 #include "Mesh.hxx"
@@ -456,7 +455,7 @@ static auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<Fram
     frame_ubo_ring.write_field(ctx, frame_index, ubo.frustum_planes, offsetof(FrameUBO, frustum_planes));
 }
 
-auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
+auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
     std::unique_ptr<efsw::FileWatcher, Deleter> watcher(new efsw::FileWatcher(false), Deleter{});
     std::unordered_map<std::string, std::unique_ptr<efsw::FileWatchListener, Deleter>> listeners;
     listeners["update"] = std::unique_ptr<efsw::FileWatchListener, Deleter>(new UpdateListener(), Deleter{});
@@ -466,7 +465,6 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
     watcher->watch();
 
-    auto opts = parse_cli(argc, argv);
 
     auto compiler = std::make_unique<Compiler>();
 
@@ -821,7 +819,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                                     transform = glm::scale(transform, glm::vec3{cube.position_radius[3]});
                                     return glm::mat4x3(transform);
                                 }) |
-                                std::ranges::to<std::vector<glm::mat4x3>>();
+                                to<std::vector<glm::mat4x3>>();
     std::vector<glm::vec3> random_factors(mapped_to_transforms.size());
 
     for (auto &f: random_factors) {
@@ -1187,11 +1185,9 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     auto &&[indirect, verts, idx] = ctx.buffers.get_multiple(
                             indirect_ring.handle(), cube_mesh.position_vertex_buffer, cube_mesh.index_buffer);
 
-                    depth->transition_if_not_initialised(
-    cmd,
-    VK_IMAGE_LAYOUT_GENERAL,
-    { VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT });
+                    depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
+                                                         {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                                          VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
 
                     VkRenderingAttachmentInfo depth_attachment{};
                     depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1347,28 +1343,22 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
                     // Transition for attachment writes
                     g0->transition_if_not_initialised(
-    cmd,
-    VK_IMAGE_LAYOUT_GENERAL,
-    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
-                    
-g1->transition_if_not_initialised(
-    cmd,
-    VK_IMAGE_LAYOUT_GENERAL,
-    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+
+                    g1->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
                     g2->transition_if_not_initialised(
-    cmd,
-    VK_IMAGE_LAYOUT_GENERAL,
-    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
 
                     // depth is already written in predepth; here you read it for depth test, no writes.
                     // Your helper only does “if not initialised”, so it won't fix state if it was GENERAL already.
-                            // Keep it GENERAL and just make sure your depth attachment uses LOAD + store DONT_CARE.
-                            depth->transition_if_not_initialised(
-                                    cmd, VK_IMAGE_LAYOUT_GENERAL,
-                                    {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
+                    // Keep it GENERAL and just make sure your depth attachment uses LOAD + store DONT_CARE.
+                    depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
+                                                         {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                                          VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
 
                     VkRenderingAttachmentInfo colors[3]{};
                     auto init_color = [&](VkRenderingAttachmentInfo &a, VkImageView view) {
@@ -1477,6 +1467,7 @@ g1->transition_if_not_initialised(
                     const std::array<VkImageMemoryBarrier2, 5> barriers{
                             VkImageMemoryBarrier2{
                                     .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .pNext = nullptr,
                                     .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                     .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                     .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -1490,6 +1481,7 @@ g1->transition_if_not_initialised(
                             },
                             VkImageMemoryBarrier2{
                                     .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .pNext = nullptr,
                                     .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                     .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                     .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -1503,6 +1495,7 @@ g1->transition_if_not_initialised(
                             },
                             VkImageMemoryBarrier2{
                                     .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .pNext = nullptr,
                                     .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                     .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                     .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -1517,6 +1510,7 @@ g1->transition_if_not_initialised(
                             VkImageMemoryBarrier2{
                                     .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                     // depth was written in predepth/gbuffer depth test
+                                    .pNext = nullptr,
                                     .srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                                                     VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                                     .srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -1531,6 +1525,7 @@ g1->transition_if_not_initialised(
                             },
                             VkImageMemoryBarrier2{
                                     .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .pNext = nullptr,
                                     .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
                                     .srcAccessMask = VK_ACCESS_2_NONE,
                                     .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -1544,7 +1539,8 @@ g1->transition_if_not_initialised(
                             },
                     };
 
-                    VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    VkDependencyInfo dep{};
+                    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                     dep.imageMemoryBarrierCount = static_cast<u32>(barriers.size());
                     dep.pImageMemoryBarriers = barriers.data();
                     vkCmdPipelineBarrier2(cmd, &dep);
@@ -1597,6 +1593,7 @@ g1->transition_if_not_initialised(
                     // Make lit_hdr readable for tonemap fragment shader.
                     VkImageMemoryBarrier2 lit_to_read{
                             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                            .pNext = nullptr,
                             .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                             .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                             .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -1609,7 +1606,8 @@ g1->transition_if_not_initialised(
                             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                     };
 
-                    VkDependencyInfo dep2{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    VkDependencyInfo dep2{};
+                    dep2.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                     dep2.imageMemoryBarrierCount = 1;
                     dep2.pImageMemoryBarriers = &lit_to_read;
                     vkCmdPipelineBarrier2(cmd, &dep2);
@@ -1633,17 +1631,13 @@ g1->transition_if_not_initialised(
                     auto &&hdr = ctx.textures.get(lit_hdr_handle);
                     auto &&ldr = ctx.textures.get(tonemapped_target_handle);
 
-                  hdr->transition_if_not_initialised(
-    cmd,
-    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    { VK_ACCESS_2_SHADER_READ_BIT,
-      VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT });
+                    hdr->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            {VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT});
 
-          ldr->transition_if_not_initialised(
-    cmd,
-    VK_IMAGE_LAYOUT_GENERAL,
-    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
+                    ldr->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
 
                     VkRenderingAttachmentInfo color_attachment{};
                     color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1705,8 +1699,8 @@ g1->transition_if_not_initialised(
         const std::array present_binary_signals{frame_sync.render_finished};
 
         u64 counter = 0;
-vk_check(vkGetSemaphoreCounterValue(device, tl_graphics.timeline, &counter));
-info("tl_graphics counter before CopyToSwapchain submit: {}", counter);
+        vk_check(vkGetSemaphoreCounterValue(device, tl_graphics.timeline, &counter));
+        info("tl_graphics counter before CopyToSwapchain submit: {}", counter);
         auto swapchain_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
@@ -1852,8 +1846,8 @@ info("tl_graphics counter before CopyToSwapchain submit: {}", counter);
 
         fs.frame_done_value = swapchain_val;
 
-    throttle(tl_graphics, ctx.get_device());
-    throttle(tl_compute, ctx.get_device());
+        throttle(tl_graphics, ctx.get_device());
+        throttle(tl_compute, ctx.get_device());
 
         const auto completed = std::min(tl_compute.completed, tl_graphics.completed);
         ctx.destroy_queue.retire(completed);
@@ -1950,21 +1944,32 @@ auto main(int argc, char **argv) -> int {
         return 1;
     }
 
-    constexpr bool is_release = static_cast<bool>(IS_RELEASE);
+    auto opts = parse_cli(argc, argv);
 
     uint32_t count{};
     const char **extensions_raw = glfwGetRequiredInstanceExtensions(&count);
     std::vector<std::string_view> extensions(extensions_raw, extensions_raw + count);
 
-    auto instance = create_instance_with_debug(debug_callback, extensions, is_release);
-    execute(argc, argv, instance);
+    // Priority: opts.validation_layers overrides IS_RELEASE
+    // - If opts.validation_layers is explicitly set, use that
+    // - Otherwise, enable validation in debug builds, disable in release builds
+    bool enable_validation = opts.validation_layers.value_or(!static_cast<bool>(IS_RELEASE));
 
+    InstanceWithDebug instance;
+    if (enable_validation) {
+        // With validation layers
+        instance = create_instance_with_debug(debug_callback, extensions);
+    } else {
+        // No validation
+        auto raw_instance = create_instance(extensions);
+        instance.instance = raw_instance;
+        instance.messenger = VK_NULL_HANDLE;
+    }
+
+    execute(opts, instance);
     destruction::instance(instance);
-
     volkFinalize();
     glfwTerminate();
-
-
     info("Bindless headless setup and teardown completed successfully.");
     return 0;
 }

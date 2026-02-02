@@ -1,12 +1,13 @@
 #include "Mesh.hxx"
+#include "CompilerGlue.hxx"
 
 #include <glm/gtc/packing.hpp>
 
-#define TINYOBJLOADER_USE_MAPBOX_EARCUT 
+#define TINYOBJLOADER_USE_MAPBOX_EARCUT
 #include <tiny_obj_loader.h>
 
 namespace {
-static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
+    static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
         const glm::vec4 u = glm::unpackUnorm4x8(packed);
         return glm::vec2{u.x, u.y};
     }
@@ -40,9 +41,8 @@ static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
 
         // If tangents already present (non-zero), skip.
         // (OBJ path: they'll be default-initialized to 0, so we compute.)
-        const bool has_any_tangent = std::ranges::any_of(mesh.vertices, [](const Vertex &v) {
-            return v.tangent != 0u || v.bitangent != 0u;
-        });
+        const bool has_any_tangent = std::ranges::any_of(
+                mesh.vertices, [](const Vertex &v) { return v.tangent != 0u || v.bitangent != 0u; });
         if (has_any_tangent)
             return;
 
@@ -91,8 +91,12 @@ static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
             t *= area_w;
             b *= area_w;
 
-            tan_acc[i0] += t; tan_acc[i1] += t; tan_acc[i2] += t;
-            bitan_acc[i0] += b; bitan_acc[i1] += b; bitan_acc[i2] += b;
+            tan_acc[i0] += t;
+            tan_acc[i1] += t;
+            tan_acc[i2] += t;
+            bitan_acc[i0] += b;
+            bitan_acc[i1] += b;
+            bitan_acc[i2] += b;
         }
 
         // Orthonormalize per-vertex tangent, derive bitangent with handedness.
@@ -122,7 +126,7 @@ static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
             const float handed = (glm::dot(b, b_acc) < 0.0f) ? -1.0f : 1.0f;
             b *= handed;
 
-            v.tangent   = pack_dir(t);
+            v.tangent = pack_dir(t);
             v.bitangent = pack_dir(safe_normalize(b));
         }
     }
@@ -205,8 +209,8 @@ static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
         // Normal mapping: tinyobj uses bump_texname (and/or normal_texname in newer forks; tinyobjloader has bump)
         out.normal_map = m.bump_texname;
 
-        // Roughness/metallic are not core OBJ/MTL, but some exporters stuff them into "roughness_texname"/"metallic_texname"
-        // tinyobj::material_t has PBR fields in recent versions:
+        // Roughness/metallic are not core OBJ/MTL, but some exporters stuff them into
+        // "roughness_texname"/"metallic_texname" tinyobj::material_t has PBR fields in recent versions:
         // - roughness, metallic
         // - roughness_texname, metallic_texname
         // If your tinyobjloader version lacks these, this still compiles if you remove the block below.
@@ -252,7 +256,8 @@ static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
         }
     };
 
-    static inline auto pack_vertex_from_indices(const tinyobj::attrib_t &attrib, const tinyobj::index_t &idx) -> Vertex {
+    static inline auto pack_vertex_from_indices(const tinyobj::attrib_t &attrib, const tinyobj::index_t &idx)
+            -> Vertex {
         Vertex v{};
 
         // positions (required by OBJ)
@@ -358,15 +363,15 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
     // Always ensure a "default" material id exists (covers -1 material ids)
     const std::string default_name = "default";
-    (void)get_or_create_material_id(material_ids, default_name);
+    (void) get_or_create_material_id(material_ids, default_name);
 
     // Convert tinyobj materials
-    for (const auto &m : tiny_mats) {
+    for (const auto &m: tiny_mats) {
         MaterialData md = to_material_data(m);
         if (md.name.empty())
             md.name = default_name;
 
-        (void)get_or_create_material_id(material_ids, md.name);
+        (void) get_or_create_material_id(material_ids, md.name);
         materials.emplace(md.name, std::move(md));
     }
 
@@ -402,7 +407,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
         current_submesh_index_offset = static_cast<u32>(mesh.indices.size());
     };
 
-    for (const auto &shape : shapes) {
+    for (const auto &shape: shapes) {
         size_t index_offset = 0;
 
         const auto &num_face_vertices = shape.mesh.num_face_vertices;
@@ -481,7 +486,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
         }                                                                                                              \
     } while (false)
 
-    for (const auto &[_, m] : materials) {
+    for (const auto &[_, m]: materials) {
         LOAD_MAP(m, albedo_map, SRGB, Albedo);
         LOAD_MAP(m, normal_map, Linear, Normal);
         LOAD_MAP(m, roughness_map, Linear, Roughness);
@@ -494,14 +499,14 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
     std::vector<TextureLoadPacket> textures;
     textures.reserve(load_futures.size());
-    for (auto &f : load_futures) {
+    for (auto &f: load_futures) {
         textures.emplace_back(f.get());
     }
 
     std::vector<TextureHandle> handles;
     handles.reserve(textures.size());
 
-    for (const auto &tex : textures) {
+    for (const auto &tex: textures) {
         auto img = create_image_from_span_v2(ctx.allocator, cmd_ctx, tex.width, tex.height, tex.to_format(),
                                              std::span<const uint8_t>{tex.rgba.data(), tex.rgba.size()}, tex.name);
         handles.emplace_back(ctx.textures.create(std::move(img)));
@@ -516,7 +521,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     std::vector<GPUMaterialData> gpu_materials;
     gpu_materials.reserve(material_ids.id_to_name.size());
 
-    for (const std::string &mat_name : material_ids.id_to_name) {
+    for (const std::string &mat_name: material_ids.id_to_name) {
         auto it = materials.find(mat_name);
         if (it == materials.end()) {
             MaterialData fallback{};
@@ -538,7 +543,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
     std::vector<u32> submesh_to_material_id_mapping;
     submesh_to_material_id_mapping.reserve(mesh.submeshes.size());
-    for (const auto &submesh : mesh.submeshes) {
+    for (const auto &submesh: mesh.submeshes) {
         submesh_to_material_id_mapping.emplace_back(submesh.material_id);
     }
 
@@ -551,9 +556,8 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     const auto &vb_copy = mesh.vertices;
     const auto &ib_copy = mesh.indices;
 
-    auto position_vb = mesh.vertices
-                     | std::views::transform([](const auto &v) { return v.position; })
-                     | std::ranges::to<std::vector<glm::vec3>>();
+    auto position_vb = mesh.vertices | std::views::transform([](const auto &v) { return v.position; }) |
+                       to<std::vector<glm::vec3>>();
 
     auto vertex_buffer =
             Buffer::from_slice<Vertex>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(vb_copy),
@@ -565,13 +569,11 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
                                           std::format("position_buffer_{}", obj_path.filename().string()))
                     .value();
 
-    auto index_buffer =
-            Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, std::span(ib_copy),
-                                    std::format("index_buffer_{}", obj_path.filename().string()))
-                    .value();
+    auto index_buffer = Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, std::span(ib_copy),
+                                                std::format("index_buffer_{}", obj_path.filename().string()))
+                                .value();
 
-    auto indirect_cmds = mesh.submeshes
-                       | std::views::transform([](const auto &s) {
+    auto indirect_cmds = mesh.submeshes | std::views::transform([](const auto &s) {
                              VkDrawIndexedIndirectCommand cmd{};
                              cmd.indexCount = s.index_count;
                              cmd.instanceCount = 1;
@@ -579,8 +581,8 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
                              cmd.vertexOffset = 0;
                              cmd.firstInstance = 0;
                              return cmd;
-                         })
-                       | std::ranges::to<std::vector<VkDrawIndexedIndirectCommand>>();
+                         }) |
+                         to<std::vector<VkDrawIndexedIndirectCommand>>();
 
     indirect_cmds.reserve(mesh.submeshes.size());
 

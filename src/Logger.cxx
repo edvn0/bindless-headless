@@ -64,20 +64,22 @@ namespace detail {
         std::shared_ptr<spdlog::logger> logger_;
 
         static auto get_log_directory() -> std::string {
-#ifdef _WIN32
-            char *buffer = nullptr;
-            size_t size = 0;
-            if (_dupenv_s(&buffer, &size, "LOG_DIR") == 0 && buffer != nullptr) {
-                std::string result(buffer);
-                free(buffer);
-                return result;
-            }
+#if defined(_MSC_VER)
+            // MSVC: use _dupenv_s
+            char *buf{};
+            size_t sz{};
+            if (const auto ok = _dupenv_s(&buf, &sz, "LOG_DIR") == 0 && buf; !ok)
+                return std::nullopt;
+            auto p = std::filesystem::path{buf};
+            free(buf);
+            return p;
 #else
-            if (const char *env_dir = std::getenv("LOG_DIR")) {
-                return std::string(env_dir);
-            }
+            // MinGW, GCC, Clang: use std::getenv
+            const char *env_val = std::getenv("LOG_DIR");
+            if (!env_val)
+                return "logs";
+            return env_val;
 #endif
-            return "logs"; // default
         }
     };
 
