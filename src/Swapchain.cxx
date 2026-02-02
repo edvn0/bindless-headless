@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include "BindlessHeadless.hxx"
 
 static auto clamp_u32(u32 v, u32 lo, u32 hi) -> u32 { return std::min(std::max(v, lo), hi); }
 
@@ -245,6 +246,8 @@ auto Swapchain::create_swapchain_resources(VkExtent2D requested_extent, bool use
 
     for (u32 i = 0; i < swap_image_count; ++i) {
         res = vkCreateSemaphore(device, &sem_ci, nullptr, &render_finished_semaphores[i]);
+        set_debug_name(device, VK_OBJECT_TYPE_SEMAPHORE, render_finished_semaphores[i],
+                       std::format("render_finished_semaphore_{}", i));
         if (res != VK_SUCCESS) {
             for (auto v: new_views) {
                 if (v != VK_NULL_HANDLE) {
@@ -322,6 +325,8 @@ auto Swapchain::create(const SwapchainCreateInfo &ci) -> tl::expected<Swapchain,
 
     for (u32 fi = 0; fi < frames_in_flight; ++fi) {
         VkResult res = vkCreateSemaphore(ci.device, &sem_ci, nullptr, &out.acquire_semaphores[fi]);
+        set_debug_name(ci.device, VK_OBJECT_TYPE_SEMAPHORE, out.acquire_semaphores[fi],
+                       std::format("acquire_semaphore_frame_{}", fi));
         if (res != VK_SUCCESS) {
             out.destroy();
             return tl::unexpected(res);

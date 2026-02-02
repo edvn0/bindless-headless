@@ -11,12 +11,13 @@ auto OffscreenTarget::is_stencil() const -> bool {
 }
 
 auto OffscreenTarget::transition_if_not_initialised(
-        VkCommandBuffer cmd, VkImageLayout new_layout,
-        std::pair<VkAccessFlagBits, VkPipelineStageFlagBits> destination_flags) -> void {
+    VkCommandBuffer cmd,
+    VkImageLayout new_layout,
+    std::pair<VkAccessFlags2, VkPipelineStageFlags2> destination_flags) -> void
+{
     if (initialized) [[likely]]
         return;
 
-    // Fixed aspect mask logic
     VkImageAspectFlags aspect = 0;
     if (is_depth())
         aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -25,34 +26,48 @@ auto OffscreenTarget::transition_if_not_initialised(
     if (!is_depth() && !is_stencil())
         aspect = VK_IMAGE_ASPECT_COLOR_BIT;
 
-    VkImageSubresourceRange subresource_range = {
-            .aspectMask = aspect,
-            .baseMipLevel = 0,
-            .levelCount = VK_REMAINING_MIP_LEVELS,
-            .baseArrayLayer = 0,
-            .layerCount = VK_REMAINING_ARRAY_LAYERS,
+    const VkImageSubresourceRange subresource_range{
+        .aspectMask     = aspect,
+        .baseMipLevel   = 0,
+        .levelCount     = VK_REMAINING_MIP_LEVELS,
+        .baseArrayLayer = 0,
+        .layerCount     = VK_REMAINING_ARRAY_LAYERS,
     };
 
-    auto &&[dst_access, dst_stage] = destination_flags;
+    auto&& [dst_access, dst_stage] = destination_flags;
 
-    VkImageMemoryBarrier depth_barrier{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = 0,
-            .dstAccessMask = static_cast<VkAccessFlags>(dst_access),
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = new_layout,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresourceRange = subresource_range,
+    const VkImageMemoryBarrier2 barrier{
+        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .pNext               = nullptr,
+        .srcStageMask        = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+        .srcAccessMask       = VK_ACCESS_2_NONE,
+        .dstStageMask        = dst_stage,
+        .dstAccessMask       = dst_access,
+        .oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout           = new_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image               = image,
+        .subresourceRange    = subresource_range,
     };
 
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, static_cast<VkPipelineStageFlags>(dst_stage), 0, 0,
-                         nullptr, 0, nullptr, 1, &depth_barrier);
+    const VkDependencyInfo dep{
+        .sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext                    = nullptr,
+        .dependencyFlags          = 0,
+        .memoryBarrierCount       = 0,
+        .pMemoryBarriers          = nullptr,
+        .bufferMemoryBarrierCount = 0,
+        .pBufferMemoryBarriers    = nullptr,
+        .imageMemoryBarrierCount  = 1,
+        .pImageMemoryBarriers     = &barrier,
+    };
+
+    vkCmdPipelineBarrier2(cmd, &dep);
 
     initialized = true;
 }
+
 
 auto FrameStats::add_sample(double v) -> void {
     samples.push_back(v);

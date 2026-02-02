@@ -53,7 +53,7 @@ struct OffscreenTarget {
     auto is_depth() const -> bool;
     auto is_stencil() const -> bool;
     auto transition_if_not_initialised(VkCommandBuffer, VkImageLayout,
-                                       std::pair<VkAccessFlagBits, VkPipelineStageFlagBits> destination_flags) -> void;
+                                       std::pair<VkAccessFlagBits2, VkPipelineStageFlagBits2> destination_flags) -> void;
 };
 
 struct FrameStats {

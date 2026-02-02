@@ -67,12 +67,21 @@ CPMAddPackage(
   GIT_SHALLOW YES
 )
 
-find_package(spdlog REQUIRED)
+CPMAddPackage(
+  URI "gh:tinyobjloader/tinyobjloader#d56555b026c1c7cec0f93f3ec7f1de2ff005c5ad"
+  GIT_SHALLOW YES
+)
+
+CPMAddPackage(
+  URI "gh:gabime/spdlog@1.17.0"
+  GIT_SHALLOW YES
+)
 
 if (HAS_TRACY)
   set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
   CPMAddPackage(
     URI "gh:wolfpld/tracy#07147111b26ddaf43fb46fabbab42de4451fa567"
+    GIT_SHALLOW YES
   )
 endif()
 

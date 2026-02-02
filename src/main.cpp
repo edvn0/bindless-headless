@@ -19,6 +19,7 @@
 
 
 #include <GLFW/glfw3.h>
+#include <cassert>
 #include <chrono>
 #include <efsw/efsw.hpp>
 #include <execution>
@@ -339,6 +340,7 @@ struct FrameUBO {
     glm::mat4 projection;
     glm::mat4 view_projection;
     glm::mat4 inv_projection;
+    glm::mat4 inv_view_projection;
     glm::vec4 camera_position;
     std::array<FrustumPlane, 6> frustum_planes; // left, right, bottom, top, near, far
     glm::vec4 sun_direction_intensity;
@@ -433,6 +435,7 @@ static auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, V
     ubo.inv_projection = glm::inverse(ubo.projection);
     ubo.view_projection = ubo.projection * ubo.view;
     ubo.camera_position = glm::vec4(cam.camera_position(), 1.0f);
+    ubo.inv_view_projection = glm::inverse(ubo.view_projection);
 
     const auto planes = extract_frustum_planes(ubo.inv_projection);
     ubo.frustum_planes = {planes[0], planes[1], planes[2], planes[3], planes[4], planes[5]};
@@ -447,6 +450,7 @@ static auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<Fram
     frame_ubo_ring.write_field(ctx, frame_index, ubo.view, offsetof(FrameUBO, view));
     frame_ubo_ring.write_field(ctx, frame_index, ubo.projection, offsetof(FrameUBO, projection));
     frame_ubo_ring.write_field(ctx, frame_index, ubo.view_projection, offsetof(FrameUBO, view_projection));
+    frame_ubo_ring.write_field(ctx, frame_index, ubo.inv_view_projection, offsetof(FrameUBO, inv_view_projection));
     frame_ubo_ring.write_field(ctx, frame_index, ubo.inv_projection, offsetof(FrameUBO, inv_projection));
     frame_ubo_ring.write_field(ctx, frame_index, ubo.camera_position, offsetof(FrameUBO, camera_position));
     frame_ubo_ring.write_field(ctx, frame_index, ubo.frustum_planes, offsetof(FrameUBO, frustum_planes));
@@ -533,6 +537,12 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     auto rotate_cubes_code = compiler->compile_from_file("shaders/rotate_cubes.slang", std::span(rotate_cubes_names),
                                                          std::span(rotate_cubes_reflection));
 
+    std::array<const std::string_view, 5> gbuffer_entry_point_names = {
+            "main_vs_mdi", "main_fs_mdi", "main_gbuffer_lighting", "vs_fullscreen_main", "fs_fullscreen_main"};
+    std::array<ReflectionData, gbuffer_entry_point_names.size()> gbuffer_reflection{};
+    auto gbuffer_lighting_code = compiler->compile_from_file(
+            "shaders/gbuffer.slang", std::span(gbuffer_entry_point_names), std::span(gbuffer_reflection));
+
     auto allocator = create_allocator(instance.instance, physical_device, device);
 
     auto tl_compute = create_compute_timeline(device, compute_queue, compute_index);
@@ -554,9 +564,15 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     auto &&[cube_rotation_pipeline] = create_compute_pipelines(
             device, *pipeline_cache, bindless.layout, std::span(rotate_cubes_code), std::span(rotate_cubes_names));
 
-    auto point_light_pipeline =
-            create_mesh_pipeline(device, *pipeline_cache, bindless.layout, point_light_code.at(0),
-                                 point_light_code.at(1), VK_FORMAT_R32G32B32A32_SFLOAT, msaa_samples);
+    auto gbuffer_pipeline_mrt =
+            create_gbuffer_pipeline(device, *pipeline_cache, bindless.layout, gbuffer_lighting_code.at(0),
+                                    gbuffer_lighting_code.at(1), VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_UNORM,
+                                    VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
+    auto gbuffer_pipeline_lighting = create_deferred_lighting_graphics_pipeline(
+            device, *pipeline_cache, bindless.layout, gbuffer_lighting_code.at(3), gbuffer_lighting_code.at(4),
+            "vs_fullscreen_main", "fs_fullscreen_main", VK_FORMAT_R16G16B16A16_SFLOAT);
+
+
     auto predepth_pipeline = create_predepth_pipeline(device, *pipeline_cache, bindless.layout, predepth_code.at(0),
                                                       VK_FORMAT_D32_SFLOAT, msaa_samples);
 
@@ -679,21 +695,36 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     noise.clear();
 
 
-    TextureHandle offscreen_target_handle;
-    TextureHandle msaa_offscreen_target_handle;
+    TextureHandle gbuffer0_handle; // ALBEDO_AO: VK_FORMAT_R8G8B8A8_UNORM
+    TextureHandle gbuffer1_handle; // Normal OCT, Roughness Metallic: VK_FORMAT_R16G16B16A16_UNORM
+    TextureHandle gbuffer2_handle; // Emissive HDR: VK_FORMAT_R16G16B16A16_SFLOAT
+    TextureHandle lit_hdr_handle; // VK_FORMAT_R16G16B16A16_SFLOAT
+    TextureHandle depth_handle; // VK_FORMAT_D32_SFLOAT
     TextureHandle tonemapped_target_handle;
-    TextureHandle offscreen_depth_target_handle;
-    TextureHandle msaa_offscreen_depth_target_handle;
 
     {
         auto ci = create_info<VkSamplerCreateInfo>();
-        ci.magFilter = VK_FILTER_LINEAR, ci.minFilter = VK_FILTER_LINEAR, ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-        ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT, ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT, ci.mipLodBias = 0.0f, ci.anisotropyEnable = VK_FALSE,
-        ci.maxAnisotropy = 1.0f, ci.compareEnable = VK_FALSE, ci.compareOp = VK_COMPARE_OP_ALWAYS,
-        ci.maxLod = VK_LOD_CLAMP_NONE, ci.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        ci.magFilter = VK_FILTER_LINEAR;
+        ci.minFilter = VK_FILTER_LINEAR;
+        ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 
-        ctx.create_sampler(ci, "linear_repeat");
+        ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+        ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        ci.mipLodBias = 0.0f;
+        ci.anisotropyEnable = VK_FALSE;
+
+        ci.maxAnisotropy = 1.0f;
+        ci.compareEnable = VK_FALSE;
+        ci.compareOp = VK_COMPARE_OP_ALWAYS;
+
+        ci.maxLod = VK_LOD_CLAMP_NONE;
+        ci.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+
+
+        auto index = ctx.create_sampler(ci, "linear_repeat").index();
+        info("Linear Repeat Sampler Index: {}", index);
     }
 
     SamplerHandle linear_clamp_sampler_handle;
@@ -803,7 +834,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
     auto instance_count = static_cast<u32>(mapped_to_transforms.size());
 
-    auto maybe_cube_mesh = load_obj(ctx, command_context, "assets/meshes/SimpleCube.obj");
+    auto maybe_cube_mesh = load_obj(ctx, command_context, "assets/meshes/ColourGridCube.obj");
     if (!maybe_cube_mesh) {
         std::abort();
     }
@@ -922,27 +953,33 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                 });
 
         const auto offscreen_node = resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
-                                                                                   const ResizeContext &resize_ctx) {
-            const auto old_color = offscreen_target_handle;
-            const auto old_depth = offscreen_depth_target_handle;
-            const auto old_msaa_color = msaa_offscreen_target_handle;
-            const auto old_msaa_depth = msaa_offscreen_depth_target_handle;
+                                                                                   const ResizeContext &rc) {
+            const auto old_g0 = gbuffer0_handle;
+            const auto old_g1 = gbuffer1_handle;
+            const auto old_g2 = gbuffer2_handle;
+            const auto old_hdr = lit_hdr_handle;
+            const auto old_depth = depth_handle;
 
-            offscreen_target_handle = ctx.create_texture(create_offscreen_target(
-                    allocator, e.width, e.height, VK_FORMAT_R32G32B32A32_SFLOAT, {}, "offscreen"));
-            offscreen_depth_target_handle = ctx.create_texture(create_depth_target(
-                    allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, msaa_samples, false, "offscreen_depth"));
-            msaa_offscreen_target_handle = ctx.create_texture(
-                    create_offscreen_target(allocator, e.width, e.height, VK_FORMAT_R32G32B32A32_SFLOAT, msaa_samples,
-                                            {.sampled_storage_transfer = 0b000}, "msaa_offscreen"));
-            msaa_offscreen_depth_target_handle = ctx.create_texture(create_depth_target(
-                    allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, msaa_samples, false, "msaa_offscreen_depth"));
+            gbuffer0_handle = ctx.create_texture(create_offscreen_target(
+                    allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "gbuffer0_albedo_ao"));
 
+            gbuffer1_handle = ctx.create_texture(create_offscreen_target(
+                    allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_UNORM, {}, "gbuffer1_normal_rough_metal"));
 
-            destroy(ctx, old_color, resize_ctx.retire_value);
-            destroy(ctx, old_depth, resize_ctx.retire_value);
-            destroy(ctx, old_msaa_color, resize_ctx.retire_value);
-            destroy(ctx, old_msaa_depth, resize_ctx.retire_value);
+            gbuffer2_handle = ctx.create_texture(create_offscreen_target(
+                    allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
+
+            depth_handle = ctx.create_texture(create_depth_target(allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT,
+                                                                  VK_SAMPLE_COUNT_1_BIT, false, "depth"));
+
+            lit_hdr_handle = ctx.create_texture(create_offscreen_target(allocator, e.width, e.height,
+                                                                        VK_FORMAT_R16G16B16A16_SFLOAT, {}, "lit_hdr"));
+
+            destroy(ctx, old_g0, rc.retire_value);
+            destroy(ctx, old_g1, rc.retire_value);
+            destroy(ctx, old_g2, rc.retire_value);
+            destroy(ctx, old_hdr, rc.retire_value);
+            destroy(ctx, old_depth, rc.retire_value);
         });
 
         const auto uniforms_node = resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D, const ResizeContext &) {
@@ -1135,24 +1172,26 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                 no_waits);
         fs.timeline_values[stage_index(Stage::CubeRotation)] = rotate_cubes_gpu_val;
 
-        const std::array cube_rotate_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::CubeRotation)],
-                                                        .semaphore = tl_compute.timeline,
-                                                        .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}};
+        const std::array cube_rotate_waits{TimelineWait{
+                .value = fs.timeline_values[stage_index(Stage::CubeRotation)],
+                .semaphore = tl_compute.timeline,
+                .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+        }};
 
         auto predepth_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "Predepth");
-                    auto depth_handle = (msaa_samples != VK_SAMPLE_COUNT_1_BIT) ? msaa_offscreen_depth_target_handle
-                                                                                : offscreen_depth_target_handle;
 
                     auto &&depth = ctx.textures.get(depth_handle);
                     auto &&[indirect, verts, idx] = ctx.buffers.get_multiple(
                             indirect_ring.handle(), cube_mesh.position_vertex_buffer, cube_mesh.index_buffer);
 
                     depth->transition_if_not_initialised(
-                            cmd, VK_IMAGE_LAYOUT_GENERAL,
-                            {VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT});
+    cmd,
+    VK_IMAGE_LAYOUT_GENERAL,
+    { VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+      VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT });
 
                     VkRenderingAttachmentInfo depth_attachment{};
                     depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1210,7 +1249,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
         const std::array culling_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
                                                     .semaphore = tl_graphics.timeline,
-                                                    .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}};
+                                                    .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}};
         auto light_val = submit_stage(
                 tl_compute, device,
                 [&](VkCommandBuffer cmd) {
@@ -1285,140 +1324,305 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
         const std::array gbuffer_waits{
                 TimelineWait{
-                        .value = fs.timeline_values[stage_index(Stage::LightCulling)],
+                        .value = fs.timeline_values[stage_index(Stage::CubeRotation)],
                         .semaphore = tl_compute.timeline,
-                        .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                        .stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
                 },
                 TimelineWait{
                         .value = fs.timeline_values[stage_index(Stage::Predepth)],
                         .semaphore = tl_graphics.timeline,
-                        .stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT, // Need transforms before vertex shader
+                        .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT, // depth test
                 },
         };
 
         auto gbuffer_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "GBuffer");
-                    auto &&[graphics_perf_query, graphics_stats] = ctx.query_pools.get_multiple(
-                            graphics_query_pool[bounded_frame_index], graphics_stats_pool[bounded_frame_index]);
+                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "GBuffer MRT");
 
+                    auto *g0 = ctx.textures.get(gbuffer0_handle);
+                    auto *g1 = ctx.textures.get(gbuffer1_handle);
+                    auto *g2 = ctx.textures.get(gbuffer2_handle);
+                    auto *depth = ctx.textures.get(depth_handle);
 
-                    const bool msaa_enabled = (msaa_samples != VK_SAMPLE_COUNT_1_BIT);
+                    // Transition for attachment writes
+                    g0->transition_if_not_initialised(
+    cmd,
+    VK_IMAGE_LAYOUT_GENERAL,
+    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
+                    
+g1->transition_if_not_initialised(
+    cmd,
+    VK_IMAGE_LAYOUT_GENERAL,
+    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
+                    g2->transition_if_not_initialised(
+    cmd,
+    VK_IMAGE_LAYOUT_GENERAL,
+    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
 
-                    auto &&resolve = ctx.textures.get(offscreen_target_handle);
+                    // depth is already written in predepth; here you read it for depth test, no writes.
+                    // Your helper only does “if not initialised”, so it won't fix state if it was GENERAL already.
+                            // Keep it GENERAL and just make sure your depth attachment uses LOAD + store DONT_CARE.
+                            depth->transition_if_not_initialised(
+                                    cmd, VK_IMAGE_LAYOUT_GENERAL,
+                                    {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
 
-                    auto *color = msaa_enabled ? ctx.textures.get(msaa_offscreen_target_handle) : resolve;
-                    auto *depth = msaa_enabled ? ctx.textures.get(msaa_offscreen_depth_target_handle)
-                                               : ctx.textures.get(offscreen_depth_target_handle);
+                    VkRenderingAttachmentInfo colors[3]{};
+                    auto init_color = [&](VkRenderingAttachmentInfo &a, VkImageView view) {
+                        a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                        a.imageView = view;
+                        a.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                        a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                        a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                        a.clearValue = {.color = {.float32 = {0, 0, 0, 0}}};
+                    };
+                    init_color(colors[0], g0->attachment_view);
+                    init_color(colors[1], g1->attachment_view);
+                    init_color(colors[2], g2->attachment_view);
 
-                    const VkQueryPool &graphics_perf_pool = graphics_perf_query->pool;
-                    const VkQueryPool &graphics_pool_for_stats = graphics_stats->pool;
+                    VkRenderingAttachmentInfo depth_att{};
+                    depth_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    depth_att.imageView = depth->attachment_view;
+                    depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // keep predepth
+                    depth_att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // no need to store
+                    depth_att.clearValue = {.depthStencil = {0.0f, 0}};
 
-                    vkCmdResetQueryPool(cmd, graphics_perf_pool, 0, graphics_perf_query->query_count);
-                    vkCmdResetQueryPool(cmd, graphics_pool_for_stats, 0, graphics_stats->query_count);
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, graphics_perf_pool, 0);
-                    vkCmdBeginQuery(cmd, graphics_pool_for_stats, 0, 0);
+                    VkRenderingInfo ri{};
+                    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                    ri.renderArea = {.offset = {0, 0}, .extent = frame_extent};
+                    ri.layerCount = 1;
+                    ri.colorAttachmentCount = 3;
+                    ri.pColorAttachments = colors;
+                    ri.pDepthAttachment = &depth_att;
 
-                    resolve->transition_if_not_initialised(
-                            cmd, VK_IMAGE_LAYOUT_GENERAL,
-                            {VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT}); // ✅ Correct for resolve target
-                    color->transition_if_not_initialised(
-                            cmd, VK_IMAGE_LAYOUT_GENERAL,
-                            {VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
-                    depth->transition_if_not_initialised(
-                            cmd, VK_IMAGE_LAYOUT_GENERAL,
-                            {VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT});
+                    vkCmdBeginRendering(cmd, &ri);
 
-                    VkRenderingAttachmentInfo color_attachment{};
-                    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                    color_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                    color_attachment.clearValue = {.color = {.float32 = {0.1f, 0.1f, 0.1f, 1.0f}}};
-
-                    color_attachment.imageView = color->attachment_view;
-                    color_attachment.storeOp =
-                            msaa_enabled ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
-
-                    if (msaa_enabled) {
-                        color_attachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
-                        color_attachment.resolveImageView = resolve->attachment_view;
-                        color_attachment.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    }
-
-                    VkRenderingAttachmentInfo depth_attachment{};
-                    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                    depth_attachment.imageView = depth->attachment_view;
-                    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-                    depth_attachment.clearValue = {.depthStencil = {1.0f, 0}};
-
-                    VkRenderingInfo rendering_info{};
-                    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                    rendering_info.renderArea = {.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
-                    rendering_info.layerCount = 1;
-                    rendering_info.colorAttachmentCount = 1;
-                    rendering_info.pColorAttachments = &color_attachment;
-                    rendering_info.pDepthAttachment = &depth_attachment;
-
-
-                    vkCmdBeginRendering(cmd, &rendering_info);
-
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline.pipeline);
-
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gbuffer_pipeline_mrt.pipeline);
 
                     auto &&[vp, sc] = viewport_scissors(frame_extent);
                     vkCmdSetViewport(cmd, 0, 1, &vp);
                     vkCmdSetScissor(cmd, 0, 1, &sc);
-                    vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_EQUAL);
+                    vkCmdSetDepthCompareOp(cmd,
+                                           VK_COMPARE_OP_EQUAL); // matches your predepth = GEQUAL reverseZ + load depth
                     vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                     vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
-                    vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
-
+                    vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
 
                     auto &&[indirect, verts, idx, materials] =
                             ctx.buffers.get_multiple(indirect_ring.handle(), cube_mesh.vertex_buffer,
                                                      cube_mesh.index_buffer, cube_mesh.material_buffer);
-                    const RenderingPushConstants pc{
+
+                    RenderingPushConstants pc{
                             .ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
                             .transforms = cubes_transform_handle->slot_device_address(bounded_frame_index),
                             .draw_material_ids = draw_material_id_ring.slot_device_address(bounded_frame_index),
                             .materials = materials->device_address(),
                             .base_draw_id = base_draw,
-                            .lights = compact_addr,
-                            .culled_light_count = culled_light_count_addr,
-                            .ambient_light_strength = 0.1f,
+                            .sampler_index = linear_clamp_sampler_handle.index(),
                     };
-                    vkCmdPushConstants(cmd, point_light_pipeline.layout,
-                                       VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-                    vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
-                    std::array<VkBuffer, 1> buffers = {verts->buffer()};
-                    std::array<VkDeviceSize, 1> offsets = {0};
-                    vkCmdBindVertexBuffers2(cmd, 0, 1, buffers.data(), offsets.data(), nullptr, nullptr);
-                    const VkDeviceSize indirect_offset_bytes =
-                            static_cast<VkDeviceSize>(indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                            static_cast<VkDeviceSize>(base_draw) * sizeof(VkDrawIndexedIndirectCommand);
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, point_light_pipeline.layout, 0, 1,
+
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gbuffer_pipeline_mrt.layout, 0, 1,
                                             &bindless.set, 0, nullptr);
+
+                    vkCmdPushConstants(cmd, gbuffer_pipeline_mrt.layout,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+                    vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
+                    VkBuffer vb = verts->buffer();
+                    VkDeviceSize off = 0;
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &off);
+
+                    VkDeviceSize indirect_offset_bytes =
+                            VkDeviceSize(indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                            VkDeviceSize(base_draw) * sizeof(VkDrawIndexedIndirectCommand);
 
                     vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), indirect_offset_bytes, draw_count,
                                              sizeof(VkDrawIndexedIndirectCommand));
 
                     vkCmdEndRendering(cmd);
-
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, graphics_perf_pool, 1);
-                    vkCmdEndQuery(cmd, graphics_pool_for_stats, 0);
                 },
                 SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
 
-        const std::array tonemap_waits{
+        const std::array deferred_waits{
                 TimelineWait{
                         .value = fs.timeline_values[stage_index(Stage::GBuffer)],
                         .semaphore = tl_graphics.timeline,
-                        .stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                },
+                TimelineWait{
+                        .value = fs.timeline_values[stage_index(Stage::LightCulling)],
+                        .semaphore = tl_compute.timeline,
+                        .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                },
+        };
+
+        auto deferred_val = submit_stage(
+                tl_graphics, device,
+                [&](VkCommandBuffer cmd) {
+                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "DeferredLighting(FS)");
+
+                    auto *g0 = ctx.textures.get(gbuffer0_handle);
+                    auto *g1 = ctx.textures.get(gbuffer1_handle);
+                    auto *g2 = ctx.textures.get(gbuffer2_handle);
+                    auto *depth = ctx.textures.get(depth_handle);
+                    auto *lit = ctx.textures.get(lit_hdr_handle);
+
+                    // Make gbuffer + depth readable by fragment shader, and lit writable as color attachment.
+                    // Layouts stay GENERAL (your preference), but we still do proper memory visibility.
+                    const std::array<VkImageMemoryBarrier2, 5> barriers{
+                            VkImageMemoryBarrier2{
+                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                    .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .image = g0->image,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                            },
+                            VkImageMemoryBarrier2{
+                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                    .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .image = g1->image,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                            },
+                            VkImageMemoryBarrier2{
+                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                    .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .image = g2->image,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                            },
+                            VkImageMemoryBarrier2{
+                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    // depth was written in predepth/gbuffer depth test
+                                    .srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                                    VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                                    .srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                    .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                    .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .image = depth->image,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+                            },
+                            VkImageMemoryBarrier2{
+                                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                    .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                                    .srcAccessMask = VK_ACCESS_2_NONE,
+                                    .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                    .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                    .image = lit->image,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                            },
+                    };
+
+                    VkDependencyInfo dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    dep.imageMemoryBarrierCount = static_cast<u32>(barriers.size());
+                    dep.pImageMemoryBarriers = barriers.data();
+                    vkCmdPipelineBarrier2(cmd, &dep);
+
+                    // Render into lit_hdr as a color attachment (dynamic rendering)
+                    VkRenderingAttachmentInfo lit_att{};
+                    lit_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    lit_att.imageView = lit->attachment_view;
+                    lit_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    lit_att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    lit_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    lit_att.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
+
+                    VkRenderingInfo ri{};
+                    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                    ri.renderArea = {.offset = {0, 0}, .extent = frame_extent};
+                    ri.layerCount = 1;
+                    ri.colorAttachmentCount = 1;
+                    ri.pColorAttachments = &lit_att;
+
+                    vkCmdBeginRendering(cmd, &ri);
+
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gbuffer_pipeline_lighting.pipeline);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gbuffer_pipeline_lighting.layout, 0,
+                                            1, &bindless.set, 0, nullptr);
+
+                    auto &&[vp, sc] = viewport_scissors(frame_extent);
+                    vkCmdSetViewport(cmd, 0, 1, &vp);
+                    vkCmdSetScissor(cmd, 0, 1, &sc);
+
+                    DeferredLightingPushConstants pc{
+                            .frame_ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
+                            .point_lights = compact_addr,
+                            .point_light_count = culled_light_count_addr,
+                            .gbuffer0_index = gbuffer0_handle.index(),
+                            .gbuffer1_index = gbuffer1_handle.index(),
+                            .gbuffer2_index = gbuffer2_handle.index(),
+                            .depth_index = depth_handle.index(),
+                            .sampler_index = linear_clamp_sampler_handle.index(),
+                    };
+
+                    vkCmdPushConstants(cmd, gbuffer_pipeline_lighting.layout,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+                    // Fullscreen triangle
+                    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+                    vkCmdEndRendering(cmd);
+
+                    // Make lit_hdr readable for tonemap fragment shader.
+                    VkImageMemoryBarrier2 lit_to_read{
+                            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                            .dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                            .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                            .image = lit->image,
+                            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                    };
+
+                    VkDependencyInfo dep2{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    dep2.imageMemoryBarrierCount = 1;
+                    dep2.pImageMemoryBarriers = &lit_to_read;
+                    vkCmdPipelineBarrier2(cmd, &dep2);
+                },
+                SubmitSynchronisation{.timeline_waits = deferred_waits});
+
+        fs.timeline_values[stage_index(Stage::DeferredLighting)] = deferred_val;
+
+        const std::array tonemap_waits{
+                TimelineWait{
+                        .value = fs.timeline_values[stage_index(Stage::DeferredLighting)],
+                        .semaphore = tl_graphics.timeline,
+                        .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                 },
         };
 
@@ -1426,16 +1630,20 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "Tonemapping");
-                    auto &&hdr = ctx.textures.get(offscreen_target_handle);
+                    auto &&hdr = ctx.textures.get(lit_hdr_handle);
                     auto &&ldr = ctx.textures.get(tonemapped_target_handle);
 
-                    hdr->transition_if_not_initialised(
-                            cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                            {VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT});
+                  hdr->transition_if_not_initialised(
+    cmd,
+    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    { VK_ACCESS_2_SHADER_READ_BIT,
+      VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT });
 
-                    ldr->transition_if_not_initialised(
-                            cmd, VK_IMAGE_LAYOUT_GENERAL,
-                            {VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT});
+          ldr->transition_if_not_initialised(
+    cmd,
+    VK_IMAGE_LAYOUT_GENERAL,
+    { VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT });
 
                     VkRenderingAttachmentInfo color_attachment{};
                     color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1462,7 +1670,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
                     float exposure = 1.0f;
                     TonemapPushConstants pc{
                             .exposure = exposure,
-                            .image_index = offscreen_target_handle.index(),
+                            .image_index = lit_hdr_handle.index(),
                             .sampler_index = linear_clamp_sampler_handle.index(),
                     };
 
@@ -1491,11 +1699,14 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
         const std::array present_binary_waits{BinaryWait{
                 .semaphore = frame_sync.image_available,
-                .stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         }};
 
         const std::array present_binary_signals{frame_sync.render_finished};
 
+        u64 counter = 0;
+vk_check(vkGetSemaphoreCounterValue(device, tl_graphics.timeline, &counter));
+info("tl_graphics counter before CopyToSwapchain submit: {}", counter);
         auto swapchain_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
@@ -1641,8 +1852,8 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
         fs.frame_done_value = swapchain_val;
 
-        throttle(tl_compute, ctx.get_device());
-        throttle(tl_graphics, ctx.get_device());
+    throttle(tl_graphics, ctx.get_device());
+    throttle(tl_compute, ctx.get_device());
 
         const auto completed = std::min(tl_compute.completed, tl_graphics.completed);
         ctx.destroy_queue.retire(completed);
@@ -1676,13 +1887,26 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
     info("GPU graphics mean:  {:.3f} ms", gpu_graphics_ms.avg());
     info("GPU graphics p95:   {:.3f} ms", gpu_graphics_ms.p95());
 
-    const auto &&[oth, ph] = ctx.textures.get_multiple(offscreen_target_handle, perlin_handle);
+    const auto &&[oth, gbuffer0, gbuffer1, gbuffer2, ph] =
+            ctx.textures.get_multiple(lit_hdr_handle, gbuffer0_handle, gbuffer1_handle, gbuffer2_handle, perlin_handle);
     {
         std::filesystem::path output_dir = "output";
         std::filesystem::create_directory(output_dir);
         const auto as_string = output_dir.string();
         ZoneScopedNC("batch_write_images", 0xFF00AA);
         std::vector requests{image_operations::ImageWriteRequest{oth, std::format("{}/output.bmp", as_string)},
+                             image_operations::ImageWriteRequest{
+                                     gbuffer0,
+                                     std::format("{}/gbuffer0.bmp", as_string),
+                             },
+                             image_operations::ImageWriteRequest{
+                                     gbuffer1,
+                                     std::format("{}/gbuffer1.bmp", as_string),
+                             },
+                             image_operations::ImageWriteRequest{
+                                     gbuffer2,
+                                     std::format("{}/gbuffer2.bmp", as_string),
+                             },
                              image_operations::ImageWriteRequest{
                                      ph,
                                      std::format("{}/perlin.bmp", as_string),
@@ -1706,7 +1930,7 @@ auto execute(int argc, char **argv, InstanceWithDebug &instance) -> int {
 
     vkDeviceWaitIdle(device);
     destruction::pipeline(device, flags_pipeline, compact_pipeline, predepth_pipeline, tonemap_pipeline,
-                          point_light_pipeline, cube_rotation_pipeline);
+                          cube_rotation_pipeline, gbuffer_pipeline_mrt, gbuffer_pipeline_lighting);
     destruction::global_command_context(command_context);
     destruction::bindless_set(device, bindless);
     destruction::timeline_compute(device, tl_graphics);

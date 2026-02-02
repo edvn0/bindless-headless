@@ -8,6 +8,7 @@
 #include "Pool.hxx"
 #include "Reflection.hxx"
 #include "Swapchain.hxx"
+#include "Logger.hxx"
 
 #include "3PP/PerlinNoise.hpp"
 
@@ -173,7 +174,7 @@ namespace detail {
         }
     }
 
-    auto set_debug_name_impl(VkDevice &dev, VkObjectType object_type, std::uint64_t object_handle,
+    auto set_debug_name_impl(VkDevice dev, VkObjectType object_type, std::uint64_t object_handle,
                              std::string_view name) -> void {
         VkDebugUtilsObjectNameInfoEXT name_info{.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
                                                 .pNext = nullptr,
@@ -197,7 +198,7 @@ namespace detail {
 
 namespace {
     template<typename TL>
-    auto create_timeline(VkDevice device, VkQueue queue, u32 family_index) -> TL {
+    auto create_timeline(VkDevice device, VkQueue queue, u32 family_index, const std::string_view name  ) -> TL {
         TL t{};
         t.queue = queue;
         t.family_index = family_index;
@@ -210,6 +211,8 @@ namespace {
                                           .initialValue = 0};
         VkSemaphoreCreateInfo sci{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &type_ci, .flags = 0};
         vk_check(vkCreateSemaphore(device, &sci, nullptr, &t.timeline));
+        set_debug_name(device, VK_OBJECT_TYPE_SEMAPHORE, t.timeline, std::format("{}_timeline", name));
+
 
         VkCommandPoolCreateInfo pci{
                 .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -239,11 +242,11 @@ auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
     return p;
 }
 auto create_graphics_timeline(VkDevice device, VkQueue queue, u32 family_index) -> GraphicsTimeline {
-    return create_timeline<GraphicsTimeline>(device, queue, family_index);
+    return create_timeline<GraphicsTimeline>(device, queue, family_index, "graphics");
 }
 
 auto create_compute_timeline(VkDevice device, VkQueue queue, u32 family_index) -> ComputeTimeline {
-    return create_timeline<ComputeTimeline>(device, queue, family_index);
+    return create_timeline<ComputeTimeline>(device, queue, family_index, "compute");
 }
 
 auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler {
@@ -740,12 +743,12 @@ constexpr auto max_in_flight_submits() -> u64 {
     return static_cast<u64>(max_in_flight_frames) * TL::submits_per_frame;
 }
 
-auto throttle(ComputeTimeline &tl, VkDevice device) -> void {
+auto throttle(auto& tl, VkDevice device) -> void {
     u64 current = 0;
     vk_check(vkGetSemaphoreCounterValue(device, tl.timeline, &current));
     tl.completed = current;
 
-    const u64 limit = max_in_flight_submits<ComputeTimeline>();
+    const u64 limit = max_in_flight_submits<std::decay_t<decltype(tl)>>();
     if (tl.value <= tl.completed + limit)
         return;
 
@@ -760,22 +763,10 @@ auto throttle(ComputeTimeline &tl, VkDevice device) -> void {
     tl.completed = wait_val;
 }
 
+auto throttle(ComputeTimeline &tl, VkDevice device) -> void {
+    return throttle<ComputeTimeline>(tl, device);
+}
+
 auto throttle(GraphicsTimeline &tl, VkDevice device) -> void {
-    u64 current = 0;
-    vk_check(vkGetSemaphoreCounterValue(device, tl.timeline, &current));
-    tl.completed = current;
-
-    const u64 limit = max_in_flight_submits<GraphicsTimeline>();
-    if (tl.value <= tl.completed + limit)
-        return;
-
-    const u64 wait_val = tl.value - limit;
-    VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                           .pNext = nullptr,
-                           .flags = 0,
-                           .semaphoreCount = 1,
-                           .pSemaphores = &tl.timeline,
-                           .pValues = &wait_val};
-    vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
-    tl.completed = wait_val;
+    return throttle<GraphicsTimeline>(tl, device);
 }

@@ -9,6 +9,7 @@ struct UBO {
     float4x4 projection;
     float4x4 view_projection;
     float4x4 inv_projection;
+    float4x4 inv_view_projection;
     float4 camera_position;
     float4 frustum_planes[6];
     float4 sun_direction_intensity;
@@ -34,16 +35,18 @@ struct Transform {
     float3x4 m;
 };
 
-UV4 unpack_uv_8_8_8_8(uint packed)
+UV4 unpack_uvs_unorm4x8(uint packed)
 {
-    float u0 = float( packed        & 0xFF) / 255.0;
-    float v0 = float((packed >>  8)  & 0xFF) / 255.0;
-    float u1 = float((packed >> 16)  & 0xFF) / 255.0;
-    float v1 = float((packed >> 24)  & 0xFF) / 255.0;
+    const float inv_255 = 1.0 / 255.0;
+
+    uint b0 =  packed        & 0xFFu;
+    uint b1 = (packed >>  8) & 0xFFu;
+    uint b2 = (packed >> 16) & 0xFFu;
+    uint b3 = (packed >> 24) & 0xFFu;
 
     UV4 r;
-    r.uv0 = float2(u0, v0);
-    r.uv1 = float2(u1, v1);
+    r.uv0 = float2(float(b0), float(b1)) * inv_255;
+    r.uv1 = float2(float(b2), float(b3)) * inv_255; // currently 0,0 by construction
     return r;
 }
 
@@ -103,6 +106,13 @@ struct Material {
     uint flags;
 };
 
+static const uint FLAG_ALBEDO_MAP    = 1 << 0;
+static const uint FLAG_NORMAL_MAP    = 1 << 1;
+static const uint FLAG_ROUGHNESS_MAP = 1 << 2;
+static const uint FLAG_METALLIC_MAP  = 1 << 3;
+static const uint FLAG_OCCLUSION_MAP = 1 << 4;
+static const uint FLAG_EMISSIVE_MAP  = 1 << 5;
+
 [[vk::binding(0, 0)]]
 Texture2D<float4> sampled_images[];
 
@@ -112,10 +122,10 @@ SamplerState samplers[];
 [[vk::binding(2, 0)]]
 RWTexture2D<float4> storage_images[];
 
-float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0)
+float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0, float lod = 0.0)
 {
     uint tex_idx = NonUniformResourceIndex(image_index);
     uint samp_idx = NonUniformResourceIndex(sampler_index);
     
-    return sampled_images[tex_idx].Sample(samplers[samp_idx], uv);
+    return sampled_images[tex_idx].SampleLevel(samplers[samp_idx], uv, lod);
 }

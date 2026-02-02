@@ -25,7 +25,6 @@ add_executable(BindlessHeadless
   "src/ThreadPool.cxx"
 )
 
-
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 add_library(ThirdPartySTB STATIC "3PP/stb.c")
 
@@ -42,7 +41,7 @@ target_link_libraries(BindlessHeadlessAllocator PUBLIC
   VulkanMemoryAllocator
 )
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(BindlessHeadlessAllocator PRIVATE -Wno-nullability-completeness)
 endif()
 
@@ -54,43 +53,43 @@ set(ASAN_FLAG "-fsanitize=address")
 set(CMAKE_REQUIRED_FLAGS ${ASAN_FLAG})
 check_c_compiler_flag(${ASAN_FLAG} C__fsanitize_address_VALID)
 check_cxx_compiler_flag(${ASAN_FLAG} CXX__fsanitize_address_VALID)
+
 if(NOT C__fsanitize_address_VALID OR NOT CXX__fsanitize_address_VALID)
   message(STATUS "ENABLE_ASAN was requested, but not supported!")
 endif()
+
 cmake_pop_check_state()
 
-if (MSVC)
+if(MSVC)
   add_compile_options(/bigobj)
 endif()
 
-
-
-
 find_package(OpenMP)
+
 if(OpenMP_CXX_FOUND)
-    add_library(ImageOperationsOpenMP
-        "src/ImageOperations_OpenMP.cxx"
-    )
-    target_include_directories(ImageOperationsOpenMP PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    target_link_libraries(ImageOperationsOpenMP PUBLIC
-        OpenMP::OpenMP_CXX
-        BindlessHeadlessAllocator
-    )
-    add_library(ImageOperations ALIAS ImageOperationsOpenMP)
-DEFAULT_COMPILE_OPTIONS(ImageOperationsOpenMP)
-    
-    message(STATUS "Building ImageOperations with OpenMP support")
-else()
-add_library(ImageOperationsThreadPool
-    "src/ImageOperations.cxx"
-)
-target_include_directories(ImageOperationsThreadPool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(ImageOperationsThreadPool PUBLIC
+  add_library(ImageOperationsOpenMP
+    "src/ImageOperations_OpenMP.cxx"
+  )
+  target_include_directories(ImageOperationsOpenMP PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(ImageOperationsOpenMP PUBLIC
+    OpenMP::OpenMP_CXX
     BindlessHeadlessAllocator
-)
-DEFAULT_COMPILE_OPTIONS(ImageOperationsThreadPool)
-    add_library(ImageOperations ALIAS ImageOperationsThreadPool)
-    message(STATUS "OpenMP not found, only thread pool version will be built")
+  )
+  add_library(ImageOperations ALIAS ImageOperationsOpenMP)
+  DEFAULT_COMPILE_OPTIONS(ImageOperationsOpenMP)
+
+  message(STATUS "Building ImageOperations with OpenMP support")
+else()
+  add_library(ImageOperationsThreadPool
+    "src/ImageOperations.cxx"
+  )
+  target_include_directories(ImageOperationsThreadPool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(ImageOperationsThreadPool PUBLIC
+    BindlessHeadlessAllocator
+  )
+  DEFAULT_COMPILE_OPTIONS(ImageOperationsThreadPool)
+  add_library(ImageOperations ALIAS ImageOperationsThreadPool)
+  message(STATUS "OpenMP not found, only thread pool version will be built")
 endif()
 
 target_link_libraries(BindlessHeadless PRIVATE
@@ -104,14 +103,15 @@ target_link_libraries(BindlessHeadless PRIVATE
   glfw
   expected
   ImageOperations
+  tinyobjloader
 )
 
-if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(BindlessHeadless PRIVATE -ftime-trace)
 endif()
 
 # Slang runtime deps only when runtime path
-if (ENGINE_OFFLINE_SHADERS)
+if(ENGINE_OFFLINE_SHADERS)
   target_compile_definitions(BindlessHeadless PRIVATE ENGINE_OFFLINE_SHADERS=1)
 else()
   target_compile_definitions(BindlessHeadless PRIVATE ENGINE_RUNTIME_SHADERS=1)
@@ -122,10 +122,10 @@ endif()
 
 set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 
-if (HAS_TRACY)
+if(HAS_TRACY)
   target_link_libraries(BindlessHeadless PRIVATE Tracy::TracyClient)
   target_compile_definitions(BindlessHeadless PRIVATE TRACY_ENABLE)
-endif ()
+endif()
 
 DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
 
