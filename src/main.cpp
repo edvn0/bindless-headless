@@ -65,19 +65,29 @@ auto msaa_from_cli = [](u32 v) -> VkSampleCountFlagBits {
 
 constexpr auto read_timestamp_ms = [](const auto &render_context, const auto h) -> std::optional<double> {
     const auto *qs = render_context.query_pools.get(h);
-    if (!qs)
-        return std::nullopt;
+    if (!qs) return std::nullopt;
 
     std::array<u64, 2> stamps = {};
-    const auto r = vkGetQueryPoolResults(render_context.get_device(), qs->pool, 0, 2, sizeof(stamps), stamps.data(),
-                                         sizeof(u64), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
-    if (r != VK_SUCCESS)
+
+    // REMOVED: VK_QUERY_RESULT_WAIT_BIT
+    const VkResult r = vkGetQueryPoolResults(
+        render_context.get_device(),
+        qs->pool,
+        0, 2,
+        sizeof(stamps),
+        stamps.data(),
+        sizeof(u64),
+        VK_QUERY_RESULT_64_BIT
+    );
+
+    if (r != VK_SUCCESS) {
         return std::nullopt;
+    }
 
     const u64 dt_ticks = stamps[1] - stamps[0];
     const double dt_ns = static_cast<double>(dt_ticks) * qs->timestamp_period_ns;
-    constexpr auto ns_to_ms_factor = 1e-6;
-    return dt_ns * ns_to_ms_factor;
+
+    return dt_ns * 1e-6;
 };
 
 constexpr auto current_extent = [](GLFWwindow *win) {
@@ -176,15 +186,43 @@ struct ComputeGpuStats {
     u64 compute_shader_invocations;
 };
 
+/*
+ * constexpr auto read_timestamp_ms = [](const auto &render_context, const auto h) -> std::optional<double> {
+     const auto *qs = render_context.query_pools.get(h);
+     if (!qs) return std::nullopt;
+
+     std::array<u64, 2> stamps = {};
+
+     // REMOVED: VK_QUERY_RESULT_WAIT_BIT
+     const VkResult r = vkGetQueryPoolResults(
+         render_context.get_device(),
+         qs->pool,
+         0, 2,
+         sizeof(stamps),
+         stamps.data(),
+         sizeof(u64),
+         VK_QUERY_RESULT_64_BIT
+     );
+
+     if (r != VK_SUCCESS) {
+         return std::nullopt;
+     }
+
+     const u64 dt_ticks = stamps[1] - stamps[0];
+     const double dt_ns = static_cast<double>(dt_ticks) * qs->timestamp_period_ns;
+
+     return dt_ns * 1e-6;
+ };
+ */
 auto read_graphics_stats = [](auto &ctx, auto &device, const auto h) -> std::optional<GraphicsGpuStats> {
     const auto *qs = ctx.query_pools.get(h);
     if (!qs)
         return std::nullopt;
 
     std::array<u64, 8> stats{}; // Match the number of statistics you requested
-    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
+    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 8, // Query index 0, count 1
                                          sizeof(stats), stats.data(), sizeof(u64),
-                                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                                         VK_QUERY_RESULT_64_BIT);
 
     if (r != VK_SUCCESS)
         return std::nullopt;
@@ -209,7 +247,7 @@ auto read_compute_stats = [](auto &ctx, auto &device, const auto h) -> std::opti
     std::array<u64, 1> stats{}; // Match the number of statistics you requested
     const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
                                          sizeof(stats), stats.data(), sizeof(u64),
-                                         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                                         VK_QUERY_RESULT_64_BIT);
 
     if (r != VK_SUCCESS)
         return std::nullopt;
@@ -370,15 +408,12 @@ auto generate_perlin(auto w, auto h) -> std::vector<std::uint8_t, default_alloca
 }
 
 static VkBool32 debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
-                               VkDebugUtilsMessageTypeFlagsEXT type,
+                               VkDebugUtilsMessageTypeFlagsEXT,
                                const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *) {
     if (message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         error("Validation layer: {}", callback_data->pMessage);
     }
 
-    if (type & VK_DEBUG_UTILS_MESSAGE_TYPE_DEVICE_ADDRESS_BINDING_BIT_EXT) {
-        info("What is this?: {}", callback_data->pMessage);
-    }
     return VK_FALSE;
 }
 
@@ -436,7 +471,8 @@ static auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, V
     ubo.camera_position = glm::vec4(cam.camera_position(), 1.0f);
     ubo.inv_view_projection = glm::inverse(ubo.view_projection);
 
-    const auto planes = extract_frustum_planes(ubo.inv_projection);
+    const auto normal_projection = glm::inverse(glm::perspective(fov_y_radians, aspect, 0.1F, 1000.0F));
+    const auto planes = extract_frustum_planes(normal_projection);
     ubo.frustum_planes = {planes[0], planes[1], planes[2], planes[3], planes[4], planes[5]};
 }
 
@@ -1099,19 +1135,6 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 volatile auto keep = *pipeline_stats;
                 (void) keep;
             }
-
-            if (const auto *cqs = ctx.query_pools.get(compute_query_pool[bounded_frame_index])) {
-                vkResetQueryPool(device, cqs->pool, 0, cqs->query_count);
-            }
-            if (const auto *gqs = ctx.query_pools.get(graphics_query_pool[bounded_frame_index])) {
-                vkResetQueryPool(device, gqs->pool, 0, gqs->query_count);
-            }
-            if (const auto *gqs = ctx.query_pools.get(graphics_stats_pool[bounded_frame_index])) {
-                vkResetQueryPool(device, gqs->pool, 0, gqs->query_count);
-            }
-            if (const auto *qs = ctx.query_pools.get(compute_stats_pool[bounded_frame_index])) {
-                vkResetQueryPool(device, qs->pool, 0, qs->query_count);
-            }
         }
 
         auto acquired = swapchain.acquire_next_image(bounded_frame_index);
@@ -1130,6 +1153,23 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 tl_compute, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "RotateCubesGPU");
+
+                    if (const auto *cqs = ctx.query_pools.get(compute_query_pool[bounded_frame_index])) {
+                        vkCmdResetQueryPool(cmd, cqs->pool, 0, cqs->query_count);
+                        info("Reset compute query pool");
+                    }
+                    if (const auto *gqs = ctx.query_pools.get(graphics_query_pool[bounded_frame_index])) {
+                        vkCmdResetQueryPool(cmd, gqs->pool, 0, gqs->query_count);
+                        info("Reset graphics query pool");
+                    }
+                    if (const auto *gqs = ctx.query_pools.get(graphics_stats_pool[bounded_frame_index])) {
+                        vkCmdResetQueryPool(cmd, gqs->pool, 0, gqs->query_count);
+                        info("Reset graphics stats query pool");
+                    }
+                    if (const auto *qs = ctx.query_pools.get(compute_stats_pool[bounded_frame_index])) {
+                        vkCmdResetQueryPool(cmd, qs->pool, 0, qs->query_count);
+                        info("Reset compute stats query pool");
+                    }
 
                     auto *buffer = ctx.buffers.get(cubes_transform_handle->handle());
 
@@ -1341,21 +1381,15 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                     auto *g2 = ctx.textures.get(gbuffer2_handle);
                     auto *depth = ctx.textures.get(depth_handle);
 
-                    // Transition for attachment writes
                     g0->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
                             {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
-
                     g1->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
                             {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
                     g2->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
                             {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
-
-                    // depth is already written in predepth; here you read it for depth test, no writes.
-                    // Your helper only does “if not initialised”, so it won't fix state if it was GENERAL already.
-                    // Keep it GENERAL and just make sure your depth attachment uses LOAD + store DONT_CARE.
                     depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
                                                          {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
                                                           VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
@@ -1462,6 +1496,12 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                     auto *depth = ctx.textures.get(depth_handle);
                     auto *lit = ctx.textures.get(lit_hdr_handle);
 
+                    g0->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    g1->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    g2->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT});
+                    lit->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+
                     // Make gbuffer + depth readable by fragment shader, and lit writable as color attachment.
                     // Layouts stay GENERAL (your preference), but we still do proper memory visibility.
                     const std::array<VkImageMemoryBarrier2, 5> barriers{
@@ -1545,7 +1585,6 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                     dep.pImageMemoryBarriers = barriers.data();
                     vkCmdPipelineBarrier2(cmd, &dep);
 
-                    // Render into lit_hdr as a color attachment (dynamic rendering)
                     VkRenderingAttachmentInfo lit_att{};
                     lit_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                     lit_att.imageView = lit->attachment_view;
@@ -1579,6 +1618,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                             .gbuffer1_index = gbuffer1_handle.index(),
                             .gbuffer2_index = gbuffer2_handle.index(),
                             .depth_index = depth_handle.index(),
+                            .lit_hdr_uav_index = 0,
                             .sampler_index = linear_clamp_sampler_handle.index(),
                     };
 

@@ -8,7 +8,7 @@ CPMAddPackage(
     "GLM_ENABLE_SIMD_AVX ON"
     "GLM_ENABLE_SIMD_SSE4_2 ON"
     "GLM_ENABLE_SIMD_SSE2 ON"
-  GIT_SHALLOW YES  
+  GIT_SHALLOW YES
 )
 
 CPMAddPackage(
@@ -78,26 +78,26 @@ CPMAddPackage(
 )
 
 if (HAS_TRACY)
-  set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
-  CPMAddPackage(
-    URI "gh:wolfpld/tracy#07147111b26ddaf43fb46fabbab42de4451fa567"
+    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
+    CPMAddPackage(
+    URI "gh:wolfpld/tracy@0.13.1"
     GIT_SHALLOW YES
   )
 endif()
 
 if (NOT ENGINE_OFFLINE_SHADERS)
-  find_package(Slang CONFIG REQUIRED)
-  set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
-  set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
+    find_package(Slang CONFIG REQUIRED)
+    set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
+    set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
 
-  add_library(slang-compiler STATIC IMPORTED)
-  set_target_properties(slang-compiler PROPERTIES
+    add_library(slang-compiler STATIC IMPORTED)
+    set_target_properties(slang-compiler PROPERTIES
     IMPORTED_LOCATION "${SLANG_LIB_DIR}/slang-compiler.lib"
     INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
   )
 
-  add_library(slang-rt STATIC IMPORTED)
-  set_target_properties(slang-rt PROPERTIES
+    add_library(slang-rt STATIC IMPORTED)
+    set_target_properties(slang-rt PROPERTIES
     IMPORTED_LOCATION "${SLANG_LIB_DIR}/slang-rt.lib"
     INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
   )

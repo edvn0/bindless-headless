@@ -466,6 +466,8 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     // MRT: 3 attachments, no blending for gbuffer writes.
     VkPipelineColorBlendAttachmentState blend0{};
     blend0.blendEnable = VK_FALSE;
+   blend0.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                      VK_COLOR_COMPONENT_A_BIT;
     std::array<VkPipelineColorBlendAttachmentState, 3> blends{blend0, blend0, blend0};
 
     auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();

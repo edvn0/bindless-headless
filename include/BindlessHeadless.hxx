@@ -353,7 +353,7 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     VkCommandBufferBeginInfo bi{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .pNext = nullptr,
-            .flags = 0,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
             .pInheritanceInfo = nullptr,
     };
     vk_check(vkBeginCommandBuffer(cmd, &bi));
@@ -381,9 +381,6 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     }
 
     for (const auto &w: sync.timeline_waits) {
-        /*if (w.semaphore == tl.timeline)
-            continue;*/
-
         wait_infos.push_back(VkSemaphoreSubmitInfo{
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                 .pNext = nullptr,

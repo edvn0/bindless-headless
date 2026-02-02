@@ -60,6 +60,7 @@ struct DeferredLightingPushConstants {
     u32 gbuffer1_index;
     u32 gbuffer2_index;
     u32 depth_index;
+    u32 lit_hdr_uav_index {0}; // For the compute version, just 0 always
     u32 sampler_index;       // probably linear_clamp
 };
 

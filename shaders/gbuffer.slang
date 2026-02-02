@@ -387,7 +387,7 @@ void main_fs_mdi(
     uniform RenderingPushConstants pc,
     out GBufferOutput out_gbuf)
 {
-    Material mat = pc.materials[input.material];
+   Material mat = pc.materials[input.material];
 
     SurfaceMaterial surf = evaluate_material_tbn(
         mat,
@@ -413,7 +413,7 @@ void main_fs_mdi(
 // -------------------------------------------------------------------------------------------------
 // Deferred lighting compute
 // Reads: gbuffer0/1/2 + depth (sampled)
-// Writes: lit_hdr_uav (storage image)
+// Writes: '_uav (storage image)
 // -------------------------------------------------------------------------------------------------
 struct DeferredLightingPushConstants
 {
@@ -539,6 +539,7 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
 
     return float4(color, 1.0);
 }
+
 [shader("compute")]
 [numthreads(32, 32, 1)]
 void main_gbuffer_lighting(uint3 dtid : SV_DispatchThreadID, uniform DeferredLightingPushConstants pc)

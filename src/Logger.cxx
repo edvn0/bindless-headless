@@ -69,10 +69,10 @@ namespace detail {
             char *buf{};
             size_t sz{};
             if (const auto ok = _dupenv_s(&buf, &sz, "LOG_DIR") == 0 && buf; !ok)
-                return std::nullopt;
+                return "logs";
             auto p = std::filesystem::path{buf};
             free(buf);
-            return p;
+            return p.string();
 #else
             // MinGW, GCC, Clang: use std::getenv
             const char *env_val = std::getenv("LOG_DIR");
