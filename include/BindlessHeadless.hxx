@@ -129,9 +129,11 @@ struct Timeline {
 
 using GraphicsTimeline = Timeline<4>;
 using ComputeTimeline = Timeline<3>;
+using TransferTimeline = Timeline<1>;
 
-auto create_compute_timeline(VkDevice device, VkQueue queue, u32 family_index) -> ComputeTimeline;
-auto create_graphics_timeline(VkDevice device, VkQueue queue, u32 family_index) -> GraphicsTimeline;
+auto create_compute_timeline(VkDevice , VkQueue , u32 ) -> ComputeTimeline;
+auto create_graphics_timeline(VkDevice , VkQueue , u32 ) -> GraphicsTimeline;
+auto create_transfer_timeline(VkDevice , VkQueue , u32 ) -> TransferTimeline;
 
 auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler;
 
@@ -327,8 +329,7 @@ struct PhysicalDeviceChoice {
     Error error;
 };
 
-using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32>;
-
+using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32, u32>;
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
 enum class ComputeStamp : u32 { RotateBegin, RotateEnd, CullBegin, CullEnd, Count };
@@ -344,8 +345,8 @@ inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Coun
 inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);
 
 using EnabledFeatureSet = std::unordered_set<std::string, string_hash, string_eq>;
-auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
-        -> std::tuple<VkDevice, VkQueue, VkQueue, EnabledFeatureSet>;
+auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u32 transfer_index)
+        -> std::tuple<VkDevice, VkQueue, VkQueue, VkQueue, EnabledFeatureSet>;
 
 auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device) -> VmaAllocator;
 

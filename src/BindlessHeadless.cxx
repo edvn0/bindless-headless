@@ -274,6 +274,10 @@ auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
 #endif
 }
 
+auto create_transfer_timeline(VkDevice device, VkQueue queue, u32 family_index) -> TransferTimeline {
+    return create_timeline<TransferTimeline>(device, queue, family_index, "transfer");
+}
+
 auto create_graphics_timeline(VkDevice device, VkQueue queue, u32 family_index) -> GraphicsTimeline {
     return create_timeline<GraphicsTimeline>(device, queue, family_index, "graphics");
 }
@@ -734,7 +738,17 @@ auto create_image_from_mips_v2(
     return t;
 }
 
-auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice> {
+// e.g.
+// struct DeviceChoice {
+//     VkPhysicalDevice physical_device{};
+//     u32 graphics_family{};
+//     u32 compute_family{};
+//     u32 transfer_family{};
+// };
+
+auto pick_physical_device(VkInstance instance)
+    -> tl::expected<DeviceChoice, PhysicalDeviceChoice>
+{
     u32 count{};
     vkEnumeratePhysicalDevices(instance, &count, nullptr);
     if (count == 0u) {
@@ -744,7 +758,7 @@ auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, Phy
     std::vector<VkPhysicalDevice> devices(count);
     vkEnumeratePhysicalDevices(instance, &count, devices.data());
 
-    for (VkPhysicalDevice pd: devices) {
+    for (VkPhysicalDevice pd : devices) {
         u32 qcount{};
         vkGetPhysicalDeviceQueueFamilyProperties(pd, &qcount, nullptr);
         if (qcount == 0u) {
@@ -758,9 +772,33 @@ auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, Phy
         std::optional<u32> compute_dedicated{};
         std::optional<u32> compute_shared{};
 
+        std::optional<u32> transfer_dedicated{};
+        std::optional<u32> transfer_shared_no_graphics{};
+        std::optional<u32> transfer_shared_any{};
+
         for (u32 i = 0u; i < qcount; ++i) {
             VkQueueFlags flags = qprops[i].queueFlags;
 
+            // Track transfer candidates
+            if (flags & VK_QUEUE_TRANSFER_BIT) {
+                // Pure transfer (best for async copies)
+                if (!(flags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))) {
+                    if (!transfer_dedicated) {
+                        transfer_dedicated = i;
+                    }
+                } else if (!(flags & VK_QUEUE_GRAPHICS_BIT)) {
+                    // Transfer on a non-graphics queue (often compute queue) is usually nicer than graphics
+                    if (!transfer_shared_no_graphics) {
+                        transfer_shared_no_graphics = i;
+                    }
+                }
+
+                if (!transfer_shared_any) {
+                    transfer_shared_any = i;
+                }
+            }
+
+            // Graphics + potential shared compute
             if (flags & VK_QUEUE_GRAPHICS_BIT) {
                 if (!graphics) {
                     graphics = i;
@@ -773,27 +811,83 @@ auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, Phy
                 continue;
             }
 
+            // Dedicated compute (non-graphics)
             if (flags & VK_QUEUE_COMPUTE_BIT) {
                 if (!(flags & VK_QUEUE_GRAPHICS_BIT)) {
-                    compute_dedicated = i;
+                    if (!compute_dedicated) {
+                        compute_dedicated = i;
+                    }
                 }
             }
         }
 
+        auto pick_transfer_family = [&]() -> std::optional<u32> {
+            if (transfer_dedicated) {
+                return transfer_dedicated;
+            }
+            if (transfer_shared_no_graphics) {
+                return transfer_shared_no_graphics;
+            }
+            return transfer_shared_any;
+        };
+
+        std::optional<u32> transfer = pick_transfer_family();
+        if (!transfer) {
+            // TODO: Is this really the best choice?
+            transfer = graphics;
+            continue;
+        }
+
         if (graphics && compute_dedicated) {
-            return DeviceChoice{pd, *graphics, *compute_dedicated};
+            return DeviceChoice{pd, *graphics, *compute_dedicated, *transfer};
         }
 
         if (graphics && compute_shared) {
-            return DeviceChoice{pd, *graphics, *compute_shared};
+            return DeviceChoice{pd, *graphics, *compute_shared, *transfer};
         }
     }
 
     return tl::unexpected(PhysicalDeviceChoice{PhysicalDeviceChoice::Error::NoQueuesFound});
 }
 
-auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
-        -> std::tuple<VkDevice, VkQueue, VkQueue, EnabledFeatureSet> {
+
+namespace {
+    auto collect_supported_extensions(VkPhysicalDevice pd) -> std::unordered_set<std::string> {
+    u32 ext_count{};
+    vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, nullptr);
+
+    std::vector<VkExtensionProperties> props(ext_count);
+    vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, props.data());
+
+    std::unordered_set<std::string> out;
+    out.reserve(ext_count);
+
+    for (auto const& e : props) {
+        out.insert(e.extensionName);
+    }
+    return out;
+}
+
+auto enable_extensions(
+    std::unordered_set<std::string> const& supported,
+    std::span<char const* const> desired,
+    std::vector<char const*>& enabled_exts,
+    EnabledFeatureSet& enabled_set
+) -> void {
+    for (auto const* name : desired) {
+        if (supported.contains(name)) {
+            enabled_exts.push_back(name);
+            enabled_set.insert(name);
+            info("Enabling device extension '{}'.", name);
+        } else {
+            info("Device extension '{}' not supported; skipping.", name);
+        }
+    }
+}
+}
+
+auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u32 transfer_index)
+        -> std::tuple<VkDevice, VkQueue, VkQueue, VkQueue, EnabledFeatureSet> {
     u32 ext_count{};
     vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, nullptr);
     std::vector<VkExtensionProperties> dev_exts(ext_count);
@@ -818,18 +912,21 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
         }
     };
 
-    bool accel_supported = has_ext(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
-                           has_ext(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+    auto supported = collect_supported_extensions(pd);
 
-    EnabledFeatureSet features;
-    std::vector<char const *> enabled_exts;
-        add_if_supported(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, enabled_exts, features);
-        add_if_supported(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, enabled_exts, features);
+EnabledFeatureSet enabled_features;
+std::vector<char const*> enabled_exts;
 
-    add_if_supported(VK_EXT_MESH_SHADER_EXTENSION_NAME, enabled_exts, features);
-    add_if_supported(VK_KHR_SWAPCHAIN_EXTENSION_NAME, enabled_exts, features);
-    add_if_supported(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME, enabled_exts, features);
-    add_if_supported(VK_KHR_MAINTENANCE_9_EXTENSION_NAME, enabled_exts, features);
+constexpr std::array desired_exts {
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    VK_EXT_MESH_SHADER_EXTENSION_NAME,
+    VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
+    VK_KHR_MAINTENANCE_9_EXTENSION_NAME,
+    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+};
+
+enable_extensions(supported, desired_exts, enabled_exts, enabled_features);
 
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features_khr{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
@@ -896,7 +993,8 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
     features13.synchronization2 = VK_TRUE;
     features13.robustImageAccess = VK_TRUE;
 
-    if (accel_supported) {
+    if (enabled_features.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+        enabled_features.contains(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) {
         accel_features.accelerationStructure = VK_TRUE;
         accel_features.descriptorBindingAccelerationStructureUpdateAfterBind = VK_TRUE;
         accel_features.accelerationStructureCaptureReplay = VK_TRUE;
@@ -917,13 +1015,23 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
                                         .queueFamilyIndex = compute_index,
                                         .queueCount = 1u,
                                         .pQueuePriorities = &priority_compute};
+                                        float priority_transfer = 1.0f;
+    VkDeviceQueueCreateInfo qci_transfer{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                                        .pNext = nullptr,
+                                        .flags = 0,
+                                        .queueFamilyIndex = transfer_index,
+                                        .queueCount = 1u,
+                                        .pQueuePriorities = &priority_transfer};
 
-    std::array<VkDeviceQueueCreateInfo, 2> qcis{qci_graphics, qci_compute};
+    std::array<VkDeviceQueueCreateInfo, 3> qcis{qci_graphics, qci_compute, qci_transfer};
 
     u32 qci_count = 0u;
     qcis[qci_count++] = qci_graphics;
     if (compute_index != graphics_index) {
         qcis[qci_count++] = qci_compute;
+    }
+    if (transfer_index != graphics_index && transfer_index != compute_index) {
+        qcis[qci_count++] = qci_transfer;
     }
 
     VkDeviceCreateInfo dci{.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -947,7 +1055,10 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
     VkQueue cq{};
     vkGetDeviceQueue(device, compute_index, 0u, &cq);
 
-    return {device, gq, cq, features};
+    VkQueue tq{};
+    vkGetDeviceQueue(device, transfer_index, 0u, &tq);
+
+    return {device, gq, cq, tq, enabled_features};
 }
 
 auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device) -> VmaAllocator {

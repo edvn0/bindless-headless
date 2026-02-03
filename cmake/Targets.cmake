@@ -66,31 +66,40 @@ endif()
 
 find_package(OpenMP)
 
+set(IMAGE_WRITER_SOURCES
+  "src/image/BMPWriter.cxx"
+  "src/image/PNGWriter.cxx"
+  "src/image/ImageWriterFactory.cxx"
+)
+
 if(OpenMP_CXX_FOUND)
   add_library(ImageOperationsOpenMP
     "src/ImageOperations_OpenMP.cxx"
+    ${IMAGE_WRITER_SOURCES}
   )
   target_include_directories(ImageOperationsOpenMP PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(ImageOperationsOpenMP PUBLIC
     OpenMP::OpenMP_CXX
     BindlessHeadlessAllocator
+    glm::glm
+    PNG::PNG
   )
   add_library(ImageOperations ALIAS ImageOperationsOpenMP)
   DEFAULT_COMPILE_OPTIONS(ImageOperationsOpenMP)
-
-  message(STATUS "Building ImageOperations with OpenMP support")
 else()
   add_library(ImageOperationsThreadPool
     "src/ImageOperations.cxx"
+    ${IMAGE_WRITER_SOURCES}
   )
   target_include_directories(ImageOperationsThreadPool PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
   target_link_libraries(ImageOperationsThreadPool PUBLIC
     BindlessHeadlessAllocator
+    glm::glm
   )
   DEFAULT_COMPILE_OPTIONS(ImageOperationsThreadPool)
   add_library(ImageOperations ALIAS ImageOperationsThreadPool)
-  message(STATUS "OpenMP not found, only thread pool version will be built")
 endif()
+
 
 target_link_libraries(BindlessHeadless PRIVATE
   volk

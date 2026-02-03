@@ -7,6 +7,8 @@
 #include <numeric>
 #include <string_view>
 #include <volk.h>
+#include <algorithm>
+#include <format>
 
 #include <vk_mem_alloc.h>
 

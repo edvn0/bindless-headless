@@ -83,6 +83,58 @@ CPMAddPackage(
   OPTIONS "KTX_FEATURE_TESTS OFF KTX_FEATURE_JS OFF BUILD_SHARED_LIBS OFF KTX_FEATURE_TOOLS OFF KTX_FEATURE_TESTS OFF KTX_FEATURE_LOADTEST_APPS OFF"
 )
 
+set(CMAKE_SKIP_INSTALL_RULES ON CACHE BOOL "" FORCE)
+# --- zlib ---
+CPMAddPackage(
+  NAME zlib
+  GITHUB_REPOSITORY madler/zlib
+  GIT_TAG v1.3.1
+  GIT_SHALLOW YES
+)
+
+# Provide the canonical target name libpng expects.
+if(TARGET zlibstatic AND NOT TARGET ZLIB::ZLIB)
+  add_library(ZLIB::ZLIB ALIAS zlibstatic)
+elseif(TARGET zlib AND NOT TARGET ZLIB::ZLIB)
+  add_library(ZLIB::ZLIB ALIAS zlib)
+endif()
+
+# --- libpng ---
+set(PNG_SHARED OFF CACHE BOOL "" FORCE)
+set(PNG_TESTS OFF CACHE BOOL "" FORCE)
+set(PNG_TOOLS OFF CACHE BOOL "" FORCE)
+
+CPMAddPackage(
+  NAME libpng
+  GITHUB_REPOSITORY glennrp/libpng
+  GIT_TAG v1.6.43
+  GIT_SHALLOW YES
+)
+
+# Optional: normalize a PNG::PNG target name for convenience
+if(TARGET png_static AND NOT TARGET PNG::PNG)
+  add_library(PNG::PNG ALIAS png_static)
+elseif(TARGET png AND NOT TARGET PNG::PNG)
+  add_library(PNG::PNG ALIAS png)
+elseif(TARGET png_shared AND NOT TARGET PNG::PNG)
+  add_library(PNG::PNG ALIAS png_shared)
+endif()
+
+if(libpng_ADDED)
+  if(TARGET png_static)
+    target_include_directories(png_static PUBLIC
+      $<BUILD_INTERFACE:${libpng_SOURCE_DIR}>
+      $<BUILD_INTERFACE:${libpng_BINARY_DIR}>
+    )
+  elseif(TARGET png)
+    target_include_directories(png PUBLIC
+      $<BUILD_INTERFACE:${libpng_SOURCE_DIR}>
+      $<BUILD_INTERFACE:${libpng_BINARY_DIR}>
+    )
+  endif()
+endif()
+
+
 if (HAS_TRACY)
     set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy profiler" FORCE)
     CPMAddPackage(

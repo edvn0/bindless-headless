@@ -3,23 +3,33 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <glm/gtc/packing.hpp>
 #include <vector>
-#include <atomic>
 
+
+#include "ImageWriter.hxx" // declares CpuImage, PixelLayout, IImageWriter, make_image_writer_from_filename
 #include "Profiler.hxx"
 #include "Types.hxx"
+
 
 #ifdef __AVX2__
 #include <immintrin.h>
 #endif
 
+
 namespace {
 
-    auto bytes_per_pixel(VkFormat format) -> u32
-    {
+    auto channel_count(PixelLayout layout) -> u32 { return layout == PixelLayout::Rgba8 ? 4u : 3u; }
+
+} // namespace
+
+namespace {
+
+    auto bytes_per_pixel(VkFormat format) -> u32 {
         switch (format) {
             // RGBA8
             case VK_FORMAT_R8G8B8A8_UNORM:
@@ -52,8 +62,7 @@ namespace {
         }
     }
 
-    auto calc_tightly_packed_image_size_bytes(u32 width, u32 height, VkFormat format) -> VkDeviceSize
-    {
+    auto calc_tightly_packed_image_size_bytes(u32 width, u32 height, VkFormat format) -> VkDeviceSize {
         u32 const bpp = bytes_per_pixel(format);
         return VkDeviceSize(width) * VkDeviceSize(height) * VkDeviceSize(bpp);
     }
@@ -253,6 +262,31 @@ namespace image_operations {
             }
         }
 
+
+        auto half_to_float(u16 h) -> float { return glm::unpackHalf1x16(h); }
+        void convert_rgba16f_all_rows(u8 *dst, const u8 *src, u32 width, u32 height) {
+            const u32 dst_stride = ((width * 3 + 3) / 4) * 4;
+
+#pragma omp parallel for schedule(dynamic, 16)
+            for (i32 y = 0; y < static_cast<i32>(height); ++y) {
+                auto const *s = reinterpret_cast<u16 const *>(src + (height - 1 - y) * width * 8);
+                u8 *d = dst + y * dst_stride;
+
+                for (u32 x = 0; x < width; ++x) {
+                    float r = half_to_float(s[0]);
+                    float g = half_to_float(s[1]);
+                    float b = half_to_float(s[2]);
+
+                    d[0] = float_to_srgb(b);
+                    d[1] = float_to_srgb(g);
+                    d[2] = float_to_srgb(r);
+
+                    s += 4;
+                    d += 3;
+                }
+            }
+        }
+
         // ============================
         // Dispatcher
         // ============================
@@ -277,12 +311,175 @@ namespace image_operations {
                     convert_r8_all_rows(out.data(), pixel_data, width, height);
                     break;
 
+                case VK_FORMAT_R16G16B16A16_SFLOAT:
+                case VK_FORMAT_R16G16B16A16_UNORM:
+                case VK_FORMAT_R16G16B16A16_SNORM:
+                case VK_FORMAT_R16G16B16A16_UINT:
+                case VK_FORMAT_R16G16B16A16_SINT:
+                    convert_rgba16f_all_rows(out.data(), pixel_data, width, height);
+                    break;
+
                 default:
                     break;
             }
         }
 
     } // anonymous namespace
+
+    namespace {
+
+        void convert_rgba8(CpuImage &out, u8 const *src, u32 width, u32 height, PixelLayout layout) {
+            u32 const dst_channels = channel_count(layout);
+
+            out.width = width;
+            out.height = height;
+            out.layout = layout;
+            out.stride_bytes = width * dst_channels;
+            out.pixels.resize(std::size_t(out.stride_bytes) * height);
+
+            u32 const src_stride = width * 4;
+
+#pragma omp parallel for schedule(dynamic, 16)
+            for (i32 y = 0; y < static_cast<i32>(height); ++y) {
+                u8 const *s = src + std::size_t(y) * src_stride; // top-down
+                u8 *d = out.pixels.data() + std::size_t(y) * out.stride_bytes;
+
+                for (u32 x = 0; x < width; ++x) {
+                    // src RGBA
+                    d[0] = s[0];
+                    d[1] = s[1];
+                    d[2] = s[2];
+                    if (dst_channels == 4)
+                        d[3] = s[3];
+
+                    s += 4;
+                    d += dst_channels;
+                }
+            }
+        }
+
+        void convert_rgba32f(CpuImage &out, float const *src, u32 width, u32 height, PixelLayout layout) {
+            init_srgb_lut();
+
+            u32 const dst_channels = channel_count(layout);
+
+            out.width = width;
+            out.height = height;
+            out.layout = layout;
+            out.stride_bytes = width * dst_channels;
+            out.pixels.resize(std::size_t(out.stride_bytes) * height);
+
+#pragma omp parallel for schedule(dynamic, 16)
+            for (i32 y = 0; y < static_cast<i32>(height); ++y) {
+                float const *s = src + std::size_t(y) * width * 4; // top-down
+                u8 *d = out.pixels.data() + std::size_t(y) * out.stride_bytes;
+
+                for (u32 x = 0; x < width; ++x) {
+                    d[0] = float_to_srgb(s[0]);
+                    d[1] = float_to_srgb(s[1]);
+                    d[2] = float_to_srgb(s[2]);
+                    if (dst_channels == 4)
+                        d[3] = 255;
+
+                    s += 4;
+                    d += dst_channels;
+                }
+            }
+        }
+
+        void convert_r8(CpuImage &out, u8 const *src, u32 width, u32 height, PixelLayout layout) {
+            u32 const dst_channels = channel_count(layout);
+
+            out.width = width;
+            out.height = height;
+            out.layout = layout;
+            out.stride_bytes = width * dst_channels;
+            out.pixels.resize(std::size_t(out.stride_bytes) * height);
+
+            u32 const src_stride = width;
+
+#pragma omp parallel for schedule(dynamic, 16)
+            for (i32 y = 0; y < static_cast<i32>(height); ++y) {
+                u8 const *s = src + std::size_t(y) * src_stride;
+                u8 *d = out.pixels.data() + std::size_t(y) * out.stride_bytes;
+
+                for (u32 x = 0; x < width; ++x) {
+                    u8 v = s[x];
+                    d[0] = v;
+                    d[1] = v;
+                    d[2] = v;
+                    if (dst_channels == 4)
+                        d[3] = 255;
+                    d += dst_channels;
+                }
+            }
+        }
+
+        void convert_rgba16f(CpuImage &out, u8 const *src, u32 width, u32 height, PixelLayout layout) {
+            init_srgb_lut();
+
+            u32 const dst_channels = channel_count(layout);
+
+            out.width = width;
+            out.height = height;
+            out.layout = layout;
+            out.stride_bytes = width * dst_channels;
+            out.pixels.resize(std::size_t(out.stride_bytes) * height);
+
+#pragma omp parallel for schedule(dynamic, 16)
+            for (i32 y = 0; y < static_cast<i32>(height); ++y) {
+                auto const *s = reinterpret_cast<u16 const *>(src + std::size_t(y) * width * 8);
+                u8 *d = out.pixels.data() + std::size_t(y) * out.stride_bytes;
+
+                for (u32 x = 0; x < width; ++x) {
+                    float r = half_to_float(s[0]);
+                    float g = half_to_float(s[1]);
+                    float b = half_to_float(s[2]);
+
+                    d[0] = float_to_srgb(r);
+                    d[1] = float_to_srgb(g);
+                    d[2] = float_to_srgb(b);
+                    if (dst_channels == 4)
+                        d[3] = 255;
+
+                    s += 4;
+                    d += dst_channels;
+                }
+            }
+        }
+
+        auto convert_pixels(CpuImage &out, u8 const *pixel_data, u32 width, u32 height, VkFormat format,
+                            PixelLayout layout) -> bool {
+            switch (format) {
+                case VK_FORMAT_R8G8B8A8_UNORM:
+                case VK_FORMAT_R8G8B8A8_SRGB:
+                    convert_rgba8(out, pixel_data, width, height, layout);
+                    return true;
+
+                case VK_FORMAT_R32G32B32A32_SFLOAT:
+                    convert_rgba32f(out, reinterpret_cast<float const *>(pixel_data), width, height, layout);
+                    return true;
+
+                case VK_FORMAT_R8_UNORM:
+                case VK_FORMAT_R8_SRGB:
+                case VK_FORMAT_R8_UINT:
+                case VK_FORMAT_R8_SINT:
+                    convert_r8(out, pixel_data, width, height, layout);
+                    return true;
+
+                case VK_FORMAT_R16G16B16A16_SFLOAT:
+                case VK_FORMAT_R16G16B16A16_UNORM:
+                case VK_FORMAT_R16G16B16A16_SNORM:
+                case VK_FORMAT_R16G16B16A16_UINT:
+                case VK_FORMAT_R16G16B16A16_SINT:
+                    convert_rgba16f(out, pixel_data, width, height, layout);
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+    } // namespace
 
     // ============================
     // Public entry
@@ -295,7 +492,7 @@ namespace image_operations {
         u32 width;
         u32 height;
         VkFormat format;
-            u32 request_index;
+        u32 request_index;
     };
 
     // Batch write multiple images (OpenMP version)
@@ -415,7 +612,7 @@ namespace image_operations {
 
             vkBeginCommandBuffer(command_buffer, &begin_info);
 
-            for (auto const &staging : staging_buffers) {
+            for (auto const &staging: staging_buffers) {
                 auto const &req = requests[staging.request_index];
                 auto const &tex = *req.texture;
 
@@ -489,6 +686,11 @@ namespace image_operations {
             std::atomic<u32> images_done = 0;
             const u32 total_images = static_cast<u32>(staging_buffers.size());
 
+            for (auto &sb: staging_buffers) {
+                // Ensure memory is visible
+                vmaFlushAllocation(allocator, sb.allocation, 0, VK_WHOLE_SIZE);
+            }
+
 #pragma omp parallel for schedule(dynamic)
             for (auto i = 0; i < static_cast<i32>(staging_buffers.size()); ++i) {
                 ZoneScopedNC("process_single_image", 0xFF40FF);
@@ -496,29 +698,30 @@ namespace image_operations {
                 auto const &staging = staging_buffers[i];
                 auto const &req = requests[staging.request_index];
 
-                std::ofstream output(req.filename, std::ios::binary);
-                if (!output) {
-                    error("Failed to open {}", req.filename);
+
+                auto writer = make_image_writer_from_filename(req.filename);
+                if (!writer) {
+                    error("No writer for {}", req.filename);
                     continue;
                 }
 
-                const u32 row_size = ((staging.width * 3 + 3) / 4) * 4;
-                std::vector<u8> cpu_pixels(row_size * staging.height);
+                // Decide desired pixel layout based on writer / extension.
+                // Minimal: png => RGBA, else RGB.
+                PixelLayout layout = PixelLayout::Rgb8;
+                if (writer->extension() == "png")
+                    layout = PixelLayout::Rgba8;
 
-                const u8 *pixel_data = static_cast<const u8 *>(staging.alloc_info.pMappedData);
+                auto pixel_data = static_cast<u8 *>(staging.alloc_info.pMappedData);
 
-                {
-                    ZoneScopedNC("Write BMP headers", 0xFF1000);
-                    write_bmp_headers(output, staging.width, staging.height);
+                CpuImage img;
+                if (!convert_pixels(img, pixel_data, staging.width, staging.height, staging.format, layout)) {
+                    error("Unsupported format for {}: {}", req.filename, static_cast<u32>(staging.format));
+                    continue;
                 }
-                {
-                    ZoneScopedNC("Write pixels", 0xFFFF00);
-                    convert_pixels_omp(cpu_pixels, pixel_data, staging.width, staging.height, staging.format);
-                }
 
-                {
-                    ZoneScopedNC("Generic IO, write bytes", 0xFF00FF);
-                    output.write(reinterpret_cast<char *>(cpu_pixels.data()), cpu_pixels.size());
+                if (!writer->write(req.filename, img)) {
+                    error("Failed to write {}", req.filename);
+                    continue;
                 }
 
                 auto done = ++images_done;
@@ -546,11 +749,6 @@ namespace image_operations {
             return;
         }
 
-        std::ofstream output(filename.data(), std::ios::binary);
-        if (!output) {
-            error("Failed to open {}", filename);
-            return;
-        }
 
         const auto &tex = *texture;
 
@@ -693,19 +891,33 @@ namespace image_operations {
             vkDestroyFence(allocator_info.device, fence, nullptr);
         }
 
+        vmaInvalidateAllocation(allocator, staging_allocation, 0, VK_WHOLE_SIZE);
+
         const u8 *pixel_data = static_cast<const u8 *>(staging_alloc_info.pMappedData);
 
-        write_bmp_headers(output, tex.width, tex.height);
-        convert_pixels_omp(cpu_pixels, pixel_data, tex.width, tex.height, tex.format);
+        auto writer = make_image_writer_from_filename(filename);
+        if (!writer) {
+            error("No writer for {}", filename);
+            return;
+        }
 
-        {
-            ZoneScopedNC("disk_write", 0xFF00FF);
-            output.write(reinterpret_cast<char *>(cpu_pixels.data()), cpu_pixels.size());
+        PixelLayout layout = PixelLayout::Rgb8;
+        if (writer->extension() == "png")
+            layout = PixelLayout::Rgba8;
+
+        CpuImage img;
+        if (!convert_pixels(img, pixel_data, tex.width, tex.height, tex.format, layout)) {
+            error("Unsupported format for writing to disk: {}", static_cast<u32>(tex.format));
+            return;
+        }
+
+        if (!writer->write(filename, img)) {
+            error("Failed to write {}", filename);
+            return;
         }
 
         {
             ZoneScopedNC("cleanup", 0x808080);
-            output.close();
             vkDestroyCommandPool(allocator_info.device, command_pool, nullptr);
             vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
         }

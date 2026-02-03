@@ -524,9 +524,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
         return 1;
     }
 
-    auto &&[physical_device, graphics_index, compute_index] = *could_choose;
-    auto &&[device, graphics_queue, compute_queue, enabled_features] =
-            create_device(physical_device, graphics_index, compute_index);
+    auto &&[physical_device, graphics_index, compute_index, transfer_index] = *could_choose;
+    auto &&[device, graphics_queue, compute_queue, transfer_queue, enabled_features] =
+            create_device(physical_device, graphics_index, compute_index, transfer_index);
 
     TracyGpuContext tracy_graphics{};
     TracyGpuContext tracy_compute{};
@@ -596,6 +596,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
 
     auto tl_compute = create_compute_timeline(device, compute_queue, compute_index);
     auto tl_graphics = create_graphics_timeline(device, graphics_queue, graphics_index);
+    auto tl_transfer = create_transfer_timeline(device, transfer_queue, transfer_index);
 
     BindlessSet bindless{};
     bindless.init(device, query_bindless_caps(physical_device), 8u, 8u, 8u, 0u);
@@ -1997,22 +1998,22 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
         std::filesystem::create_directory(output_dir);
         const auto as_string = output_dir.string();
         ZoneScopedNC("batch_write_images", 0xFF00AA);
-        std::vector requests{image_operations::ImageWriteRequest{oth, std::format("{}/output.bmp", as_string)},
+        std::vector requests{image_operations::ImageWriteRequest{oth, std::format("{}/output.png", as_string)},
                              image_operations::ImageWriteRequest{
                                      gbuffer0,
-                                     std::format("{}/gbuffer0.bmp", as_string),
+                                     std::format("{}/gbuffer0.png", as_string),
                              },
                              image_operations::ImageWriteRequest{
                                      gbuffer1,
-                                     std::format("{}/gbuffer1.bmp", as_string),
+                                     std::format("{}/gbuffer1.png", as_string),
                              },
                              image_operations::ImageWriteRequest{
                                      gbuffer2,
-                                     std::format("{}/gbuffer2.bmp", as_string),
+                                     std::format("{}/gbuffer2.png", as_string),
                              },
                              image_operations::ImageWriteRequest{
                                      ph,
-                                     std::format("{}/perlin.bmp", as_string),
+                                     std::format("{}/perlin.png", as_string),
                              }};
         image_operations::write_batch_to_disk(
                 allocator, requests, [](float progress) { info("Image write progress: {:.2f} %", progress * 100.0f); });
