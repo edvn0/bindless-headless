@@ -38,6 +38,7 @@
 
 #include "Constants.hxx"
 #include "Mesh.hxx"
+#include "Types.hxx"
 #include "vulkan/vulkan_core.h"
 
 auto msaa_from_cli = [](u32 v) -> VkSampleCountFlagBits {
@@ -63,31 +64,86 @@ auto msaa_from_cli = [](u32 v) -> VkSampleCountFlagBits {
     }
 };
 
-constexpr auto read_timestamp_ms = [](const auto &render_context, const auto h) -> std::optional<double> {
+template<typename Stamp>
+static inline auto write_ts(VkCommandBuffer cmd, const QueryPoolState &qs, VkPipelineStageFlags2 stage, Stamp s)
+        -> void {
+    vkCmdWriteTimestamp2(cmd, stage, qs.pool, static_cast<u32>(s));
+}
+
+static inline auto begin_stats(VkCommandBuffer cmd, const QueryPoolState &qs, const auto query) -> void {
+    vkCmdBeginQuery(cmd, qs.pool, static_cast<u32>(query), 0);
+}
+
+static inline auto end_stats(VkCommandBuffer cmd, const QueryPoolState &qs, const auto query) -> void {
+    vkCmdEndQuery(cmd, qs.pool, static_cast<u32>(query));
+}
+
+
+constexpr auto read_timestamp_pair_ms_any = [](const auto &render_context, QueryPoolHandle h, const auto begin_idx,
+                                               const auto end_idx) -> std::optional<double> {
     const auto *qs = render_context.query_pools.get(h);
-    if (!qs) return std::nullopt;
+    if (!qs) {
+        return std::nullopt;
+    }
 
-    std::array<u64, 2> stamps = {};
+    const u32 count = qs->query_count;
+    if (static_cast<u32>(begin_idx) >= count || static_cast<u32>(end_idx) >= count) {
+        return std::nullopt;
+    }
 
-    // REMOVED: VK_QUERY_RESULT_WAIT_BIT
-    const VkResult r = vkGetQueryPoolResults(
-        render_context.get_device(),
-        qs->pool,
-        0, 2,
-        sizeof(stamps),
-        stamps.data(),
-        sizeof(u64),
-        VK_QUERY_RESULT_64_BIT
-    );
+    std::vector<u64> stamps(count, 0);
 
+    const VkResult r =
+            vkGetQueryPoolResults(render_context.get_device(), qs->pool, 0, count, stamps.size() * sizeof(u64),
+                                  stamps.data(), sizeof(u64), VK_QUERY_RESULT_64_BIT);
+
+    if (r == VK_NOT_READY) {
+        return std::nullopt;
+    }
     if (r != VK_SUCCESS) {
         return std::nullopt;
     }
 
-    const u64 dt_ticks = stamps[1] - stamps[0];
+    const u64 dt_ticks = stamps[static_cast<u32>(end_idx)] - stamps[static_cast<u32>(begin_idx)];
     const double dt_ns = static_cast<double>(dt_ticks) * qs->timestamp_period_ns;
-
     return dt_ns * 1e-6;
+};
+
+constexpr auto read_timestamp_pairs_ms = [](const auto &render_context,
+                                            QueryPoolHandle h) -> std::optional<std::vector<double>> {
+    const auto *qs = render_context.query_pools.get(h);
+    if (!qs) {
+        return std::nullopt;
+    }
+
+    const u32 count = qs->query_count;
+    if (count < 2 || (count % 2) != 0) {
+        return std::nullopt;
+    }
+
+    std::vector<u64> stamps(count, 0);
+
+    const VkResult r =
+            vkGetQueryPoolResults(render_context.get_device(), qs->pool, 0, count, stamps.size() * sizeof(u64),
+                                  stamps.data(), sizeof(u64), VK_QUERY_RESULT_64_BIT);
+
+    if (r == VK_NOT_READY) {
+        return std::nullopt;
+    }
+    if (r != VK_SUCCESS) {
+        return std::nullopt;
+    }
+
+    std::vector<double> out{};
+    out.reserve(count / 2);
+
+    for (u32 i = 0; i < count; i += 2) {
+        const u64 dt_ticks = stamps[i + 1] - stamps[i];
+        const double dt_ns = static_cast<double>(dt_ticks) * qs->timestamp_period_ns;
+        out.push_back(dt_ns * 1e-6);
+    }
+
+    return out;
 };
 
 constexpr auto current_extent = [](GLFWwindow *win) {
@@ -158,19 +214,6 @@ struct Mesh {
     }
 };
 
-enum class PipelineStats : u32 {
-    InputAssemblyVertices = 0,
-    InputAssemblyPrimitives = 1,
-    VertexShaderInvocations = 2,
-    ClippingInvocations = 3,
-    ClippingPrimitives = 4,
-    FragmentShaderInvocations = 5,
-    ComputeShaderInvocations = 6,
-    Count = 7,
-};
-
-constexpr u32 pipeline_stats_query_count = 1;
-
 struct GraphicsGpuStats {
     u64 input_assembly_vertices;
     u64 input_assembly_primitives;
@@ -186,43 +229,15 @@ struct ComputeGpuStats {
     u64 compute_shader_invocations;
 };
 
-/*
- * constexpr auto read_timestamp_ms = [](const auto &render_context, const auto h) -> std::optional<double> {
-     const auto *qs = render_context.query_pools.get(h);
-     if (!qs) return std::nullopt;
 
-     std::array<u64, 2> stamps = {};
-
-     // REMOVED: VK_QUERY_RESULT_WAIT_BIT
-     const VkResult r = vkGetQueryPoolResults(
-         render_context.get_device(),
-         qs->pool,
-         0, 2,
-         sizeof(stamps),
-         stamps.data(),
-         sizeof(u64),
-         VK_QUERY_RESULT_64_BIT
-     );
-
-     if (r != VK_SUCCESS) {
-         return std::nullopt;
-     }
-
-     const u64 dt_ticks = stamps[1] - stamps[0];
-     const double dt_ns = static_cast<double>(dt_ticks) * qs->timestamp_period_ns;
-
-     return dt_ns * 1e-6;
- };
- */
 auto read_graphics_stats = [](auto &ctx, auto &device, const auto h) -> std::optional<GraphicsGpuStats> {
     const auto *qs = ctx.query_pools.get(h);
     if (!qs)
         return std::nullopt;
 
     std::array<u64, 8> stats{}; // Match the number of statistics you requested
-    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 8, // Query index 0, count 1
-                                         sizeof(stats), stats.data(), sizeof(u64),
-                                         VK_QUERY_RESULT_64_BIT);
+    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
+                                         sizeof(stats), stats.data(), sizeof(u64), VK_QUERY_RESULT_64_BIT);
 
     if (r != VK_SUCCESS)
         return std::nullopt;
@@ -246,8 +261,7 @@ auto read_compute_stats = [](auto &ctx, auto &device, const auto h) -> std::opti
 
     std::array<u64, 1> stats{}; // Match the number of statistics you requested
     const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
-                                         sizeof(stats), stats.data(), sizeof(u64),
-                                         VK_QUERY_RESULT_64_BIT);
+                                         sizeof(stats), stats.data(), sizeof(u64), VK_QUERY_RESULT_64_BIT);
 
     if (r != VK_SUCCESS)
         return std::nullopt;
@@ -511,7 +525,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
     }
 
     auto &&[physical_device, graphics_index, compute_index] = *could_choose;
-    auto &&[device, graphics_queue, compute_queue] = create_device(physical_device, graphics_index, compute_index);
+    auto &&[device, graphics_queue, compute_queue, enabled_features] =
+            create_device(physical_device, graphics_index, compute_index);
 
     TracyGpuContext tracy_graphics{};
     TracyGpuContext tracy_compute{};
@@ -628,34 +643,43 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
         vkGetPhysicalDeviceProperties(physical_device, &props);
         const auto timestamp_period_ns = static_cast<double>(props.limits.timestampPeriod);
 
+        const VkQueryPoolCreateFlags reset_flags =
+                enabled_features.contains(VK_KHR_MAINTENANCE_9_EXTENSION_NAME) ? VK_QUERY_POOL_CREATE_RESET_BIT_KHR : 0;
+
         for (u32 fi = 0; fi < frames_in_flight; ++fi) {
-            VkQueryPoolCreateInfo qpci{.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
-                                       .pNext = nullptr,
-                                       .flags = 0,
-                                       .queryType = VK_QUERY_TYPE_TIMESTAMP,
-                                       .queryCount = query_count,
-                                       .pipelineStatistics = 0};
+            auto qpci = create_info<VkQueryPoolCreateInfo>();
+            qpci.flags = reset_flags;
+            qpci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qpci.queryCount = compute_query_count;
 
             VkQueryPool qpc = VK_NULL_HANDLE;
             vk_check(vkCreateQueryPool(device, &qpci, nullptr, &qpc));
+
             compute_query_pool[fi] = ctx.create_query_pool(QueryPoolState{
-                    .pool = qpc, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns});
+                    .pool = qpc, .query_count = compute_query_count, .timestamp_period_ns = timestamp_period_ns});
+
             set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, qpc,
                            std::format("compute_timestamp_query_pool_frame_{}", fi));
 
+            // --- Graphics timestamps ---
+            qpci.queryCount = graphics_query_count;
+
             VkQueryPool qpg = VK_NULL_HANDLE;
             vk_check(vkCreateQueryPool(device, &qpci, nullptr, &qpg));
+
             graphics_query_pool[fi] = ctx.create_query_pool(QueryPoolState{
-                    .pool = qpg, .query_count = query_count, .timestamp_period_ns = timestamp_period_ns});
+                    .pool = qpg, .query_count = graphics_query_count, .timestamp_period_ns = timestamp_period_ns});
+
             set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, qpg,
                            std::format("graphics_timestamp_query_pool_frame_{}", fi));
+
 
             VkQueryPoolCreateInfo stats_qpci{
                     .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                     .pNext = nullptr,
-                    .flags = 0,
+                    .flags = reset_flags,
                     .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
-                    .queryCount = pipeline_stats_query_count,
+                    .queryCount = stats_graphics_count,
                     .pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
                                           VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
                                           VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
@@ -663,15 +687,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                                           VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
                                           VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
                                           VK_QUERY_PIPELINE_STATISTIC_MESH_SHADER_INVOCATIONS_BIT_EXT |
-                                          VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT |
-                                          VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT,
+                                          VK_QUERY_PIPELINE_STATISTIC_TASK_SHADER_INVOCATIONS_BIT_EXT,
             };
 
             VkQueryPool stats_pool = VK_NULL_HANDLE;
             vk_check(vkCreateQueryPool(device, &stats_qpci, nullptr, &stats_pool));
             graphics_stats_pool[fi] = ctx.create_query_pool(QueryPoolState{
                     .pool = stats_pool,
-                    .query_count = pipeline_stats_query_count,
+                    .query_count = stats_graphics_count,
                     .timestamp_period_ns = 0.0, // Not used for stats
             });
             set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, stats_pool,
@@ -681,9 +704,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
             VkQueryPoolCreateInfo compute_stats_qpci{
                     .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                     .pNext = nullptr,
-                    .flags = 0,
+                    .flags = reset_flags,
                     .queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS,
-                    .queryCount = pipeline_stats_query_count,
+                    .queryCount = stats_compute_count,
                     .pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT,
             };
 
@@ -691,11 +714,19 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
             vk_check(vkCreateQueryPool(device, &compute_stats_qpci, nullptr, &compute_stats));
             compute_stats_pool[fi] = ctx.create_query_pool(QueryPoolState{
                     .pool = compute_stats,
-                    .query_count = pipeline_stats_query_count,
+                    .query_count = stats_compute_count,
                     .timestamp_period_ns = 0.0,
             });
             set_debug_name(device, VK_OBJECT_TYPE_QUERY_POOL, compute_stats,
                            std::format("compute_stats_query_pool_frame_{}", fi));
+
+            if (reset_flags == 0) {
+
+                vkResetQueryPool(device, qpc, 0, compute_query_count);
+                vkResetQueryPool(device, qpg, 0, graphics_query_count);
+                vkResetQueryPool(device, stats_pool, 0, stats_graphics_count);
+                vkResetQueryPool(device, compute_stats, 0, stats_compute_count);
+            }
         }
     }
     {
@@ -1115,12 +1146,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                                    .pValues = &fs.frame_done_value};
             vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
 
-            if (auto ms = read_timestamp_ms(ctx, compute_query_pool[bounded_frame_index]); ms.has_value()) {
-                gpu_compute_ms.add_sample(*ms);
+            if (auto ms = read_timestamp_pair_ms_any(ctx, compute_query_pool[bounded_frame_index],
+                                                     ComputeStamp::RotateBegin, ComputeStamp::CullEnd);
+                ms.has_value()) {
+                gpu_compute_ms.add_sample(ms.value());
             }
-
-
-            if (auto ms = read_timestamp_ms(ctx, graphics_query_pool[bounded_frame_index]); ms.has_value()) {
+            if (auto ms = read_timestamp_pair_ms_any(ctx, graphics_query_pool[bounded_frame_index],
+                                                     GraphicsStamp::PreDepthBegin, GraphicsStamp::PresentEnd);
+                ms.has_value()) {
                 gpu_graphics_ms.add_sample(*ms);
             }
 
@@ -1135,6 +1168,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 volatile auto keep = *pipeline_stats;
                 (void) keep;
             }
+
+            auto &&[a, b, c, d] = ctx.query_pools.get_multiple(
+                    compute_query_pool[bounded_frame_index], graphics_query_pool[bounded_frame_index],
+                    graphics_stats_pool[bounded_frame_index], compute_stats_pool[bounded_frame_index]);
+            vkResetQueryPool(device, a->pool, 0, a->query_count);
+            vkResetQueryPool(device, b->pool, 0, b->query_count);
+            vkResetQueryPool(device, c->pool, 0, c->query_count);
+            vkResetQueryPool(device, d->pool, 0, d->query_count);
         }
 
         auto acquired = swapchain.acquire_next_image(bounded_frame_index);
@@ -1154,22 +1195,11 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "RotateCubesGPU");
 
-                    if (const auto *cqs = ctx.query_pools.get(compute_query_pool[bounded_frame_index])) {
-                        vkCmdResetQueryPool(cmd, cqs->pool, 0, cqs->query_count);
-                        info("Reset compute query pool");
-                    }
-                    if (const auto *gqs = ctx.query_pools.get(graphics_query_pool[bounded_frame_index])) {
-                        vkCmdResetQueryPool(cmd, gqs->pool, 0, gqs->query_count);
-                        info("Reset graphics query pool");
-                    }
-                    if (const auto *gqs = ctx.query_pools.get(graphics_stats_pool[bounded_frame_index])) {
-                        vkCmdResetQueryPool(cmd, gqs->pool, 0, gqs->query_count);
-                        info("Reset graphics stats query pool");
-                    }
-                    if (const auto *qs = ctx.query_pools.get(compute_stats_pool[bounded_frame_index])) {
-                        vkCmdResetQueryPool(cmd, qs->pool, 0, qs->query_count);
-                        info("Reset compute stats query pool");
-                    }
+                    auto &&[ts, stats] = ctx.query_pools.get_multiple(compute_query_pool[bounded_frame_index],
+                                                                      compute_stats_pool[bounded_frame_index]);
+
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::RotateBegin);
+                    begin_stats(cmd, *stats, ComputeIndex::Rotate);
 
                     auto *buffer = ctx.buffers.get(cubes_transform_handle->handle());
 
@@ -1186,6 +1216,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                                        &pc);
                     const u32 groups = (instance_count + 63u) / 64u;
                     vkCmdDispatch(cmd, groups, 1, 1);
+
+                    end_stats(cmd, *stats, ComputeIndex::Rotate);
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::RotateEnd);
 
                     VkBufferMemoryBarrier2 mem_barrier{};
                     mem_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -1220,6 +1253,13 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "Predepth");
+
+                    auto &&[ts, stats] = ctx.query_pools.get_multiple(graphics_query_pool[bounded_frame_index],
+                                                                      graphics_stats_pool[bounded_frame_index]);
+
+
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::PreDepthBegin);
+                    begin_stats(cmd, *stats, GraphicsIndex::PreDepth);
 
                     auto &&depth = ctx.textures.get(depth_handle);
                     auto &&[indirect, verts, idx] = ctx.buffers.get_multiple(
@@ -1277,6 +1317,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                                              sizeof(VkDrawIndexedIndirectCommand));
 
                     vkCmdEndRendering(cmd);
+                    end_stats(cmd, *stats, GraphicsIndex::PreDepth);
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::PreDepthEnd);
                 },
                 SubmitSynchronisation{
                         .timeline_waits = cube_rotate_waits,
@@ -1293,14 +1335,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
 
                     auto &&[cqs, css] = ctx.query_pools.get_multiple(compute_query_pool[bounded_frame_index],
                                                                      compute_stats_pool[bounded_frame_index]);
-                    const auto &cqp = cqs->pool;
-                    const auto &csp = css->pool;
 
-                    vkCmdResetQueryPool(cmd, cqp, 0, cqs->query_count);
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
-                                        static_cast<u32>(GpuStamp::Begin));
-                    vkCmdResetQueryPool(cmd, csp, 0, css->query_count);
-                    vkCmdBeginQuery(cmd, csp, 0, 0);
+                    write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::CullBegin);
+                    begin_stats(cmd, *css, ComputeIndex::Cull);
 
                     const PointLightCullingPushConstants pc{
                             .ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
@@ -1348,9 +1385,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
 
                     bind_and_dispatch(compact_pipeline, gc);
 
-                    vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, cqp,
-                                        static_cast<u32>(GpuStamp::End));
-                    vkCmdEndQuery(cmd, csp, 0);
+                    end_stats(cmd, *css, ComputeIndex::Cull);
+                    write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::CullEnd);
 
                     TRACY_GPU_COLLECT(tracy_compute.ctx, cmd);
                 },
@@ -1375,6 +1411,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "GBuffer MRT");
+
+                    auto *ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::GbufferBegin);
 
                     auto *g0 = ctx.textures.get(gbuffer0_handle);
                     auto *g1 = ctx.textures.get(gbuffer1_handle);
@@ -1468,6 +1507,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                                              sizeof(VkDrawIndexedIndirectCommand));
 
                     vkCmdEndRendering(cmd);
+
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::GbufferEnd);
                 },
                 SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
@@ -1490,17 +1531,31 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "DeferredLighting(FS)");
 
+                    auto &&ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::DeferredBegin);
+
                     auto *g0 = ctx.textures.get(gbuffer0_handle);
                     auto *g1 = ctx.textures.get(gbuffer1_handle);
                     auto *g2 = ctx.textures.get(gbuffer2_handle);
                     auto *depth = ctx.textures.get(depth_handle);
                     auto *lit = ctx.textures.get(lit_hdr_handle);
 
-                    g0->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
-                    g1->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
-                    g2->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
-                    depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT});
-                    lit->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    g0->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    g1->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    g2->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                    depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
+                                                         {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                                          VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                                                  VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT});
+                    lit->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
 
                     // Make gbuffer + depth readable by fragment shader, and lit writable as color attachment.
                     // Layouts stay GENERAL (your preference), but we still do proper memory visibility.
@@ -1651,6 +1706,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                     dep2.imageMemoryBarrierCount = 1;
                     dep2.pImageMemoryBarriers = &lit_to_read;
                     vkCmdPipelineBarrier2(cmd, &dep2);
+
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::DeferredEnd);
                 },
                 SubmitSynchronisation{.timeline_waits = deferred_waits});
 
@@ -1668,6 +1725,10 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "Tonemapping");
+
+                    auto &&ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::TonemapBegin);
+
                     auto &&hdr = ctx.textures.get(lit_hdr_handle);
                     auto &&ldr = ctx.textures.get(tonemapped_target_handle);
 
@@ -1719,6 +1780,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                     vkCmdDraw(cmd, 3, 1, 0, 0); // fullscreen triangle
 
                     vkCmdEndRendering(cmd);
+
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::TonemapEnd);
                 },
                 SubmitSynchronisation{.timeline_waits = tonemap_waits});
 
@@ -1740,11 +1803,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
 
         u64 counter = 0;
         vk_check(vkGetSemaphoreCounterValue(device, tl_graphics.timeline, &counter));
-        info("tl_graphics counter before CopyToSwapchain submit: {}", counter);
         auto swapchain_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "CopyToSwapchain");
+
+                    auto &&ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::PresentBegin);
+
                     auto &&tonemapped = ctx.textures.get(tonemapped_target_handle);
 
                     const auto dst_image = swapchain.image(swap_image_index);
@@ -1876,6 +1942,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
                     end_dep_info.pImageMemoryBarriers = end_barriers.data();
 
                     vkCmdPipelineBarrier2(cmd, &end_dep_info);
+
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::PresentEnd);
+
                     TRACY_GPU_COLLECT(tracy_graphics.ctx, cmd);
                 },
                 SubmitSynchronisation{
@@ -1886,8 +1955,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> int {
 
         fs.frame_done_value = swapchain_val;
 
-        throttle(tl_graphics, ctx.get_device());
-        throttle(tl_compute, ctx.get_device());
+        //  throttle(tl_graphics, ctx.get_device());
+        //  throttle(tl_compute, ctx.get_device());
 
         const auto completed = std::min(tl_compute.completed, tl_graphics.completed);
         ctx.destroy_queue.retire(completed);

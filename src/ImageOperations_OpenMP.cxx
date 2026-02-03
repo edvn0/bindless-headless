@@ -16,6 +16,51 @@
 #include <immintrin.h>
 #endif
 
+namespace {
+
+    auto bytes_per_pixel(VkFormat format) -> u32
+    {
+        switch (format) {
+            // RGBA8
+            case VK_FORMAT_R8G8B8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+                return 4;
+
+                // RGBA16 (4 * 16-bit = 8 bytes)
+            case VK_FORMAT_R16G16B16A16_UNORM:
+            case VK_FORMAT_R16G16B16A16_SNORM:
+            case VK_FORMAT_R16G16B16A16_UINT:
+            case VK_FORMAT_R16G16B16A16_SINT:
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                return 8;
+
+                // RGBA32 (4 * 32-bit = 16 bytes)
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+            case VK_FORMAT_R32G32B32A32_UINT:
+            case VK_FORMAT_R32G32B32A32_SINT:
+                return 16;
+
+                // R8
+            case VK_FORMAT_R8_UNORM:
+            case VK_FORMAT_R8_SRGB:
+            case VK_FORMAT_R8_UINT:
+            case VK_FORMAT_R8_SINT:
+                return 1;
+
+            default:
+                return 0;
+        }
+    }
+
+    auto calc_tightly_packed_image_size_bytes(u32 width, u32 height, VkFormat format) -> VkDeviceSize
+    {
+        u32 const bpp = bytes_per_pixel(format);
+        return VkDeviceSize(width) * VkDeviceSize(height) * VkDeviceSize(bpp);
+    }
+
+} // namespace
+
+
 namespace image_operations {
 
     namespace {
@@ -250,6 +295,7 @@ namespace image_operations {
         u32 width;
         u32 height;
         VkFormat format;
+            u32 request_index;
     };
 
     // Batch write multiple images (OpenMP version)
@@ -270,7 +316,8 @@ namespace image_operations {
         {
             ZoneScopedNC("create_staging_buffers", 0x4080FF);
 
-            for (auto const &req: requests) {
+            for (u32 req_index = 0; req_index < requests.size(); ++req_index) {
+                auto const &req = requests[req_index];
                 if (!req.texture) {
                     error("Null texture for {}", req.filename);
                     continue;
@@ -278,27 +325,11 @@ namespace image_operations {
 
                 auto const &tex = *req.texture;
 
-                u32 pixel_size = 0;
-                switch (tex.format) {
-                    case VK_FORMAT_R8G8B8A8_UNORM:
-                    case VK_FORMAT_R8G8B8A8_SRGB:
-                        pixel_size = 4;
-                        break;
-                    case VK_FORMAT_R32G32B32A32_SFLOAT:
-                        pixel_size = 16;
-                        break;
-                    case VK_FORMAT_R8_UNORM:
-                    case VK_FORMAT_R8_SRGB:
-                    case VK_FORMAT_R8_UINT:
-                    case VK_FORMAT_R8_SINT:
-                        pixel_size = 1;
-                        break;
-                    default:
-                        error("Unsupported format for {}: {}", req.filename, static_cast<u32>(tex.format));
-                        continue;
+                if (auto pixel_size = bytes_per_pixel(tex.format); pixel_size == 0) {
+                    error("Unsupported format for {}: {}", req.filename, static_cast<u32>(tex.format));
+                    continue;
                 }
-
-                VkDeviceSize buffer_size = static_cast<VkDeviceSize>(tex.width) * tex.height * pixel_size;
+                const auto buffer_size = calc_tightly_packed_image_size_bytes(tex.width, tex.height, tex.format);
 
                 VkBufferCreateInfo buffer_create_info{
                         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -328,6 +359,7 @@ namespace image_operations {
                 staging.width = tex.width;
                 staging.height = tex.height;
                 staging.format = tex.format;
+                staging.request_index = req_index;
                 staging_buffers.push_back(staging);
             }
         }
@@ -383,12 +415,9 @@ namespace image_operations {
 
             vkBeginCommandBuffer(command_buffer, &begin_info);
 
-            for (size_t i = 0; i < requests.size(); ++i) {
-                if (i >= staging_buffers.size())
-                    break;
-
-                auto const &tex = *requests[i].texture;
-                auto const &staging = staging_buffers[i];
+            for (auto const &staging : staging_buffers) {
+                auto const &req = requests[staging.request_index];
+                auto const &tex = *req.texture;
 
                 VkImageMemoryBarrier2 barrier{};
                 barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -465,7 +494,7 @@ namespace image_operations {
                 ZoneScopedNC("process_single_image", 0xFF40FF);
 
                 auto const &staging = staging_buffers[i];
-                auto const &req = requests[i];
+                auto const &req = requests[staging.request_index];
 
                 std::ofstream output(req.filename, std::ios::binary);
                 if (!output) {
@@ -528,33 +557,15 @@ namespace image_operations {
         const u32 row_size = ((tex.width * 3 + 3) / 4) * 4;
         std::vector<u8> cpu_pixels(row_size * tex.height);
 
-        u32 pixel_size = 0;
-        {
-            ZoneScopedNC("format_resolve", 0x4080FF);
-            switch (tex.format) {
-                case VK_FORMAT_R8G8B8A8_UNORM:
-                case VK_FORMAT_R8G8B8A8_SRGB:
-                    pixel_size = 4;
-                    break;
-                case VK_FORMAT_R32G32B32A32_SFLOAT:
-                    pixel_size = 16;
-                    break;
-                case VK_FORMAT_R8_UNORM:
-                case VK_FORMAT_R8_SRGB:
-                case VK_FORMAT_R8_UINT:
-                case VK_FORMAT_R8_SINT:
-                    pixel_size = 1;
-                    break;
-                default:
-                    error("Unsupported format for writing to disk: {}", static_cast<u32>(tex.format));
-                    return;
-            }
+        if (auto pixel_size = bytes_per_pixel(tex.format); pixel_size == 0) {
+            error("Unsupported format for writing to disk: {}", static_cast<u32>(tex.format));
+            return;
         }
+        const auto buffer_size = calc_tightly_packed_image_size_bytes(tex.width, tex.height, tex.format);
 
         VmaAllocatorInfo allocator_info{};
         vmaGetAllocatorInfo(allocator, &allocator_info);
 
-        const VkDeviceSize buffer_size = static_cast<VkDeviceSize>(tex.width) * tex.height * pixel_size;
 
         VkBuffer staging_buffer{};
         VmaAllocation staging_allocation{};

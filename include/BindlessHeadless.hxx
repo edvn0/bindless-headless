@@ -156,6 +156,14 @@ inline auto pick_msaa_samples(VkPhysicalDevice physical_device) -> VkSampleCount
 // By default, sets WANT_SAMPLED and WANT_STORAGE and WANT_TRANSFER.
 struct TargetSamplerConfiguration {
     std::bitset<3> sampled_storage_transfer{0b111};
+
+    struct Dimensions {
+         u32 mip_levels {1};
+         u32 array_layers {1};
+         VkImageViewType view_type {VK_IMAGE_VIEW_TYPE_2D}; // lets you opt into 2D_ARRAY later
+     };
+
+     Dimensions dims{};
 };
 
 auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
@@ -173,6 +181,28 @@ inline auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFo
     return create_depth_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, true, name);
 }
 
+auto create_image_from_mips_v2(
+    VmaAllocator alloc,
+    GlobalCommandContext& cmd_ctx,
+    u32 width,
+    u32 height,
+    VkFormat format,
+    std::span<const std::byte> data,
+    std::span<const u32> mip_offsets,
+    std::span<const u32> mip_sizes,
+    std::string_view name
+) -> OffscreenTarget;
+auto create_image_from_mips_v2(
+    VmaAllocator alloc,
+    GlobalCommandContext& cmd_ctx,
+    u32 width,
+    u32 height,
+    VkFormat format,
+    std::span<const u8> data,
+    std::span<const u32> mip_offsets,
+    std::span<const u32> mip_sizes,
+    std::string_view name
+) -> OffscreenTarget;
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
                                std::string_view name) -> OffscreenTarget;
@@ -301,12 +331,21 @@ using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32>;
 
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
-enum class GpuStamp : u32 { Begin = 0, End = 1, Count = 2 };
+enum class ComputeStamp : u32 { RotateBegin, RotateEnd, CullBegin, CullEnd, Count };
+enum class ComputeIndex : u32 { Rotate = 0, Cull = 1, Count};
 
-inline constexpr u32 query_count = static_cast<u32>(GpuStamp::Count);
+inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
+inline constexpr u32 stats_compute_count = static_cast<u32>(ComputeIndex::Count);
 
+enum class GraphicsStamp : u32 { PreDepthBegin, PreDepthEnd, GbufferBegin, GbufferEnd, DeferredBegin, DeferredEnd, TonemapBegin, TonemapEnd, PresentBegin, PresentEnd, Count };
+enum class GraphicsIndex : u32 { PreDepth = 0, GBuffer = 1, Deferred = 2, Tonemap = 3, Present = 4, Count };
+
+inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
+inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);
+
+using EnabledFeatureSet = std::unordered_set<std::string, string_hash, string_eq>;
 auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index)
-        -> std::tuple<VkDevice, VkQueue, VkQueue>;
+        -> std::tuple<VkDevice, VkQueue, VkQueue, EnabledFeatureSet>;
 
 auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device) -> VmaAllocator;
 

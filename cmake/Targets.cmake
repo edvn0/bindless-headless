@@ -95,6 +95,7 @@ endif()
 target_link_libraries(BindlessHeadless PRIVATE
   volk
   BindlessHeadlessAllocator
+  ktx
   spdlog::spdlog
   efsw-static
   ThirdPartySTB

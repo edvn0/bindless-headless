@@ -108,7 +108,6 @@ auto load_mtl(const std::filesystem::path &mtl_path) -> std::unordered_map<std::
 // -----------------------------------------------------------------------------
 // Textures
 // -----------------------------------------------------------------------------
-
 struct TextureLoadPacket {
     enum class Type { SRGB, Linear };
     enum class Class { Albedo, Normal, Roughness, Metallic, Occlusion, Emissive };
@@ -131,6 +130,27 @@ struct TextureLoadPacket {
     std::string name{};
 };
 
+
+struct LoadedTextureCpu {
+    std::string name {};
+    TextureLoadPacket::Type type {};
+    TextureLoadPacket::Class texture_class {};
+
+    u32 width {0};
+    u32 height {0};
+    u32 levels {1};
+
+    VkFormat vk_format {VK_FORMAT_UNDEFINED};
+
+    std::vector<u8> data {};
+    std::vector<u32> level_offset {};
+    std::vector<u32> level_size {};
+
+    auto level_span(u32 level) const -> std::span<const u8>
+    {
+        return std::span<const u8>{data.data() + level_offset[level], level_size[level]};
+    }
+};
 auto load_texture_from_file(const std::filesystem::path &texture_path, const TextureLoadPacket::Type type,
                             const TextureLoadPacket::Class texture_class) -> TextureLoadPacket;
 

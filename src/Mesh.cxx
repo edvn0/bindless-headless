@@ -2,11 +2,190 @@
 #include "CompilerGlue.hxx"
 
 #include <glm/gtc/packing.hpp>
+#include <ktx.h>
+#include <ktxvulkan.h>
 
 #define TINYOBJLOADER_USE_MAPBOX_EARCUT
 #include <tiny_obj_loader.h>
 
 namespace {
+    static auto pick_vk_format(TextureLoadPacket::Type type) -> VkFormat {
+        switch (type) {
+            case TextureLoadPacket::Type::SRGB:
+                return VK_FORMAT_R8G8B8A8_SRGB;
+            case TextureLoadPacket::Type::Linear:
+            default:
+                return VK_FORMAT_R8G8B8A8_UNORM;
+        }
+    }
+
+    auto load_with_stb(
+        std::filesystem::path const& texture_path,
+        TextureLoadPacket::Type type,
+        TextureLoadPacket::Class texture_class
+    ) -> LoadedTextureCpu
+    {
+        LoadedTextureCpu out{};
+        out.name = texture_path.filename().string();
+        out.type = type;
+        out.texture_class = texture_class;
+        out.vk_format = pick_vk_format(type);
+
+        int width = 0, height = 0, channels = 0;
+        stbi_set_flip_vertically_on_load(true);
+
+        unsigned char* pixels = stbi_load(texture_path.string().c_str(), &width, &height, &channels, 4);
+        if (!pixels) {
+            out.width = 1;
+            out.height = 1;
+            out.levels = 1;
+            out.data = {255, 0, 255, 255};
+            out.level_offset = {0};
+            out.level_size = {4};
+            return out;
+        }
+
+        out.width = static_cast<u32>(width);
+        out.height = static_cast<u32>(height);
+        out.levels = 1;
+
+        u32 const size = out.width * out.height * 4;
+        out.data.assign(pixels, pixels + size);
+        out.level_offset = {0};
+        out.level_size = {size};
+
+        stbi_image_free(pixels);
+        return out;
+    }
+
+
+    auto load_ktx2_cpu_rgba(
+        std::filesystem::path const& texture_path,
+        TextureLoadPacket::Type type,
+        TextureLoadPacket::Class texture_class
+    ) -> LoadedTextureCpu
+    {
+        LoadedTextureCpu out{};
+        out.name = texture_path.filename().string();
+        out.type = type;
+        out.texture_class = texture_class;
+
+        // For now, unify everything to RGBA8/UNORM/SRGB on upload.
+        // If your KTX2 contains HDR/float, you’ll want to branch and use RGBA16F/32F later.
+        out.vk_format = pick_vk_format(type);
+
+        ktxTexture2* ktx2 = nullptr;
+        KTX_error_code res = ktxTexture_CreateFromNamedFile(
+            texture_path.string().c_str(),
+            KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
+            reinterpret_cast<ktxTexture**>(&ktx2));
+
+        if (res != KTX_SUCCESS || !ktx2) {
+            // fallback magenta
+            out.width = 1;
+            out.height = 1;
+            out.levels = 1;
+            out.data = {255, 0, 255, 255};
+            out.level_offset = {0};
+            out.level_size = {4};
+            return out;
+        }
+
+        // If it’s BasisU (UASTC/ETC1S), transcode to raw RGBA32 on CPU.
+        // (This is the simplest “single-struct” path. Later you can transcode to BC7 etc and upload compressed.)
+        if (ktxTexture2_NeedsTranscoding(ktx2)) {
+            // KTX_TTF_RGBA32 yields 8-bit RGBA pixels. Flags 0 is fine.
+            res = ktxTexture2_TranscodeBasis(ktx2, KTX_TTF_RGBA32, 0);
+            if (res != KTX_SUCCESS) {
+                ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx2));
+                out.width = 1;
+                out.height = 1;
+                out.levels = 1;
+                out.data = {255, 0, 255, 255};
+                out.level_offset = {0};
+                out.level_size = {4};
+                return out;
+            }
+        }
+
+        // After transcode, ktx2->pData contains the pixel payload.
+        out.width  = static_cast<u32>(ktx2->baseWidth);
+        out.height = static_cast<u32>(ktx2->baseHeight);
+        out.levels = static_cast<u32>(ktx2->numLevels);
+
+        out.level_offset.resize(out.levels);
+        out.level_size.resize(out.levels);
+
+        // KTX2 layout is mip-major; we can query each image level offset/size.
+        // We’ll pack all mips into out.data contiguously.
+        u32 total = 0;
+        for (u32 level = 0; level < out.levels; ++level) {
+            ktx_size_t off = 0;
+            res = ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture*>(ktx2), level, 0, 0, &off);
+            if (res != KTX_SUCCESS) {
+                // bail to magenta
+                ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx2));
+                out = {};
+                out.name = texture_path.filename().string();
+                out.type = type;
+                out.texture_class = texture_class;
+                out.width = 1;
+                out.height = 1;
+                out.levels = 1;
+                out.vk_format = pick_vk_format(type);
+                out.data = {255, 0, 255, 255};
+                out.level_offset = {0};
+                out.level_size = {4};
+                return out;
+            }
+
+            // Compute level size (RGBA32: 4 bytes/pixel * w * h at that mip)
+            // libktx doesn’t hand you “bytes for this level” directly in a single call; easiest is to derive dimensions.
+            u32 const lw = std::max(1u, out.width >> level);
+            u32 const lh = std::max(1u, out.height >> level);
+            u32 const sz = lw * lh * 4;
+
+            out.level_offset[level] = total;
+            out.level_size[level] = sz;
+            total += sz;
+        }
+
+        out.data.resize(total);
+
+        u8 const* base = reinterpret_cast<u8 const*>(ktxTexture_GetData(reinterpret_cast<ktxTexture*>(ktx2)));
+
+        for (u32 level = 0; level < out.levels; ++level) {
+            ktx_size_t off = 0;
+            (void)ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture*>(ktx2), level, 0, 0, &off);
+
+            std::memcpy(
+                out.data.data() + out.level_offset[level],
+                base + off,
+                out.level_size[level]);
+        }
+
+        ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx2));
+        return out;
+    }
+
+
+    auto load_texture_unified(
+        std::filesystem::path const& texture_path,
+        TextureLoadPacket::Type type,
+        TextureLoadPacket::Class texture_class
+    ) -> LoadedTextureCpu
+    {
+        auto ext = texture_path.extension().string();
+        std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+
+        if (ext == ".ktx2") {
+            return load_ktx2_cpu_rgba(texture_path, type, texture_class);
+        }
+
+        // png/bmp/tga/jpg/etc
+        return load_with_stb(texture_path, type, texture_class);
+    }
+
     static inline auto unpack_uv(uint32_t packed) -> glm::vec2 {
         const glm::vec4 u = glm::unpackUnorm4x8(packed);
         return glm::vec2{u.x, u.y};
@@ -150,7 +329,7 @@ namespace {
         return id;
     }
 
-    auto build_loaded_texture_table(std::span<const TextureLoadPacket> textures, std::span<const TextureHandle> handles)
+    auto build_loaded_texture_table(const auto& textures, std::span<const TextureHandle> handles)
             -> LoadedTextureTable {
         LoadedTextureTable out{};
         out.by_name.reserve(textures.size());
@@ -202,42 +381,21 @@ namespace {
         MaterialData out{};
         out.name = m.name;
 
-        // Base color (Kd) and map_Kd
         out.albedo_factor = glm::vec4{m.diffuse[0], m.diffuse[1], m.diffuse[2], 1.0f};
         out.albedo_map = m.diffuse_texname;
 
-        // Normal mapping: tinyobj uses bump_texname (and/or normal_texname in newer forks; tinyobjloader has bump)
         out.normal_map = m.bump_texname;
 
-        // Roughness/metallic are not core OBJ/MTL, but some exporters stuff them into
-        // "roughness_texname"/"metallic_texname" tinyobj::material_t has PBR fields in recent versions:
-        // - roughness, metallic
-        // - roughness_texname, metallic_texname
-        // If your tinyobjloader version lacks these, this still compiles if you remove the block below.
-#ifdef TINYOBJLOADER_USE_PBR_MATERIAL
         out.roughness_factor = m.roughness;
         out.metallic_factor = m.metallic;
         out.roughness_map = m.roughness_texname;
         out.metallic_map = m.metallic_texname;
-#else
-        // fallback from classic MTL: Ns (specular exponent) -> roughness (approx, same spirit as your old conversion)
-        // tinyobj exposes shininess as "shininess"
-        if (m.shininess > 0.0f) {
-            out.roughness_factor = 1.0f - std::sqrt(m.shininess / 1000.0f);
-        } else {
-            out.roughness_factor = 1.0f;
-        }
-        out.metallic_factor = 0.0f;
-#endif
 
-        // Ambient map often used as AO (map_Ka)
         out.occlusion_map = m.ambient_texname;
 
-        // Emissive (Ke + map_Ke)
         out.emissive_factor = glm::vec3{m.emission[0], m.emission[1], m.emission[2]};
         out.emissive_map = m.emissive_texname;
 
-        // Sensible defaults if absent
         if (out.albedo_factor == glm::vec4(0.0f))
             out.albedo_factor = glm::vec4{1.0f};
         return out;
@@ -245,13 +403,14 @@ namespace {
 
     struct VertexHash {
         auto operator()(const Vertex &v) const noexcept -> size_t {
-            // keep your original behavior for now (you already asked about improving it; can swap later)
             size_t h = 0;
             h ^= std::hash<float>()(v.position.x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<float>()(v.position.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<float>()(v.position.z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.normal) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.uvs) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<u32>()(v.tangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<u32>()(v.bitangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             return h;
         }
     };
@@ -347,25 +506,17 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     const auto &shapes = reader.GetShapes();
     const auto &tiny_mats = reader.GetMaterials();
 
-    // -------------------------------------------------------------------------
-    // Output mesh (single pool) + dedupe
-    // -------------------------------------------------------------------------
     MeshData mesh{};
     std::unordered_map<Vertex, u32, VertexHash> vertex_map;
 
-    // -------------------------------------------------------------------------
-    // Materials: tinyobj -> your MaterialData + your MaterialIdTable
-    // -------------------------------------------------------------------------
     std::unordered_map<std::string, MaterialData> materials;
     materials.reserve(tiny_mats.size() + 1);
 
     MaterialIdTable material_ids{};
 
-    // Always ensure a "default" material id exists (covers -1 material ids)
     const std::string default_name = "default";
     (void) get_or_create_material_id(material_ids, default_name);
 
-    // Convert tinyobj materials
     for (const auto &m: tiny_mats) {
         MaterialData md = to_material_data(m);
         if (md.name.empty())
@@ -375,7 +526,6 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
         materials.emplace(md.name, std::move(md));
     }
 
-    // Ensure default material exists in your table
     if (!materials.contains(default_name)) {
         materials[default_name] = MaterialData{
                 .name = default_name,
@@ -470,7 +620,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     // -------------------------------------------------------------------------
     // Texture loading (dedupe) - unchanged, driven by your MaterialData table
     // -------------------------------------------------------------------------
-    std::vector<std::future<TextureLoadPacket>> load_futures;
+    std::vector<std::future<LoadedTextureCpu>> load_futures;
     std::unordered_set<std::string> unique_texture_names;
     const std::filesystem::path base_path = obj_path.parent_path();
 
@@ -478,9 +628,9 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     do {                                                                                                               \
         if (!(mat).field_name.empty() && !unique_texture_names.contains((mat).field_name)) {                           \
             load_futures.emplace_back(                                                                                 \
-                    std::async(std::launch::async, [base_path, tex_name = (mat).field_name]() -> TextureLoadPacket {   \
-                        return load_texture_from_file(base_path / tex_name, TextureLoadPacket::Type::t,                \
-                                                      TextureLoadPacket::Class::clazz);                                \
+                    std::async(std::launch::async, [base_path, tex_name = (mat).field_name]() {   \
+                        return load_texture_unified(base_path / tex_name, TextureLoadPacket::Type::t,                  \
+                                                    TextureLoadPacket::Class::clazz);                                  \
                     }));                                                                                               \
             unique_texture_names.emplace((mat).field_name);                                                            \
         }                                                                                                              \
@@ -497,7 +647,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
 #undef LOAD_MAP
 
-    std::vector<TextureLoadPacket> textures;
+    std::vector<LoadedTextureCpu> textures;
     textures.reserve(load_futures.size());
     for (auto &f: load_futures) {
         textures.emplace_back(f.get());
@@ -506,9 +656,18 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     std::vector<TextureHandle> handles;
     handles.reserve(textures.size());
 
-    for (const auto &tex: textures) {
-        auto img = create_image_from_span_v2(ctx.allocator, cmd_ctx, tex.width, tex.height, tex.to_format(),
-                                             std::span<const uint8_t>{tex.rgba.data(), tex.rgba.size()}, tex.name);
+    for (auto const& tex : textures) {
+        auto img = create_image_from_mips_v2(
+            ctx.allocator,
+            cmd_ctx,
+            tex.width,
+            tex.height,
+            tex.vk_format,
+            std::span<const u8>{tex.data.data(), tex.data.size()},
+            std::span<const u32>{tex.level_offset.data(), tex.level_offset.size()},
+            std::span<const u32>{tex.level_size.data(), tex.level_size.size()},
+            tex.name);
+
         handles.emplace_back(ctx.textures.create(std::move(img)));
     }
 
@@ -516,7 +675,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     // Build GPU materials in material_id order + upload buffer (unchanged)
     // -------------------------------------------------------------------------
     DefaultTextureHandles defs = get_default_texture_handles(ctx);
-    LoadedTextureTable loaded = build_loaded_texture_table(textures, handles);
+    LoadedTextureTable loaded = build_loaded_texture_table(std::span {textures}, handles);
 
     std::vector<GPUMaterialData> gpu_materials;
     gpu_materials.reserve(material_ids.id_to_name.size());
