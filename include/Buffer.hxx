@@ -26,6 +26,25 @@ public:
 
     template<typename T, std::size_t N = std::dynamic_extent>
         requires std::is_trivially_copyable_v<T>
+    auto read_into_slice(VmaAllocator &alloc, std::span<T, N> slice, std::size_t offset = 0) const -> void {
+        auto *data = allocation_info.pMappedData;
+        if (!data) {
+            error("Trying to read from non-mapped memory. How?");
+            return;
+        }
+
+        if (offset + slice.size_bytes() > size()) {
+            error("Trying to read out of bounds memory");
+            return;
+        }
+        vmaInvalidateAllocation(alloc, allocation(), static_cast<VkDeviceSize>(offset),
+                                static_cast<VkDeviceSize>(slice.size_bytes()));
+        const auto offset_data = static_cast<u8 *>(data) + offset;
+        std::memcpy(slice.data(), offset_data, slice.size_bytes());
+    }
+
+    template<typename T, std::size_t N = std::dynamic_extent>
+        requires std::is_trivially_copyable_v<T>
     auto write_slice(VmaAllocator &alloc, std::span<T, N> slice, std::size_t offset = 0) {
         auto *data = allocation_info.pMappedData;
         if (!data) {

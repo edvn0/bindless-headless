@@ -88,7 +88,8 @@ SurfaceMaterial evaluate_material_tbn(
     if (mat.has_albedo_map())
     {
         float4 a = sample_texture(uv, mat.albedo_map, sampler_index);
-        surf.albedo = a * mat.albedo_factor;
+        surf.albedo.rgb = a.rgb * mat.albedo_factor.rgb;
+        surf.albedo.a = 1.0F;
     }
     else
     {

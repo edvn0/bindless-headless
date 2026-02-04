@@ -30,6 +30,8 @@ auto parse_cli(int argc, char **argv) -> CLIOptions {
     app.add_option("--msaa", opt.msaa, "MSAA sample count (1,2,4,8,16,32,64)")
             ->default_val(1)
             ->check(CLI::IsMember({1u, 2u, 4u, 8u, 16u, 32u, 64u}));
+    app.add_flag("--no-output-images", opt.disable_output_images, "Disable outputting images to disk")
+            ->default_val(true);
     app.allow_extras(false);
 
     // Abort on fail.

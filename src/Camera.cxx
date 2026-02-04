@@ -1,5 +1,7 @@
 #include "Camera.hxx"
 
+#include <algorithm>
+
 auto EditorCamera::view_matrix() const -> glm::mat4 { return glm::lookAtRH(position, position + forward, up); }
 
 auto EditorCamera::camera_position() const -> glm::vec3 { return position; }

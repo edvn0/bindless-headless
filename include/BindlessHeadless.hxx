@@ -15,11 +15,13 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
 
 #include <tl/expected.hpp>
 #include <vk_mem_alloc.h>
@@ -521,7 +523,7 @@ namespace destruction {
     };
 
     template<PipelineProvider T>
-    auto as_pipeline_refs(T &t)  {
+    auto as_pipeline_refs(T &t) {
         if constexpr (requires {
                           t.pipeline;
                           t.layout;
@@ -535,7 +537,7 @@ namespace destruction {
     auto pipeline(VkDevice dev, VkPipeline &, VkPipelineLayout &) -> void;
 
     auto pipeline(VkDevice dev, PipelineProvider auto &val) -> void {
-        auto&& [p, l] = as_pipeline_refs(val);
+        auto &&[p, l] = as_pipeline_refs(val);
         destruction::pipeline(dev, p, l);
     }
 

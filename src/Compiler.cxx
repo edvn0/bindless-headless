@@ -1,8 +1,10 @@
 #include "Compiler.hxx"
 
+#include <array>
 #include <fstream>
 #include <iterator>
 #include <tl/expected.hpp>
+
 
 #if !defined(ENGINE_OFFLINE_SHADERS)
 #include <slang-com-helper.h>
@@ -114,7 +116,7 @@ struct RuntimeSlangCompiler final : detail::Impl {
         desc.targets = &target;
         desc.targetCount = 1;
 
-        std::array opts = {
+        std::array<slang::CompilerOptionEntry, 5> opts = {
                 slang::CompilerOptionEntry{
                         slang::CompilerOptionName::EmitSpirvDirectly,
                         {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr},

@@ -19,12 +19,8 @@ namespace {
         }
     }
 
-    auto load_with_stb(
-        std::filesystem::path const& texture_path,
-        TextureLoadPacket::Type type,
-        TextureLoadPacket::Class texture_class
-    ) -> LoadedTextureCpu
-    {
+    auto load_with_stb(std::filesystem::path const &texture_path, TextureLoadPacket::Type type,
+                       TextureLoadPacket::Class texture_class) -> LoadedTextureCpu {
         LoadedTextureCpu out{};
         out.name = texture_path.filename().string();
         out.type = type;
@@ -34,7 +30,7 @@ namespace {
         int width = 0, height = 0, channels = 0;
         // stbi_set_flip_vertically_on_load(true);
 
-        unsigned char* pixels = stbi_load(texture_path.string().c_str(), &width, &height, &channels, 4);
+        unsigned char *pixels = stbi_load(texture_path.string().c_str(), &width, &height, &channels, 4);
         if (!pixels) {
             out.width = 1;
             out.height = 1;
@@ -59,22 +55,17 @@ namespace {
     }
 
 
-    auto load_ktx2_cpu_bc7(
-        std::filesystem::path const& texture_path,
-        TextureLoadPacket::Type type,
-        TextureLoadPacket::Class texture_class
-    ) -> LoadedTextureCpu
-    {
+    auto load_ktx2_cpu_bc7(std::filesystem::path const &texture_path, TextureLoadPacket::Type type,
+                           TextureLoadPacket::Class texture_class) -> LoadedTextureCpu {
         LoadedTextureCpu out{};
         out.name = texture_path.filename().string();
         out.type = type;
         out.texture_class = texture_class;
 
-        ktxTexture2* ktx2 = nullptr;
-        KTX_error_code res = ktxTexture_CreateFromNamedFile(
-            texture_path.string().c_str(),
-            KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
-            reinterpret_cast<ktxTexture**>(&ktx2));
+        ktxTexture2 *ktx2 = nullptr;
+        KTX_error_code res =
+                ktxTexture_CreateFromNamedFile(texture_path.string().c_str(), KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
+                                               reinterpret_cast<ktxTexture **>(&ktx2));
 
         if (res != KTX_SUCCESS || !ktx2) {
             out.width = 1;
@@ -92,7 +83,7 @@ namespace {
 
             res = ktxTexture2_TranscodeBasis(ktx2, target_format, 0);
             if (res != KTX_SUCCESS) {
-                ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx2));
+                ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
                 out.width = 1;
                 out.height = 1;
                 out.levels = 1;
@@ -103,14 +94,13 @@ namespace {
                 return out;
             }
 
-            out.vk_format = (type == TextureLoadPacket::Type::SRGB)
-                ? VK_FORMAT_BC7_SRGB_BLOCK
-                : VK_FORMAT_BC7_UNORM_BLOCK;
+            out.vk_format =
+                    (type == TextureLoadPacket::Type::SRGB) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
         } else {
             out.vk_format = static_cast<VkFormat>(ktx2->vkFormat);
         }
 
-        out.width  = static_cast<u32>(ktx2->baseWidth);
+        out.width = static_cast<u32>(ktx2->baseWidth);
         out.height = static_cast<u32>(ktx2->baseHeight);
         out.levels = static_cast<u32>(ktx2->numLevels);
 
@@ -120,9 +110,9 @@ namespace {
         u32 total = 0;
         for (u32 level = 0; level < out.levels; ++level) {
             ktx_size_t off = 0;
-            res = ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture*>(ktx2), level, 0, 0, &off);
+            res = ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture *>(ktx2), level, 0, 0, &off);
             if (res != KTX_SUCCESS) {
-                ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx2));
+                ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
                 out = {};
                 out.name = texture_path.filename().string();
                 out.type = type;
@@ -137,9 +127,9 @@ namespace {
                 return out;
             }
 
-            auto level_size = ktxTexture_GetImageSize(reinterpret_cast<ktxTexture*>(ktx2), level);
+            auto level_size = ktxTexture_GetImageSize(reinterpret_cast<ktxTexture *>(ktx2), level);
             if (level_size == 0) {
-                ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx2));
+                ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
                 out = {};
                 out.name = texture_path.filename().string();
                 out.type = type;
@@ -161,28 +151,21 @@ namespace {
 
         out.data.resize(total);
 
-        u8 const* base = reinterpret_cast<u8 const*>(ktxTexture_GetData(reinterpret_cast<ktxTexture*>(ktx2)));
+        u8 const *base = reinterpret_cast<u8 const *>(ktxTexture_GetData(reinterpret_cast<ktxTexture *>(ktx2)));
 
         for (u32 level = 0; level < out.levels; ++level) {
             ktx_size_t off = 0;
-            (void)ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture*>(ktx2), level, 0, 0, &off);
+            (void) ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture *>(ktx2), level, 0, 0, &off);
 
-            std::memcpy(
-                out.data.data() + out.level_offset[level],
-                base + off,
-                out.level_size[level]);
+            std::memcpy(out.data.data() + out.level_offset[level], base + off, out.level_size[level]);
         }
 
-        ktxTexture_Destroy(reinterpret_cast<ktxTexture*>(ktx2));
+        ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
         return out;
     }
 
-    auto load_texture_unified(
-        std::filesystem::path const& texture_path,
-        TextureLoadPacket::Type type,
-        TextureLoadPacket::Class texture_class
-    ) -> LoadedTextureCpu
-    {
+    auto load_texture_unified(std::filesystem::path const &texture_path, TextureLoadPacket::Type type,
+                              TextureLoadPacket::Class texture_class) -> LoadedTextureCpu {
         auto ext = texture_path.extension().string();
         std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
 
@@ -193,33 +176,31 @@ namespace {
         return load_with_stb(texture_path, type, texture_class);
     }
 
-     auto unpack_uv(uint32_t packed) -> glm::vec2 {
+    auto unpack_uv(uint32_t packed) -> glm::vec2 {
         const glm::vec4 u = glm::unpackSnorm4x8(packed);
         return glm::vec2{u.x, u.y};
     }
 
-     auto unpack_normal(uint32_t packed) -> glm::vec3 {
+    auto unpack_normal(uint32_t packed) -> glm::vec3 {
         const glm::vec4 n4 = glm::unpackSnorm3x10_1x2(packed);
         return glm::vec3{n4.x, n4.y, n4.z};
     }
 
-     auto pack_dir(glm::vec3 v) -> uint32_t {
-        return glm::packSnorm3x10_1x2(glm::vec4{v, 0.0f});
-    }
+    auto pack_dir(glm::vec3 v) -> uint32_t { return glm::packSnorm3x10_1x2(glm::vec4{v, 0.0f}); }
 
-     auto safe_normalize(glm::vec3 v, float eps = 1e-20f) -> glm::vec3 {
+    auto safe_normalize(glm::vec3 v, float eps = 1e-20f) -> glm::vec3 {
         const float len2 = glm::dot(v, v);
         if (len2 <= eps)
             return glm::vec3{0.0f};
         return v * glm::inversesqrt(len2);
     }
 
-     auto build_any_orthonormal_tangent(glm::vec3 n) -> glm::vec3 {
+    auto build_any_orthonormal_tangent(glm::vec3 n) -> glm::vec3 {
         const glm::vec3 a = (std::abs(n.z) < 0.999f) ? glm::vec3{0.0f, 0.0f, 1.0f} : glm::vec3{0.0f, 1.0f, 0.0f};
         return safe_normalize(glm::cross(a, n));
     }
 
-     auto compute_tangent_basis(MeshData &mesh) -> void {
+    auto compute_tangent_basis(MeshData &mesh) -> void {
         if (mesh.vertices.empty() || mesh.indices.size() < 3)
             return;
 
@@ -328,7 +309,7 @@ namespace {
     }
 
     auto build_loaded_texture_table(std::span<const LoadedTextureCpu> textures, std::span<const TextureHandle> handles)
-        -> LoadedTextureTable {
+            -> LoadedTextureTable {
         LoadedTextureTable out{};
         out.by_stem.reserve(textures.size());
         for (size_t i = 0; i < textures.size(); ++i) {
@@ -355,7 +336,8 @@ namespace {
         return fallback.index();
     }
 
-    auto resolve_texture_path(const std::filesystem::path& base_path, const std::string& tex_name) -> std::filesystem::path {
+    auto resolve_texture_path(const std::filesystem::path &base_path, const std::string &tex_name)
+            -> std::filesystem::path {
         std::filesystem::path original_path(tex_name);
         std::filesystem::path ktx2_name = original_path.stem().replace_extension(".ktx2");
 
@@ -430,11 +412,7 @@ namespace {
         out.albedo_factor = glm::vec4{m.diffuse[0], m.diffuse[1], m.diffuse[2], 1.0f};
         out.albedo_map = m.diffuse_texname;
 
-        out.normal_map = first_non_empty(
-            m.bump_texname,
-            m.normal_texname,
-            m.displacement_texname
-        );
+        out.normal_map = first_non_empty(m.bump_texname, m.normal_texname, m.displacement_texname);
 
         out.roughness_factor = m.roughness;
         out.metallic_factor = m.metallic;
@@ -446,10 +424,14 @@ namespace {
         out.emissive_factor = glm::vec3{m.emission[0], m.emission[1], m.emission[2]};
         out.emissive_map = m.emissive_texname;
 
-        out.is_alpha_tested = (m.dissolve < 1.0f) || (!m.alpha_texname.empty());
+        out.is_alpha_tested = (m.dissolve > 0.0f) || (!m.alpha_texname.empty());
+        info("Material '{}' alpha tested: {}. Dissolve: {}. Alpha texname: '{}'", out.name, out.is_alpha_tested,
+             m.dissolve, m.alpha_texname);
 
         if (out.albedo_factor == glm::vec4(0.0f))
             out.albedo_factor = glm::vec4{1.0f};
+
+        out.albedo_factor.a = out.is_alpha_tested ? m.dissolve : 1.0F;
         return out;
     }
 
@@ -467,8 +449,7 @@ namespace {
         }
     };
 
-     auto pack_vertex_from_indices(const tinyobj::attrib_t &attrib, const tinyobj::index_t &idx)
-            -> Vertex {
+    auto pack_vertex_from_indices(const tinyobj::attrib_t &attrib, const tinyobj::index_t &idx) -> Vertex {
         Vertex v{};
 
         if (idx.vertex_index >= 0) {
@@ -584,37 +565,37 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
     std::unordered_map<u32, std::vector<std::array<tinyobj::index_t, 3>>> material_groups;
 
-    for (const auto& shape : shapes) {
+    for (const auto &shape: shapes) {
         size_t index_offset = 0;
         for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); ++f) {
             const int fv = shape.mesh.num_face_vertices[f];
             const int mat_id = (f < shape.mesh.material_ids.size()) ? shape.mesh.material_ids[f] : -1;
 
             // Resolve material name/ID
-            const std::string& mat_name = (mat_id >= 0 && static_cast<size_t>(mat_id) < tiny_mats.size())
-                ? tiny_mats[mat_id].name : default_name;
+            const std::string &mat_name = (mat_id >= 0 && static_cast<size_t>(mat_id) < tiny_mats.size())
+                                                  ? tiny_mats[mat_id].name
+                                                  : default_name;
             const u32 mat_u32 = get_or_create_material_id(material_ids, mat_name);
 
             // Store face indices (assuming triangulation is on)
             if (fv == 3) {
-                material_groups[mat_u32].push_back({
-                    shape.mesh.indices[index_offset + 0],
-                    shape.mesh.indices[index_offset + 1],
-                    shape.mesh.indices[index_offset + 2]
-                });
+                material_groups[mat_u32].push_back({shape.mesh.indices[index_offset + 0],
+                                                    shape.mesh.indices[index_offset + 1],
+                                                    shape.mesh.indices[index_offset + 2]});
             }
             index_offset += fv;
         }
     }
 
     for (u32 m_id = 0; m_id < material_ids.id_to_name.size(); ++m_id) {
-        if (!material_groups.contains(m_id)) continue;
+        if (!material_groups.contains(m_id))
+            continue;
 
-        const auto& faces = material_groups[m_id];
+        const auto &faces = material_groups[m_id];
         u32 submesh_start_index = static_cast<u32>(mesh.indices.size());
 
-        for (const auto& face : faces) {
-            for (const auto& idx : face) {
+        for (const auto &face: faces) {
+            for (const auto &idx: face) {
                 Vertex v = pack_vertex_from_indices(attrib, idx);
 
                 auto it = vertex_map.find(v);
@@ -629,15 +610,15 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
             }
         }
 
-        const std::string& mat_name = material_ids.id_to_name[m_id];
+        const std::string &mat_name = material_ids.id_to_name[m_id];
         bool is_alpha = materials[mat_name].is_alpha_tested;
 
         // 3. Create one consolidated submesh for this material
         mesh.submeshes.push_back(Submesh{
-            .index_offset = submesh_start_index,
-            .index_count = static_cast<u32>(mesh.indices.size()) - submesh_start_index,
-            .material_id = m_id,
-            .alpha_tested = is_alpha,
+                .index_offset = submesh_start_index,
+                .index_count = static_cast<u32>(mesh.indices.size()) - submesh_start_index,
+                .material_id = m_id,
+                .alpha_tested = is_alpha,
         });
     }
 
@@ -653,12 +634,10 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 #define LOAD_MAP(mat, field_name, t, clazz)                                                                            \
     do {                                                                                                               \
         if (!(mat).field_name.empty() && !unique_texture_names.contains((mat).field_name)) {                           \
-            load_futures.emplace_back(                                                                                 \
-                    std::async(std::launch::async, [base_path, tex_name = (mat).field_name]() {                        \
-                        auto resolved = resolve_texture_path(base_path, tex_name);                                     \
-                        return load_texture_unified(resolved, TextureLoadPacket::Type::t,                              \
-                                                    TextureLoadPacket::Class::clazz);                                  \
-                    }));                                                                                               \
+            load_futures.emplace_back(std::async(std::launch::async, [base_path, tex_name = (mat).field_name]() {      \
+                auto resolved = resolve_texture_path(base_path, tex_name);                                             \
+                return load_texture_unified(resolved, TextureLoadPacket::Type::t, TextureLoadPacket::Class::clazz);    \
+            }));                                                                                                       \
             unique_texture_names.emplace((mat).field_name);                                                            \
         }                                                                                                              \
     } while (false)
@@ -683,23 +662,18 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     std::vector<TextureHandle> handles;
     handles.reserve(textures.size());
 
-    for (auto const& tex : textures) {
-        auto img = create_texture_image_v2(
-            ctx.allocator,
-            cmd_ctx,
-            tex.width,
-            tex.height,
-            tex.vk_format,
-            std::span<const u8>{tex.data.data(), tex.data.size()},
-            std::span<const u32>{tex.level_offset.data(), tex.level_offset.size()},
-            std::span<const u32>{tex.level_size.data(), tex.level_size.size()},
-            tex.name);
+    for (auto const &tex: textures) {
+        auto img =
+                create_texture_image_v2(ctx.allocator, cmd_ctx, tex.width, tex.height, tex.vk_format,
+                                        std::span<const u8>{tex.data.data(), tex.data.size()},
+                                        std::span<const u32>{tex.level_offset.data(), tex.level_offset.size()},
+                                        std::span<const u32>{tex.level_size.data(), tex.level_size.size()}, tex.name);
 
         handles.emplace_back(ctx.textures.create(std::move(img)));
     }
 
     DefaultTextureHandles defs = get_default_texture_handles(ctx);
-    LoadedTextureTable loaded = build_loaded_texture_table(std::span {textures}, handles);
+    LoadedTextureTable loaded = build_loaded_texture_table(std::span{textures}, handles);
 
     std::vector<GPUMaterialData> gpu_materials;
     gpu_materials.reserve(material_ids.id_to_name.size());
@@ -739,22 +713,23 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     const auto &vb_copy = mesh.vertices;
     const auto &ib_copy = mesh.indices;
 
-    auto aabb_data_result = create_mesh_aabb_data(
-            ctx.allocator,
-            mesh,
-            obj_path.filename().string()
-        );
+    auto aabb_data_result = create_mesh_aabb_data(ctx.allocator, mesh, obj_path.filename().string());
 
-        if (!aabb_data_result) {
-               return tl::make_unexpected(aabb_data_result.error());
-           }
-            auto aabb_data = std::move(aabb_data_result.value());
+    if (!aabb_data_result) {
+        return tl::make_unexpected(aabb_data_result.error());
+    }
+    auto aabb_data = std::move(aabb_data_result.value());
 
     struct VU {
         glm::vec3 pos;
         u32 uvs;
     };
-    auto position_vb = mesh.vertices | std::views::transform([](const auto &v) { return VU {.pos = v.position, .uvs =v.uvs, }; }) |
+    auto position_vb = mesh.vertices | std::views::transform([](const auto &v) {
+                           return VU{
+                                   .pos = v.position,
+                                   .uvs = v.uvs,
+                           };
+                       }) |
                        to<std::vector<VU>>();
 
     auto vertex_buffer =
@@ -764,7 +739,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
     auto pos_uv_buffer =
             Buffer::from_slice<VU>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(position_vb),
-                                          std::format("position_buffer_{}", obj_path.filename().string()))
+                                   std::format("position_buffer_{}", obj_path.filename().string()))
                     .value();
 
     auto index_buffer = Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, std::span(ib_copy),
@@ -796,7 +771,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
             .index_buffer = ctx.buffers.create(std::move(index_buffer)),
             .draw_count = static_cast<u32>(indirect_cmds.size()),
             .mesh_aabb = aabb_data.mesh_aabb,
-                    .submesh_aabbs = std::move(aabb_data.submesh_aabbs),
-                     .aabb_buffer = ctx.buffers.create(std::move(aabb_data.device_buffer)),
+            .submesh_aabbs = std::move(aabb_data.submesh_aabbs),
+            .aabb_buffer = ctx.buffers.create(std::move(aabb_data.device_buffer)),
     };
 }

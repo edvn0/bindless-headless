@@ -15,6 +15,7 @@ struct CLIOptions {
     bool vsync{false};
     std::uint32_t msaa{1};
     std::optional<bool> validation_layers{};
+    bool disable_output_images{true};
 };
 
 auto parse_cli(int argc, char **argv) -> CLIOptions;

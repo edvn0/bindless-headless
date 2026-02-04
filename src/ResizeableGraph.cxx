@@ -1,5 +1,8 @@
 #include "ResizeableGraph.hxx"
 
+#include <ostream>
+#include <sstream>
+
 auto ResizeGraph::to_graphviz_dot(bool include_topo_rank) const -> std::string {
     std::ostringstream out;
     out << "digraph ResizeGraph {\n";

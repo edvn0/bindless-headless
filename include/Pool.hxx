@@ -7,6 +7,7 @@
 #include <deque>
 #include <functional>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <vk_mem_alloc.h>

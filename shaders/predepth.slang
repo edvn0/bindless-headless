@@ -58,19 +58,9 @@ VSOut main_vs_mdi(
 [shader("fragment")]
 void fs_main(VSOut i, uniform PC pc)
 {
-    // 1. Get Material Metadata
     Material mat = pc.materials[i.material_id];
-
-    // 2. Sample Alpha
-    // We use the sampler_index provided in push constants
-    float alpha = 1.0;
-    if (mat.has_albedo_map()) {
-        alpha = sample_texture(i.uv, mat.albedo_map, pc.sampler_index).a;
-    }
-
-    // 3. Discard if below threshold
-    // Using 0.5 is standard, but you could add this to the Material struct
-    if (alpha < 0.99f) {
+    float alpha = 1.0 - mat.albedo_factor.a;
+    if (alpha < 0.5f) {
         discard;
     }
 }
