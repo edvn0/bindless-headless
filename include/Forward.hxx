@@ -7,3 +7,5 @@ struct ReflectionData;
 struct RenderContext;
 struct PipelineCache;
 class Swapchain;
+struct MeshData;
+struct AABB;

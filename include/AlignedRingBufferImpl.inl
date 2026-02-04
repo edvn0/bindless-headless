@@ -5,14 +5,14 @@
 template<typename T, std::size_t N>
     requires std::is_trivial_v<T>
 auto AlignedRingBuffer<T, N>::create(RenderContext &ctx, u64 elements_per_slot, VkBufferUsageFlags extra_usage,
-                                     std::string_view name) -> tl::expected<AlignedRingBuffer, BufferCreateError> {
+                                     std::string_view name) -> tl::expected<AlignedRingBuffer, Error> {
     constexpr auto align_up_pow2 = [](u64 value, u64 alignment) -> u64 {
         return (value + alignment - 1) & ~(alignment - 1);
     };
 
     if (elements_per_slot == 0) {
         error("AlignedRingBuffer: elements_per_slot must be > 0");
-        return tl::unexpected{BufferCreateError{}};
+        return tl::make_unexpected(Error::make_error(Error::Type::InvalidArgument, "elements_per_slot must be > 0"));
     }
 
     AlignedRingBuffer out{};

@@ -1,7 +1,5 @@
 import common;
 
-
-
 float3 safe_normalize(float3 v)
 {
     float l2 = dot(v, v);
@@ -31,6 +29,7 @@ float3 oct_decode(float2 e)
     float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
     float t = saturate(-n.z);
     n.xy += select(n.xy >= 0.0, -t, t);
+
     return safe_normalize(n);
 }
 
@@ -42,7 +41,7 @@ float2 unorm_to_oct(float2 u)   { return u * 2.0 - 1.0; }
 // -------------------------------------------------------------------------------------------------
 struct SurfaceMaterial
 {
-    float3 albedo;
+    float4 albedo;
     float3 normal_ws;
     float  roughness;
     float  metallic;
@@ -86,19 +85,19 @@ SurfaceMaterial evaluate_material_tbn(
     SurfaceMaterial surf;
 
     // Albedo
-    if ((mat.flags & FLAG_ALBEDO_MAP) != 0)
+    if (mat.has_albedo_map())
     {
         float4 a = sample_texture(uv, mat.albedo_map, sampler_index);
-        surf.albedo = a.rgb * mat.albedo_factor.rgb;
+        surf.albedo = a * mat.albedo_factor;
     }
     else
     {
-        surf.albedo = mat.albedo_factor.rgb;
+        surf.albedo = mat.albedo_factor.rgba;
     }
 
     // Normal (tangent-space -> world-space)
     float3 N = safe_normalize(n_ws_geom);
-    if ((mat.flags & FLAG_NORMAL_MAP) != 0)
+    if (mat.has_normal_map())
     {
         float3 n_ts = sample_normal_map_ts(uv, mat.normal_map, sampler_index);
         N = normal_ts_to_ws(n_ts, t_ws, b_ws, N);
@@ -106,7 +105,7 @@ SurfaceMaterial evaluate_material_tbn(
     surf.normal_ws = N;
 
     // Roughness
-    if ((mat.flags & FLAG_ROUGHNESS_MAP) != 0)
+    if (mat.has_roughness_map())
     {
         float r = sample_texture(uv, mat.roughness_map, sampler_index).r;
         surf.roughness = r * mat.roughness_factor;
@@ -118,7 +117,7 @@ SurfaceMaterial evaluate_material_tbn(
     surf.roughness = clamp(surf.roughness, 0.04, 1.0);
 
     // Metallic
-    if ((mat.flags & FLAG_METALLIC_MAP) != 0)
+    if (mat.has_metallic_map())
     {
         float m = sample_texture(uv, mat.metallic_map, sampler_index).r;
         surf.metallic = m * mat.metallic_factor;
@@ -130,7 +129,7 @@ SurfaceMaterial evaluate_material_tbn(
     surf.metallic = saturate(surf.metallic);
 
     // Occlusion
-    if ((mat.flags & FLAG_OCCLUSION_MAP) != 0)
+    if (mat.has_occlusion_map())
     {
         surf.occlusion = sample_texture(uv, mat.occlusion_map, sampler_index).r;
     }
@@ -140,7 +139,7 @@ SurfaceMaterial evaluate_material_tbn(
     }
 
     // Emissive
-    if ((mat.flags & FLAG_EMISSIVE_MAP) != 0)
+    if (mat.has_emissive_map())
     {
         float3 e = sample_texture(uv, mat.emissive_map, sampler_index).rgb;
         surf.emissive = e * mat.emissive_factor;
@@ -233,8 +232,42 @@ float3 evaluate_directional_light(
     float  roughness,
     float  metallic)
 {
-    float3 L = -light_dir_from;
+    float3 L = light_dir_from;
     float3 radiance = light_color * light_intensity;
+    return calculate_direct_lighting(L, V, N, albedo, roughness, metallic, radiance);
+}
+
+float3 evaluate_point_light_fixed_v3(
+    PointLight light,
+    float3 world_pos,
+    float3 V,
+    float3 N,
+    float3 albedo,
+    float  roughness,
+    float  metallic)
+{
+    float3 light_pos = light.position_radius.xyz;
+    float  radius    = light.position_radius.w;
+    float3 light_col = light.colour_intensity.rgb;
+    float  intensity = light.colour_intensity.a * 10;
+
+    float3 L = light_pos - world_pos;
+    float dist_sq = dot(L, L);
+    float dist = sqrt(dist_sq);
+
+    if (dist < 1e-4) return 0.0.xxx;
+    L /= dist;
+
+    // Early out if beyond radius
+    if (dist > radius) return 0.0.xxx;
+
+    // UE4-style windowed attenuation
+    float radius_sq = radius * radius;
+    float attenuation = saturate(1.0 - (dist_sq / radius_sq));
+    attenuation = attenuation * attenuation; // Square for smooth falloff
+    attenuation = attenuation / (dist_sq + 1.0); // Physical falloff
+
+    float3 radiance = light_col * intensity * attenuation;
     return calculate_direct_lighting(L, V, N, albedo, roughness, metallic, radiance);
 }
 
@@ -277,14 +310,6 @@ float3 calculate_ambient(
     return kD * albedo * ambient_color * ambient_intensity * occlusion;
 }
 
-// -------------------------------------------------------------------------------------------------
-// GBuffer pass (VS+FS)
-// GBuffer targets (you stated):
-//   gbuffer0: ALBEDO_AO           VK_FORMAT_R8G8B8A8_UNORM
-//   gbuffer1: NORMAL_OCT + RM     VK_FORMAT_R16G16B16A16_UNORM
-//   gbuffer2: EMISSIVE_HDR        VK_FORMAT_R16G16B16A16_SFLOAT
-// Depth: D32 (sampled via a view you can index in sampled_images[])
-// -------------------------------------------------------------------------------------------------
 struct VertexInput
 {
     float3 position;
@@ -307,15 +332,6 @@ struct VertexOutput
 
     nointerpolation uint material : TEXCOORD5;
 };
-/*
-struct RenderingPushConstants {
-    const DeviceAddress ubo;
-    const DeviceAddress transforms;
-    const DeviceAddress draw_material_ids;
-    const DeviceAddress materials;
-    const u32 base_draw_id;
-    const u32 sampler_index;};
-*/
 
 struct RenderingPushConstants
 {
@@ -361,13 +377,12 @@ VertexOutput main_vs_mdi(
     float3 t_local = safe_normalize(unpackSnorm3x10_1x2(input.tangent).xyz);
     float3 b_local = safe_normalize(unpackSnorm3x10_1x2(input.bitangent).xyz);
 
-    // Transform basis by model (assumes no crazy non-uniform scale; if you have it, use inverse-transpose for normal)
     float3x3 m3 = (float3x3)model;
     o.n_ws = safe_normalize(mul(m3, n_local));
     o.t_ws = safe_normalize(mul(m3, t_local));
     o.b_ws = safe_normalize(mul(m3, b_local));
 
-    UV4 uvpack = unpack_uvs_unorm4x8(input.uvs);
+    UV4 uvpack = unpack_uvs_snorm4x8(input.uvs);
     o.uv = uvpack.uv0;
     o.material = material_id;
 
@@ -398,16 +413,13 @@ void main_fs_mdi(
         pc.sampler_index
     );
 
-    // RT0: albedo (linear) + AO
-    out_gbuf.albedo_ao = float4(surf.albedo, saturate(surf.occlusion));
+    out_gbuf.albedo_ao = float4(surf.albedo.rgb, saturate(surf.occlusion));
 
-    // RT1: oct normal in [0,1] + roughness + metallic
     float2 oct = oct_encode(surf.normal_ws);
     float2 oct_u = oct_to_unorm(oct);
     out_gbuf.normal_rough_metal = float4(oct_u, surf.roughness, surf.metallic);
 
-    // RT2: emissive HDR
-    out_gbuf.emissive_hdr = float4(surf.emissive, 1.0);
+    out_gbuf.emissive_hdr = float4(surf.emissive, float(input.material));
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -432,15 +444,19 @@ struct DeferredLightingPushConstants
     uint sampler_index;              // for reading gbuffer + depth
 };
 
-float3 reconstruct_world_pos_from_depth(float2 uv, float depth, UBO* ubo)
+float3 reconstruct_world_pos_from_depth_fixed(float2 uv, float depth, UBO* ubo)
 {
-    // uv [0,1] -> ndc [-1,1]
+    // For reverse-Z
     float2 ndc_xy = uv * 2.0 - 1.0;
-
-    // Vulkan depth is [0,1]. Works with reverse-Z as long as inv_view_projection matches.
     float4 clip = float4(ndc_xy, depth, 1.0);
+
     float4 world = mul(ubo->inv_view_projection, clip);
-    return world.xyz / max(world.w, 1e-6);
+
+    // CRITICAL: Check for valid W
+    if (abs(world.w) < 1e-6)
+        return float3(0, 0, 0);
+
+    return world.xyz / world.w;
 }
 
 struct VSOut
@@ -452,7 +468,6 @@ struct VSOut
 [shader("vertex")]
 VSOut vs_fullscreen_main(uint vertex_id : SV_VertexID)
 {
-    // Fullscreen triangle in clip space
     float2 pos = float2(
         (vertex_id == 2) ?  3.0 : -1.0,
         (vertex_id == 1) ?  3.0 : -1.0
@@ -460,9 +475,6 @@ VSOut vs_fullscreen_main(uint vertex_id : SV_VertexID)
 
     VSOut o;
     o.position = float4(pos, 0.0, 1.0);
-
-    // Clip [-1,1] -> UV [0,1]
-    // Flip Y for Vulkan-style UV orientation (match your other sampling expectations)
     o.uv = pos * 0.5 + 0.5;
     o.uv.y = 1.0 - o.uv.y;
 
@@ -472,18 +484,14 @@ VSOut vs_fullscreen_main(uint vertex_id : SV_VertexID)
 [shader("fragment")]
 float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : SV_Target0
 {
-    // Use the VS-provided UVs (these are the "correct uvs from the vertex shader")
     float2 uv = i.uv;
 
-    // Same logic as compute shader, but writing SV_Target0 instead of RWTexture2D.
     float4 g0 = sample_texture(uv, pc.gbuffer0_index, pc.sampler_index);
     float4 g1 = sample_texture(uv, pc.gbuffer1_index, pc.sampler_index);
     float4 g2 = sample_texture(uv, pc.gbuffer2_index, pc.sampler_index);
 
-    // Depth sampled as .x (requires a sampled view for the depth image compatible with your sample_texture path)
     float depth = sample_texture(uv, pc.depth_index, pc.sampler_index).x;
 
-    // Reverse-Z convention: you cleared predepth to 0.0 -> treat as "no geometry"
     if (depth <= 0.0)
         return float4(0.0, 0.0, 0.0, 1.0);
 
@@ -497,7 +505,7 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     float3 emissive = g2.rgb;
 
     float3 N = oct_decode(unorm_to_oct(oct_u));
-    float3 world_pos = reconstruct_world_pos_from_depth(uv, depth, pc.frame_ubo);
+    float3 world_pos = reconstruct_world_pos_from_depth_fixed(uv, depth, pc.frame_ubo);
     float3 V = safe_normalize(pc.frame_ubo->camera_position.xyz - world_pos);
 
     float3 color = calculate_ambient(
@@ -524,7 +532,7 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     uint light_count = *pc.point_light_count;
     for (uint li = 0; li < light_count; ++li)
     {
-        color += evaluate_point_light(
+        color += evaluate_point_light_fixed_v3(
             pc.point_lights[li],
             world_pos,
             V,
@@ -578,7 +586,7 @@ void main_gbuffer_lighting(uint3 dtid : SV_DispatchThreadID, uniform DeferredLig
     float3 emissive = g2.rgb;
 
     float3 N = oct_decode(unorm_to_oct(oct_u));
-    float3 world_pos = reconstruct_world_pos_from_depth(uv, depth, pc.frame_ubo);
+    float3 world_pos = reconstruct_world_pos_from_depth_fixed(uv, depth, pc.frame_ubo);
 
     float3 V = safe_normalize(pc.frame_ubo->camera_position.xyz - world_pos);
 

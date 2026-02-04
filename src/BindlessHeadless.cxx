@@ -157,21 +157,24 @@ namespace destruction {
 
     auto swapchain(Swapchain &sc) -> void { sc.destroy(); }
 
-
-    auto timeline_compute(VkDevice device, ComputeTimeline &comp) -> void {
-        if (comp.pool)
-            vkDestroyCommandPool(device, comp.pool, nullptr);
-        if (comp.timeline)
-            vkDestroySemaphore(device, comp.timeline, nullptr);
-        comp = {};
+    auto tl(VkDevice dev, auto& t) -> void {
+        if (t.pool)
+            vkDestroyCommandPool(dev, t.pool, nullptr);
+        if (t.timeline)
+            vkDestroySemaphore(dev, t.timeline, nullptr);
+        t = {};
     }
 
-    auto timeline_compute(VkDevice device, GraphicsTimeline &comp) -> void {
-        if (comp.pool)
-            vkDestroyCommandPool(device, comp.pool, nullptr);
-        if (comp.timeline)
-            vkDestroySemaphore(device, comp.timeline, nullptr);
-        comp = {};
+    auto timeline(VkDevice device, ComputeTimeline &t) -> void {
+        tl(device, t);
+    }
+
+    auto timeline(VkDevice device, GraphicsTimeline &t) -> void {
+        tl(device, t);
+    }
+
+    auto timeline(VkDevice device, TransferTimeline &t) -> void {
+        tl(device, t);
     }
 
     auto pipeline(VkDevice dev, VkPipeline &p, VkPipelineLayout &l) -> void {
@@ -590,6 +593,239 @@ auto create_image_from_mips_v2(
     return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format, data_u8, mip_offsets, mip_sizes, name);
 }
 
+// Helper to detect if a format is block-compressed
+ auto is_block_compressed_format(VkFormat format) -> bool {
+    switch (format) {
+        case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
+        case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+        case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+        case VK_FORMAT_BC2_UNORM_BLOCK:
+        case VK_FORMAT_BC2_SRGB_BLOCK:
+        case VK_FORMAT_BC3_UNORM_BLOCK:
+        case VK_FORMAT_BC3_SRGB_BLOCK:
+        case VK_FORMAT_BC4_UNORM_BLOCK:
+        case VK_FORMAT_BC4_SNORM_BLOCK:
+        case VK_FORMAT_BC5_UNORM_BLOCK:
+        case VK_FORMAT_BC5_SNORM_BLOCK:
+        case VK_FORMAT_BC6H_UFLOAT_BLOCK:
+        case VK_FORMAT_BC6H_SFLOAT_BLOCK:
+        case VK_FORMAT_BC7_UNORM_BLOCK:
+        case VK_FORMAT_BC7_SRGB_BLOCK:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Wrapper that creates images with proper usage flags for compressed formats
+auto create_texture_image_v2(
+    VmaAllocator alloc,
+    GlobalCommandContext& cmd_ctx,
+    u32 width,
+    u32 height,
+    VkFormat format,
+    std::span<const u8> data,
+    std::span<const u32> mip_offsets,
+    std::span<const u32> mip_sizes,
+    std::string_view name
+) -> OffscreenTarget
+{
+    // For compressed formats, we need to bypass create_offscreen_target's
+    // assumption that all color images are attachments
+    u32 const mip_levels = static_cast<u32>(mip_offsets.size());
+    if (mip_levels == 0 || mip_sizes.size() != mip_levels) {
+        // fallback: use the standard path
+        return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format,
+                                        data, mip_offsets, mip_sizes, name);
+    }
+
+    bool const is_compressed = is_block_compressed_format(format);
+
+    if (is_compressed) {
+        // Manually create the image with proper usage flags for compressed textures
+        OffscreenTarget t{};
+        t.width = width;
+        t.height = height;
+        t.format = format;
+
+        VmaAllocatorInfo ai{};
+        vmaGetAllocatorInfo(alloc, &ai);
+
+        // Compressed formats: SAMPLED + TRANSFER (no COLOR_ATTACHMENT)
+        VkImageUsageFlags const usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+        VkImageCreateInfo ici{};
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = format;
+        ici.extent = {width, height, 1};
+        ici.mipLevels = mip_levels;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = usage;
+        ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        vk_check(vmaCreateImage(alloc, &ici, &aci, &t.image, &t.allocation, nullptr));
+
+        VkImageViewCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = t.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = format;
+        vci.components = {
+            VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY
+        };
+        vci.subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = mip_levels,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+
+        // Create sampled view (no attachment view for compressed formats)
+        vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.sampled_view));
+        t.attachment_view = VK_NULL_HANDLE; // Not usable as attachment
+        t.storage_view = VK_NULL_HANDLE;    // BC7 doesn't support storage
+
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
+        vmaSetAllocationName(alloc, t.allocation, name.data());
+
+        // Now upload the data if provided
+        if (!data.empty()) {
+            // Validate bounds
+            for (u32 i = 0; i < mip_levels; ++i) {
+                u64 const end = u64(mip_offsets[i]) + u64(mip_sizes[i]);
+                if (end > data.size_bytes()) {
+                    return t; // bail out safely
+                }
+            }
+
+            VmaAllocationCreateInfo staging_aci{};
+            staging_aci.usage = VMA_MEMORY_USAGE_AUTO;
+            staging_aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+
+            VkBufferCreateInfo bci{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .size = static_cast<VkDeviceSize>(data.size_bytes()),
+                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = nullptr,
+            };
+
+            VkBuffer staging{};
+            VmaAllocation staging_alloc{};
+            vk_check(vmaCreateBuffer(alloc, &bci, &staging_aci, &staging, &staging_alloc, nullptr));
+
+            void* mapped{};
+            vk_check(vmaMapMemory(alloc, staging_alloc, &mapped));
+            std::memcpy(mapped, data.data(), data.size_bytes());
+            vmaUnmapMemory(alloc, staging_alloc);
+
+            auto submit_copy = [&](VkCommandBuffer cb) {
+                // Transition to TRANSFER_DST
+                auto pre = create_info<VkImageMemoryBarrier2>();
+                pre.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                pre.srcAccessMask = 0;
+                pre.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                pre.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                pre.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                pre.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                pre.image = t.image;
+                pre.subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = mip_levels,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                };
+
+                auto di_pre = create_info<VkDependencyInfo>();
+                di_pre.imageMemoryBarrierCount = 1;
+                di_pre.pImageMemoryBarriers = &pre;
+
+                vkCmdPipelineBarrier2(cb, &di_pre);
+
+                // Copy each mip level
+                std::vector<VkBufferImageCopy> copies;
+                copies.reserve(mip_levels);
+
+                for (u32 level = 0; level < mip_levels; ++level) {
+                    u32 const lw = std::max(1u, width >> level);
+                    u32 const lh = std::max(1u, height >> level);
+
+                    VkBufferImageCopy bic{
+                        .bufferOffset = static_cast<VkDeviceSize>(mip_offsets[level]),
+                        .bufferRowLength = 0,
+                        .bufferImageHeight = 0,
+                        .imageSubresource = {
+                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                            .mipLevel = level,
+                            .baseArrayLayer = 0,
+                            .layerCount = 1,
+                        },
+                        .imageOffset = {0, 0, 0},
+                        .imageExtent = {lw, lh, 1},
+                    };
+
+                    copies.push_back(bic);
+                }
+
+                vkCmdCopyBufferToImage(cb, staging, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                      static_cast<u32>(copies.size()), copies.data());
+
+                // Transition to GENERAL for sampling
+                auto post = create_info<VkImageMemoryBarrier2>();
+                post.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                post.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                post.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                post.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                post.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                post.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                post.image = t.image;
+                post.subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = mip_levels,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                };
+
+
+
+                auto di_post = create_info<VkDependencyInfo>();
+                di_post.imageMemoryBarrierCount = 1;
+                di_post.pImageMemoryBarriers = &post;
+
+                vkCmdPipelineBarrier2(cb, &di_post);
+            };
+
+            submit_one_time_cmd(cmd_ctx, submit_copy, true);
+            t.initialized = true;
+
+            vmaDestroyBuffer(alloc, staging, staging_alloc);
+        }
+
+        return t;
+    } else {
+        // Uncompressed format: use the standard path
+        return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format,
+                                        data, mip_offsets, mip_sizes, name);
+    }
+}
+
 auto create_image_from_mips_v2(
     VmaAllocator alloc,
     GlobalCommandContext& cmd_ctx,
@@ -668,11 +904,11 @@ auto create_image_from_mips_v2(
             .layerCount = 1,
         };
 
-        VkDependencyInfo di_pre{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &pre,
-        };
+
+
+        auto di_pre = create_info<VkDependencyInfo>();
+            di_pre.imageMemoryBarrierCount = 1;
+            di_pre.pImageMemoryBarriers = &pre;
 
         vkCmdPipelineBarrier2(cb, &di_pre);
 
@@ -721,11 +957,9 @@ auto create_image_from_mips_v2(
             .layerCount = 1,
         };
 
-        VkDependencyInfo di_post{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &post,
-        };
+        auto di_post = create_info<VkDependencyInfo>();
+            di_post.imageMemoryBarrierCount = 1;
+            di_post.pImageMemoryBarriers = &post;
 
         vkCmdPipelineBarrier2(cb, &di_post);
     };
@@ -737,14 +971,6 @@ auto create_image_from_mips_v2(
     vmaDestroyBuffer(alloc, staging, staging_alloc);
     return t;
 }
-
-// e.g.
-// struct DeviceChoice {
-//     VkPhysicalDevice physical_device{};
-//     u32 graphics_family{};
-//     u32 compute_family{};
-//     u32 transfer_family{};
-// };
 
 auto pick_physical_device(VkInstance instance)
     -> tl::expected<DeviceChoice, PhysicalDeviceChoice>

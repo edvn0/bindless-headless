@@ -131,15 +131,15 @@ public:
     }
 
     static auto create(RenderContext &ctx, u64 elements_per_slot, VkBufferUsageFlags extra_usage, std::string_view name)
-            -> tl::expected<AlignedRingBuffer, BufferCreateError>;
+            -> tl::expected<AlignedRingBuffer, Error>;
 
     static auto create(RenderContext &ctx, VkBufferUsageFlags extra_usage, std::string_view name)
-            -> tl::expected<AlignedRingBuffer, BufferCreateError> {
+            -> tl::expected<AlignedRingBuffer, Error> {
         return create(ctx, 1, extra_usage, name);
     }
 
     static auto create(RenderContext &ctx, std::string_view name)
-            -> tl::expected<AlignedRingBuffer, BufferCreateError> {
+            -> tl::expected<AlignedRingBuffer, Error> {
         return create(ctx, 1, VkBufferUsageFlags{0}, name);
     }
 };

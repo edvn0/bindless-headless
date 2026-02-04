@@ -4,55 +4,60 @@
 #include "ReflectionData.hxx"
 #include "Types.hxx"
 
-#include <array>
-#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <span>
-#include <string_view>
+#include <string>
+#include <tl/expected.hpp>
+#include <unordered_map>
 #include <vector>
 
-namespace detail {
-    struct Impl;
-}
+struct CacheEntry {
+    std::filesystem::file_time_type last_write_time;
+    std::vector<std::vector<u32>> spirv_results;
+    std::vector<ReflectionData> reflection_results;
+};
+
+namespace detail { struct Impl; }
 
 class Compiler {
 public:
     Compiler();
     ~Compiler();
 
-    Compiler(Compiler const &) = delete;
-    auto operator=(Compiler const &) -> Compiler & = delete;
+    Compiler(Compiler const&) = delete;
+    auto operator=(Compiler const&) -> Compiler& = delete;
+    Compiler(Compiler&&) noexcept;
+    auto operator=(Compiler&&) noexcept -> Compiler&;
 
-    Compiler(Compiler &&) noexcept;
-    auto operator=(Compiler &&) noexcept -> Compiler &;
-
+    // Fixed-size helper for fixed entry points
     template<std::size_t N>
-    auto compile_from_file(std::string_view path, std::span<const std::string_view, N> entries,
-                           std::span<ReflectionData, N> reflection_data) -> std::array<std::vector<u32>, N> {
-        std::array<std::vector<u32>, N> spirv{};
-        compile_from_file_impl(path, entries, reflection_data, spirv);
-        return spirv;
+    auto compile_from_file(std::string_view path,
+                           std::span<const std::string_view, N> entries,
+                           std::span<ReflectionData, N> reflection_data)
+                           -> tl::expected<std::array<std::vector<u32>, N>, std::string> {
+
+        std::vector<std::string_view> dyn_entries(entries.begin(), entries.end());
+        std::vector<ReflectionData> dyn_refl(N);
+
+        auto result = compile_from_file(path, dyn_entries, dyn_refl);
+        if (!result) return tl::make_unexpected(result.error());
+
+        std::array<std::vector<u32>, N> out_spirv;
+        for (std::size_t i = 0; i < N; ++i) {
+            out_spirv[i] = std::move((*result)[i]);
+            reflection_data[i] = std::move(dyn_refl[i]);
+        }
+        return out_spirv;
     }
 
-    auto compile_from_file(std::string_view path, std::span<const std::string_view> entries,
-                           std::span<ReflectionData> reflection_data) -> std::vector<std::vector<u32>>;
+    // Base dynamic method
+    auto compile_from_file(std::string_view path,
+                           std::span<const std::string_view> entries,
+                           std::span<ReflectionData> reflection_data)
+                           -> tl::expected<std::vector<std::vector<u32>>, std::string>;
 
 private:
     std::unique_ptr<detail::Impl> impl;
-
-    template<std::size_t N>
-    auto compile_from_file_impl(std::string_view path, std::span<const std::string_view, N> entries,
-                                std::span<ReflectionData, N> reflection_data,
-                                std::array<std::vector<u32>, N> &out_spirv) -> void {
-        std::vector<std::string_view> dyn_entries(entries.begin(), entries.end());
-        std::vector<ReflectionData> dyn_refl(reflection_data.begin(), reflection_data.end());
-
-        auto dyn_spv = compile_from_file(path, dyn_entries, dyn_refl);
-
-        for (std::size_t i = 0; i < N; ++i) {
-            out_spirv[i] = std::move(dyn_spv[i]);
-            reflection_data[i] = dyn_refl[i];
-        }
-    }
+    std::unordered_map<std::string, CacheEntry, string_hash, string_eq> disk_cache;
 };

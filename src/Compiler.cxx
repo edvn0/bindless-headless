@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iterator>
+#include <tl/expected.hpp>
 
 #if !defined(ENGINE_OFFLINE_SHADERS)
 #include <slang-com-helper.h>
@@ -61,7 +62,8 @@ struct detail::Impl {
     virtual ~Impl() = default;
 
     virtual auto compile_from_file(std::string_view path, std::span<const std::string_view> entries,
-                                   std::span<ReflectionData> reflection_data) -> std::vector<std::vector<u32>> = 0;
+                                   std::span<ReflectionData> reflection_data)
+            -> tl::expected<std::vector<std::vector<u32>>, std::string> = 0;
 };
 
 #if defined(ENGINE_OFFLINE_SHADERS)
@@ -213,7 +215,8 @@ struct RuntimeSlangCompiler final : detail::Impl {
     }
 
     auto compile_from_file(std::string_view path, std::span<const std::string_view> entries,
-                           std::span<ReflectionData> reflection_data) -> std::vector<std::vector<u32>> override {
+                           std::span<ReflectionData> reflection_data)
+            -> tl::expected<std::vector<std::vector<u32>>, std::string> override {
         std::filesystem::path p{path};
         const auto name = p.filename().string();
         const auto src = load_file_to_string(p);
@@ -269,10 +272,33 @@ Compiler::Compiler(Compiler &&) noexcept = default;
 auto Compiler::operator=(Compiler &&) noexcept -> Compiler & = default;
 
 auto Compiler::compile_from_file(std::string_view path, std::span<const std::string_view> entries,
-                                 std::span<ReflectionData> reflection_data) -> std::vector<std::vector<u32>> {
-    if (reflection_data.size() < entries.size()) {
-        // keep you honest: you rely on parallel arrays everywhere
-        warn("Reflection span smaller than entries span ({} < {})", reflection_data.size(), entries.size());
+                                 std::span<ReflectionData> reflection_data)
+        -> tl::expected<std::vector<std::vector<u32>>, std::string> {
+
+    std::filesystem::path p{path};
+    if (!std::filesystem::exists(p)) {
+        return tl::make_unexpected("File not found: " + std::string(path));
     }
-    return impl->compile_from_file(path, entries, reflection_data);
+
+    auto current_write_time = std::filesystem::last_write_time(p);
+
+    if (auto it = disk_cache.find(path); it != disk_cache.end()) {
+        if (it->second.last_write_time == current_write_time) {
+            for (size_t i = 0; i < std::min(reflection_data.size(), it->second.reflection_results.size()); ++i) {
+                reflection_data[i] = it->second.reflection_results[i];
+            }
+            return it->second.spirv_results;
+        }
+    }
+
+    auto result = impl->compile_from_file(path, entries, reflection_data);
+
+    if (result) {
+        disk_cache[std::string(path)] =
+                CacheEntry{.last_write_time = current_write_time,
+                           .spirv_results = *result,
+                           .reflection_results = {reflection_data.begin(), reflection_data.end()}};
+    }
+
+    return result;
 }

@@ -20,7 +20,7 @@ auto parse_cli(int argc, char **argv) -> CLIOptions {
     app.add_option("-n,--iterations", opt.iteration_count, "Number of main frame iterations")
             ->check(CLI::Range(1u, 10000000u));
 
-    app.add_option("--validation", opt.validation_layers, "Enable validation layers")->default_val(true);
+    app.add_option("--validation", opt.validation_layers, "Enable validation layers");
     app.add_option("-l,--light_count", opt.light_count, "Light count");
     app.add_option("--width", opt.width, "Width of 'window'")->default_val(1280);
     app.add_option("--height", opt.height, "Height of 'window'")->default_val(720);

@@ -9,6 +9,7 @@
 #include <volk.h>
 #include <algorithm>
 #include <format>
+#include <source_location>
 
 #include <vk_mem_alloc.h>
 
@@ -55,10 +56,61 @@ struct OffscreenTarget {
     bool initialized{false};
 
     auto is_depth() const -> bool;
+
     auto is_stencil() const -> bool;
+
     auto transition_if_not_initialised(VkCommandBuffer, VkImageLayout,
                                        std::pair<VkAccessFlagBits2, VkPipelineStageFlagBits2> destination_flags)
-            -> void;
+        -> void;
+
+    auto transition(
+        VkCommandBuffer cmd,
+        VkImageLayout old_layout,
+        VkImageLayout new_layout,
+        VkPipelineStageFlags2 src_stage,
+        VkAccessFlags2 src_access,
+        VkPipelineStageFlags2 dst_stage,
+        VkAccessFlags2 dst_access,
+        VkImageSubresourceRange subresource_range
+    ) const -> void;
+
+    auto transition(
+        VkCommandBuffer cmd,
+        VkImageLayout old_layout,
+        VkImageLayout new_layout,
+        VkPipelineStageFlags2 src_stage,
+        VkAccessFlags2 src_access,
+        VkPipelineStageFlags2 dst_stage,
+        VkAccessFlags2 dst_access
+    ) const -> void {
+        transition(
+            cmd,
+            old_layout,
+            new_layout,
+            src_stage,
+            src_access,
+            dst_stage,
+            dst_access,
+            default_subresource_range()
+        );
+    }
+
+private:
+    auto default_subresource_range() const -> VkImageSubresourceRange {
+        VkImageAspectFlags aspect = 0;
+
+        if (is_depth()) aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
+        if (is_stencil()) aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+        if (aspect == 0) aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+
+        return VkImageSubresourceRange{
+            .aspectMask = aspect,
+            .baseMipLevel = 0,
+            .levelCount = VK_REMAINING_MIP_LEVELS,
+            .baseArrayLayer = 0,
+            .layerCount = VK_REMAINING_ARRAY_LAYERS,
+        };
+    }
 };
 
 struct FrameStats {
@@ -157,71 +209,78 @@ public:
     }
 };
 
-template<typename T>
-concept IsFunctionPointerLike =
-        std::is_pointer_v<std::remove_cvref_t<T>> && std::is_function_v<std::remove_pointer_t<std::remove_cvref_t<T>>>;
-/*
-template<IsFunctionPointerLike Fn>
-class MaybeNoOp {
-    mutable std::mutex access_mutex;
-    Fn f = nullptr;
 
-public:
-    explicit MaybeNoOp(Fn fn) : f(std::move(fn)) {}
-    explicit MaybeNoOp(std::nullptr_t) : f({}) {}
-    MaybeNoOp() = default;
-
-    [[nodiscard]] auto empty() const noexcept -> bool {
-        std::lock_guard lock(access_mutex);
-        return f == nullptr;
+template<typename... Ts>
+auto first_non_empty(const Ts&... strs) -> std::string {
+    for (const auto* s : { &strs... }) {
+        if (!s->empty())
+            return *s;
     }
+    return {};
+}
 
-    explicit operator bool() const noexcept {
-        return !empty();
-    }
+struct Error {
+    enum class Type {
+        MeshLoadError,
+        TextureLoadError,
+        ShaderCompileError,
+        ShaderLinkError,
+        RenderError,
+        InvalidArgument,
+        DeviceSelectionError,
+        CouldNotMapMemory,
+        CouldNotCreateBuffer,
+InvalidSize,
+        UnknownError
+    };
+    Type type;
+    std::string message;
+    std::source_location location {std::source_location::current()};
 
-    auto operator=(Fn fn) noexcept -> MaybeNoOp& {
-        std::lock_guard lock(access_mutex);
-        f = fn;
-        return *this;
-    }
-
-    auto operator=(std::nullptr_t) noexcept -> MaybeNoOp& {
-        std::lock_guard lock(access_mutex);
-        f = nullptr;
-        return *this;
-    }
-
-    template<typename... Args>
-    auto operator()(Args &&... args) const {
-        using r_t = std::invoke_result_t<Fn, Args...>;
-
-        std::unique_lock lock(access_mutex);  // Lock BEFORE checking f
-
-        if constexpr (std::is_void_v<r_t>) {
-            if (f) {
-                std::invoke(f, std::forward<Args>(args)...);
-                return true;
-            }
-            return false;
-        } else {
-            if (f) {
-                return std::optional<r_t>{std::invoke(f, std::forward<Args>(args)...)};
-            }
-            return std::optional<r_t>{};
-        }
+    static auto make_error(Type type, const std::string& message) {
+        return Error{.type=type, .message=message};
     }
 };
-*/
+
+#define TRY_UNWRAP_TO(var_name, expected_expr, msg) \
+    auto var_name##_tmp = (expected_expr);           \
+    if (!var_name##_tmp.has_value()) {               \
+        const auto& err = var_name##_tmp.error();    \
+        warn("{}: (Error Type: {}) {}",              \
+             msg,                                    \
+             static_cast<i32>(err.type),             \
+             err.message);                           \
+        return err;                                      \
+    }                                                \
+    auto var_name = std::move(var_name##_tmp.value());
+
+    #define TRY_PROPAGATE(var_name, expected_expr, msg)      \
+        auto var_name##_tmp = (expected_expr);               \
+        if (!var_name##_tmp.has_value()) {                   \
+            auto err = std::move(var_name##_tmp.error());    \
+            warn("{}: {}", msg, err.message);                \
+            return tl::make_unexpected(std::move(err));      \
+        }                                                    \
+        auto var_name = std::move(var_name##_tmp.value());
+
+template<typename T>
+concept IsFunctionPointerLike =
+        std::is_pointer_v<std::remove_cvref_t<T> > && std::is_function_v<std::remove_pointer_t<std::remove_cvref_t<
+            T> > >;
 
 template<IsFunctionPointerLike Fn>
 class MaybeNoOp {
     std::atomic<Fn> f;
 
 public:
-    explicit MaybeNoOp(Fn fn) : f(fn) {}
-    explicit MaybeNoOp(std::nullptr_t) : f(nullptr) {}
-    MaybeNoOp() : f(nullptr) {}
+    explicit MaybeNoOp(Fn fn) : f(fn) {
+    }
+
+    explicit MaybeNoOp(std::nullptr_t) : f(nullptr) {
+    }
+
+    MaybeNoOp() : f(nullptr) {
+    }
 
     [[nodiscard]] auto empty() const noexcept -> bool { return f.load(std::memory_order_acquire) == nullptr; }
 
@@ -238,7 +297,7 @@ public:
     }
 
     template<typename... Args>
-    auto operator()(Args &&...args) const {
+    auto operator()(Args &&... args) const {
         using r_t = std::invoke_result_t<Fn, Args...>;
 
         // Load the function pointer atomically
@@ -259,7 +318,21 @@ public:
     }
 };
 
-constexpr auto matches(const auto &needle, const auto &&...haystack) { return ((needle == haystack) || ...); }
+constexpr auto matches(const auto &needle, const auto &&... haystack) { return ((needle == haystack) || ...); }
+
+constexpr std::string_view to_string(Error::Type type) {
+    using enum Error::Type;
+    switch (type) {
+        case MeshLoadError:        return "Mesh Load Error";
+        case TextureLoadError:     return "Texture Load Error";
+        case ShaderCompileError:   return "Shader Compile Error";
+        case ShaderLinkError:      return "Shader Link Error";
+        case RenderError:          return "Render Error";
+        case DeviceSelectionError: return "Device Selection Error";
+        case UnknownError:         return "Unknown Error";
+        default:                   return "Invalid Error Type";
+    }
+}
 
 namespace std {
     template<>
@@ -268,6 +341,20 @@ namespace std {
             using std::format_to;
             format_to(ctx.out(), "Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, IQR: {:.3f}", q.q1, q.q2, q.q3, q.iqr);
             return ctx.out();
+        }
+    };
+
+    // Error
+    template <>
+    struct formatter<Error> : formatter<string_view> {
+        auto format(const Error& err, format_context& ctx) const {
+            std::string s = std::format("[{}] {} (at {}:{}:{})",
+                to_string(err.type),
+                err.message,
+                err.location.file_name(),
+                err.location.line(),
+                err.location.column());
+            return std::formatter<std::string_view>::format(s, ctx);
         }
     };
 } // namespace std

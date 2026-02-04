@@ -36,7 +36,17 @@ auto RenderContext::create_query_pool(QueryPoolState &&state) -> QueryPoolHandle
     return query_pools.create(std::move(state));
 }
 
+auto RenderContext::create_pipeline(CompiledPipeline &&state) -> PipelineHandle {
+    return pipeline_pool.create(std::move(state));
+}
+
 auto RenderContext::device_address(BufferHandle handle) -> DeviceAddress {
+    if (const auto *buf = buffers.get(handle)) {
+        return buf->device_address();
+    }
+    return DeviceAddress::Invalid;
+}
+auto RenderContext::device_address(const BufferHandle handle) const -> DeviceAddress {
     if (const auto *buf = buffers.get(handle)) {
         return buf->device_address();
     }
@@ -48,6 +58,7 @@ auto RenderContext::clear_all() -> void {
     samplers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     buffers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     query_pools.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
+    pipeline_pool.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
 }
 
 namespace {
@@ -135,5 +146,18 @@ auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value) -> vo
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
         vkDestroyQueryPool(info.device, pool.pool, nullptr);
+    });
+}
+
+auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value) -> void {
+    auto impl = ctx.pipeline_pool.take(handle);
+    if (!impl) {
+        return;
+    }
+
+    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, pool = std::move(*impl)]() {
+        VmaAllocatorInfo info{};
+        vmaGetAllocatorInfo(alloc, &info);
+        destruction::pipeline(info.device, pool);
     });
 }

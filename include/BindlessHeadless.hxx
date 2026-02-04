@@ -131,9 +131,9 @@ using GraphicsTimeline = Timeline<4>;
 using ComputeTimeline = Timeline<3>;
 using TransferTimeline = Timeline<1>;
 
-auto create_compute_timeline(VkDevice , VkQueue , u32 ) -> ComputeTimeline;
-auto create_graphics_timeline(VkDevice , VkQueue , u32 ) -> GraphicsTimeline;
-auto create_transfer_timeline(VkDevice , VkQueue , u32 ) -> TransferTimeline;
+auto create_compute_timeline(VkDevice, VkQueue, u32) -> ComputeTimeline;
+auto create_graphics_timeline(VkDevice, VkQueue, u32) -> GraphicsTimeline;
+auto create_transfer_timeline(VkDevice, VkQueue, u32) -> TransferTimeline;
 
 auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler;
 
@@ -160,14 +160,17 @@ struct TargetSamplerConfiguration {
     std::bitset<3> sampled_storage_transfer{0b111};
 
     struct Dimensions {
-         u32 mip_levels {1};
-         u32 array_layers {1};
-         VkImageViewType view_type {VK_IMAGE_VIEW_TYPE_2D}; // lets you opt into 2D_ARRAY later
-     };
+        u32 mip_levels{1};
+        u32 array_layers{1};
+        VkImageViewType view_type{VK_IMAGE_VIEW_TYPE_2D}; // lets you opt into 2D_ARRAY later
+    };
 
-     Dimensions dims{};
+    Dimensions dims{};
 };
 
+auto is_block_compressed_format(VkFormat) -> bool;
+auto create_texture_image_v2(VmaAllocator, GlobalCommandContext &, u32, u32, VkFormat, std::span<const u8>,
+                             std::span<const u32>, std::span<const u32>, std::string_view) -> OffscreenTarget;
 auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
                              TargetSamplerConfiguration config, std::string_view name) -> OffscreenTarget;
 inline auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format,
@@ -183,28 +186,12 @@ inline auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFo
     return create_depth_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, true, name);
 }
 
-auto create_image_from_mips_v2(
-    VmaAllocator alloc,
-    GlobalCommandContext& cmd_ctx,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    std::span<const std::byte> data,
-    std::span<const u32> mip_offsets,
-    std::span<const u32> mip_sizes,
-    std::string_view name
-) -> OffscreenTarget;
-auto create_image_from_mips_v2(
-    VmaAllocator alloc,
-    GlobalCommandContext& cmd_ctx,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    std::span<const u8> data,
-    std::span<const u32> mip_offsets,
-    std::span<const u32> mip_sizes,
-    std::string_view name
-) -> OffscreenTarget;
+auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const std::byte> data, std::span<const u32> mip_offsets,
+                               std::span<const u32> mip_sizes, std::string_view name) -> OffscreenTarget;
+auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const u8> data, std::span<const u32> mip_offsets,
+                               std::span<const u32> mip_sizes, std::string_view name) -> OffscreenTarget;
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
                                std::string_view name) -> OffscreenTarget;
@@ -227,12 +214,14 @@ inline auto create_instance(std::span<const std::string_view> surface_required_e
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.pEngineName = "None";
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    app_info.apiVersion = VK_API_VERSION_1_3;
+    app_info.apiVersion = VK_API_VERSION_1_4;
 
     std::vector<const char *> enabled_extensions;
     for (const auto &required_extension: surface_required_extensions) {
         enabled_extensions.push_back(required_extension.data());
     }
+
+    info("Validation layers status: 'Disabled");
 
     auto instance_ci = create_info<VkInstanceCreateInfo>();
     instance_ci.pApplicationInfo = &app_info;
@@ -259,7 +248,7 @@ inline auto create_instance_with_debug(auto &callback, std::span<const std::stri
     app_info.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app_info.pEngineName = "None";
     app_info.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    app_info.apiVersion = VK_API_VERSION_1_3;
+    app_info.apiVersion = VK_API_VERSION_1_4;
 
     std::array<const char *, 1> enabled_layers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -333,12 +322,24 @@ using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32, u32>;
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
 enum class ComputeStamp : u32 { RotateBegin, RotateEnd, CullBegin, CullEnd, Count };
-enum class ComputeIndex : u32 { Rotate = 0, Cull = 1, Count};
+enum class ComputeIndex : u32 { Rotate = 0, Cull = 1, Count };
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
 inline constexpr u32 stats_compute_count = static_cast<u32>(ComputeIndex::Count);
 
-enum class GraphicsStamp : u32 { PreDepthBegin, PreDepthEnd, GbufferBegin, GbufferEnd, DeferredBegin, DeferredEnd, TonemapBegin, TonemapEnd, PresentBegin, PresentEnd, Count };
+enum class GraphicsStamp : u32 {
+    PreDepthBegin,
+    PreDepthEnd,
+    GbufferBegin,
+    GbufferEnd,
+    DeferredBegin,
+    DeferredEnd,
+    TonemapBegin,
+    TonemapEnd,
+    PresentBegin,
+    PresentEnd,
+    Count
+};
 enum class GraphicsIndex : u32 { PreDepth = 0, GBuffer = 1, Deferred = 2, Tonemap = 3, Present = 4, Count };
 
 inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
@@ -501,8 +502,11 @@ namespace destruction {
     auto allocator(VmaAllocator &alloc) -> void;
     auto swapchain(Swapchain &) -> void;
 
-    auto timeline_compute(VkDevice device, GraphicsTimeline &comp) -> void;
-    auto timeline_compute(VkDevice device, ComputeTimeline &comp) -> void;
+    auto timeline(VkDevice device, GraphicsTimeline &) -> void;
+    auto timeline(VkDevice device, TransferTimeline &) -> void;
+    auto timeline(VkDevice device, ComputeTimeline &) -> void;
+
+    auto timelines(VkDevice device, auto &&...timelines) -> void { (timeline(device, timelines), ...); }
 
     template<typename T>
     concept PipelineProvider = requires(T t) {
@@ -511,24 +515,27 @@ namespace destruction {
     } || requires(T t) {
         { std::get<0>(t) } -> std::same_as<VkPipeline &>;
         { std::get<1>(t) } -> std::same_as<VkPipelineLayout &>;
+    } || requires(T t) {
+        { t.pipeline } -> std::same_as<const VkPipeline &>;
+        { t.layout } -> std::same_as<const VkPipelineLayout &>;
     };
 
     template<PipelineProvider T>
-    auto as_pipeline_refs(T &t) -> std::pair<VkPipeline &, VkPipelineLayout &> {
+    auto as_pipeline_refs(T &t)  {
         if constexpr (requires {
                           t.pipeline;
                           t.layout;
                       }) {
-            return {t.pipeline, t.layout};
+            return std::make_pair(t.pipeline, t.layout);
         } else {
-            return {std::get<0>(t), std::get<1>(t)};
+            return std::make_pair(std::get<0>(t), std::get<1>(t));
         }
     }
 
     auto pipeline(VkDevice dev, VkPipeline &, VkPipelineLayout &) -> void;
 
     auto pipeline(VkDevice dev, PipelineProvider auto &val) -> void {
-        auto [p, l] = as_pipeline_refs(val);
+        auto&& [p, l] = as_pipeline_refs(val);
         destruction::pipeline(dev, p, l);
     }
 

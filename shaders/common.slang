@@ -35,18 +35,25 @@ struct Transform {
     float3x4 m;
 };
 
-UV4 unpack_uvs_unorm4x8(uint packed)
+UV4 unpack_uvs_snorm4x8(uint packed)
 {
-    const float inv_255 = 1.0 / 255.0;
+    // 1.0 / 127.0 matches GLM's constant
+    const float inv_127 = 0.0078740157480315f;
 
-    uint b0 =  packed        & 0xFFu;
-    uint b1 = (packed >>  8) & 0xFFu;
-    uint b2 = (packed >> 16) & 0xFFu;
-    uint b3 = (packed >> 24) & 0xFFu;
+    // Use GLSL-style bit extraction and cast to signed integers
+    // This replicates the "union" behavior by interpreting the bits as signed
+    int b0 = int(packed << 24) >> 24;
+    int b1 = int(packed << 16) >> 24;
+    int b2 = int(packed <<  8) >> 24;
+    int b3 = int(packed      ) >> 24;
 
     UV4 r;
-    r.uv0 = float2(float(b0), float(b1)) * inv_255;
-    r.uv1 = float2(float(b2), float(b3)) * inv_255; // currently 0,0 by construction
+    // Map to [-1.0, 1.0] and clamp to handle the -128 case correctly
+    r.uv0.x = clamp(float(b0) * inv_127, -1.0f, 1.0f);
+    r.uv0.y = clamp(float(b1) * inv_127, -1.0f, 1.0f);
+    r.uv1.x = clamp(float(b2) * inv_127, -1.0f, 1.0f);
+    r.uv1.y = clamp(float(b3) * inv_127, -1.0f, 1.0f);
+
     return r;
 }
 
@@ -92,6 +99,14 @@ struct Cube {
     float4 colour_intensity;
 };
 
+static const uint FLAG_ALBEDO_MAP    = 1 << 0;
+static const uint FLAG_NORMAL_MAP    = 1 << 1;
+static const uint FLAG_ROUGHNESS_MAP = 1 << 2;
+static const uint FLAG_METALLIC_MAP  = 1 << 3;
+static const uint FLAG_OCCLUSION_MAP = 1 << 4;
+static const uint FLAG_EMISSIVE_MAP  = 1 << 5;
+static const uint FLAG_IS_ALPHA_TESTED  = 1 << 6;
+
 struct Material {
     uint albedo_map;
     float4 albedo_factor;
@@ -104,14 +119,16 @@ struct Material {
     uint emissive_map;
     float3 emissive_factor;
     uint flags;
+
+    bool has_albedo_map()  { return (flags & FLAG_ALBEDO_MAP) != 0; }
+    bool has_normal_map()  { return (flags & FLAG_NORMAL_MAP) != 0; }
+    bool has_roughness_map()  { return (flags & FLAG_ROUGHNESS_MAP) != 0; }
+    bool has_metallic_map()  { return (flags & FLAG_METALLIC_MAP) != 0; }
+    bool has_occlusion_map()  { return (flags & FLAG_OCCLUSION_MAP) != 0; }
+    bool has_emissive_map()  { return (flags & FLAG_EMISSIVE_MAP) != 0; }
+    bool is_alpha_tested()  { return (flags & FLAG_IS_ALPHA_TESTED) != 0; }
 };
 
-static const uint FLAG_ALBEDO_MAP    = 1 << 0;
-static const uint FLAG_NORMAL_MAP    = 1 << 1;
-static const uint FLAG_ROUGHNESS_MAP = 1 << 2;
-static const uint FLAG_METALLIC_MAP  = 1 << 3;
-static const uint FLAG_OCCLUSION_MAP = 1 << 4;
-static const uint FLAG_EMISSIVE_MAP  = 1 << 5;
 
 [[vk::binding(0, 0)]]
 Texture2D<float4> sampled_images[];
@@ -122,10 +139,18 @@ SamplerState samplers[];
 [[vk::binding(2, 0)]]
 RWTexture2D<float4> storage_images[];
 
-float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0, float lod = 0.0)
+float4 sample_texture_lod(float2 uv, uint image_index, uint sampler_index = 0, float lod)
 {
     uint tex_idx = NonUniformResourceIndex(image_index);
     uint samp_idx = NonUniformResourceIndex(sampler_index);
-    
+
     return sampled_images[tex_idx].SampleLevel(samplers[samp_idx], uv, lod);
+}
+
+float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0)
+{
+    uint tex_idx = NonUniformResourceIndex(image_index);
+    uint samp_idx = NonUniformResourceIndex(sampler_index);
+
+    return sampled_images[tex_idx].Sample(samplers[samp_idx], uv);
 }

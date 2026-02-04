@@ -10,15 +10,6 @@
 #include "Logger.hxx"
 #include "Types.hxx"
 
-struct BufferCreateError {
-    enum class Type : u64 {
-        InvalidSize = 0,
-        CouldNotMapMemory = 1,
-    };
-
-    Type type{};
-};
-
 class Buffer {
     std::optional<u64> count;
     DeviceAddress dev_address{UINT64_MAX};
@@ -72,7 +63,7 @@ public:
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     static auto from_slice(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::span<const T> slice,
-                           const std::string_view name) -> tl::expected<Buffer, BufferCreateError> {
+                           const std::string_view name) -> tl::expected<Buffer, Error> {
         const auto size = slice.size_bytes();
 
         // Get physical device alignment requirements
@@ -101,7 +92,7 @@ public:
         if (const auto could = vmaCreateBuffer(allocator, &ci, &ai, &buffer.vk_buffer, &buffer.vma_allocation,
                                                &buffer.allocation_info);
             could != VK_SUCCESS) {
-            return tl::unexpected{BufferCreateError{BufferCreateError::Type::InvalidSize}};
+            return tl::unexpected{Error{Error::Type::InvalidSize}};
         }
 
         buffer.count = slice.size();
@@ -115,7 +106,7 @@ public:
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
-            return tl::unexpected{BufferCreateError{BufferCreateError::Type::CouldNotMapMemory}};
+            return tl::unexpected{Error{Error::Type::CouldNotMapMemory}};
         }
         std::memcpy(pointer, slice.data(), slice.size_bytes());
         vk_check(vmaFlushAllocation(allocator, buffer.allocation(), 0, VK_WHOLE_SIZE));
@@ -126,12 +117,12 @@ public:
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     static auto from_value(VmaAllocator &allocator, VkBufferUsageFlags ci, const T &value, const std::string_view name)
-            -> tl::expected<Buffer, BufferCreateError> {
+            -> tl::expected<Buffer, Error> {
         return from_slice<T>(allocator, ci, std::span{&value, 1}, name);
     }
 
     static auto zeroes(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::size_t size,
-                       const std::string_view name) -> tl::expected<Buffer, BufferCreateError> {
+                       const std::string_view name) -> tl::expected<Buffer, Error> {
         // Get physical device alignment requirements
         VmaAllocatorInfo alloc_info{};
         vmaGetAllocatorInfo(allocator, &alloc_info);
@@ -158,7 +149,7 @@ public:
         if (const auto could = vmaCreateBuffer(allocator, &ci, &ai, &buffer.vk_buffer, &buffer.vma_allocation,
                                                &buffer.allocation_info);
             could != VK_SUCCESS) {
-            return tl::unexpected{BufferCreateError{BufferCreateError::Type::InvalidSize}};
+            return tl::unexpected{Error{Error::Type::InvalidSize}};
         }
 
         buffer.set_name(allocator, name);
@@ -173,7 +164,7 @@ public:
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
-            return tl::unexpected{BufferCreateError{BufferCreateError::Type::CouldNotMapMemory}};
+            return tl::unexpected{Error{Error::Type::CouldNotMapMemory}};
         }
         std::memset(pointer, 0, aligned_size);
         vk_check(vmaFlushAllocation(allocator, buffer.allocation(), 0, VK_WHOLE_SIZE));

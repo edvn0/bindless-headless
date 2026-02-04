@@ -3,6 +3,7 @@
 #include "Buffer.hxx"
 #include "Pool.hxx"
 #include "Types.hxx"
+#include "Pipelines.hxx"
 
 struct QueryPoolState {
     VkQueryPool pool = VK_NULL_HANDLE;
@@ -18,6 +19,8 @@ using BufferHandle = Handle<struct BufferTag>;
 using BufferPool = Pool<BufferTag, Buffer>;
 using QueryPoolHandle = Handle<struct QueryPoolTag>;
 using QueryPoolPool = Pool<QueryPoolTag, QueryPoolState>;
+using PipelineHandle = Handle<struct PipelineTag>;
+using PipelinePool = Pool<PipelineTag, CompiledPipeline>;
 
 struct RenderContext {
     VmaAllocator &allocator;
@@ -38,6 +41,9 @@ struct RenderContext {
     QueryPoolPool query_pools{};
     auto create_query_pool(QueryPoolState &&) -> QueryPoolHandle;
 
+    PipelinePool pipeline_pool{};
+    auto create_pipeline(CompiledPipeline &&) -> PipelineHandle;
+
     auto device_address(BufferHandle) -> DeviceAddress;
     auto device_address(BufferHandle) const -> DeviceAddress;
     auto clear_all() -> void;
@@ -46,16 +52,12 @@ struct RenderContext {
 };
 
 auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value = UINT64_MAX) -> void;
-
 auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value = UINT64_MAX) -> void;
-
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value = UINT64_MAX) -> void;
-
 auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value = UINT64_MAX) -> void;
+auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value = UINT64_MAX) -> void;
 
 namespace util {
-
-
     template<typename Mesh>
     concept MeshLike = requires(Mesh m) {
         { m.vertex_buffer() };

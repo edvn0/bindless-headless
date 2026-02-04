@@ -79,11 +79,13 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     shader_ci.pCode = vert_code.data();
     vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &vert_module));
 
-    auto stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
-    stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stage_ci.module = vert_module;
-    stage_ci.pName = "main_vs_mdi";
-    std::array stages = {stage_ci};
+    auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vert_stage_ci.module = vert_module;
+    vert_stage_ci.pName = "main_vs_mdi";
+
+
+        std::array stages = {vert_stage_ci ,};
 
     // 2. Pipeline Layout (Inherit bindless + push constants)
     VkPushConstantRange push_range{
@@ -140,22 +142,28 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
     dy.pDynamicStates = dynamic_states.data();
 
-    std::array<VkVertexInputBindingDescription, 1> binding_descriptions{
-            VkVertexInputBindingDescription{
-                    .binding = 0,
-                    .stride = sizeof(glm::vec3),
-                    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-            },
-    };
+        std::array<VkVertexInputBindingDescription, 1> binding_descriptions{
+                VkVertexInputBindingDescription{
+                        .binding = 0,
+                        .stride = sizeof(glm::vec3) + sizeof(u32),
+                        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+                }
+        };
 
-    std::array<VkVertexInputAttributeDescription, 1> attribute_descriptions{
-            VkVertexInputAttributeDescription{
-                    .location = 0,
-                    .binding = 0,
-                    .format = VK_FORMAT_R32G32B32_SFLOAT,
-                    .offset = 0,
-            },
-    };
+        std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
+                VkVertexInputAttributeDescription{
+                        .location = 0,
+                        .binding = 0,
+                        .format = VK_FORMAT_R32G32B32_SFLOAT,
+                        .offset = 0,
+                },
+                VkVertexInputAttributeDescription{
+                        .location = 1,
+                        .binding = 0,
+                        .format = VK_FORMAT_R32_UINT,
+                        .offset = sizeof(glm::vec3),
+                },
+        };
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
     vertex_input.vertexBindingDescriptionCount = static_cast<u32>(binding_descriptions.size());
@@ -193,6 +201,147 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescripto
     return {pipeline, layout};
 }
 
+auto create_predepth_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
+                              const std::vector<uint32_t> &vert_code, const std::vector<uint32_t> &frag_code, VkFormat depth_format,
+                              VkSampleCountFlagBits samples) -> CompiledPipeline {
+    VkShaderModule vert_module{};
+    auto shader_ci = create_info<VkShaderModuleCreateInfo>();
+    shader_ci.codeSize = vert_code.size() * sizeof(u32);
+    shader_ci.pCode = vert_code.data();
+    vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &vert_module));
+
+        VkShaderModule frag_module{};
+        shader_ci.codeSize = frag_code.size() * sizeof(u32);
+        shader_ci.pCode = frag_code.data();
+        vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &frag_module));
+
+    auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vert_stage_ci.module = vert_module;
+    vert_stage_ci.pName = "main_vs_mdi";
+
+        auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+        frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        frag_stage_ci.module = frag_module;
+        frag_stage_ci.pName = "fs_main";
+        std::array stages = {vert_stage_ci ,frag_stage_ci,};
+
+    // 2. Pipeline Layout (Inherit bindless + push constants)
+    VkPushConstantRange push_range{
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0,
+            .size = sizeof(PredepthPushConstants),
+    };
+
+    auto layout_ci = create_info<VkPipelineLayoutCreateInfo>();
+    layout_ci.setLayoutCount = 1;
+    layout_ci.pSetLayouts = &bindless_layout;
+    layout_ci.pushConstantRangeCount = 1;
+    layout_ci.pPushConstantRanges = &push_range;
+
+    VkPipelineLayout layout;
+    vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, "predepth_alpha_tested");
+
+    // 3. Specialized Depth State
+    auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // Reverse-Z: Near is 1.0, Far is 0.0
+    ds.minDepthBounds = 0.0f;
+    ds.maxDepthBounds = 1.0f;
+
+    // 4. No Color Attachments (The secret to Pre-Depth speed)
+    auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
+    cb.attachmentCount = 0;
+    cb.pAttachments = nullptr;
+
+    // 5. Rasterization (Ensure Back-Face Culling is ON)
+    auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    // 6. Dynamic Rendering Info
+    auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
+    rendering_info.depthAttachmentFormat = depth_format;
+
+    // Viewport/Scissor setup (Standard)
+    auto vp = create_info<VkPipelineViewportStateCreateInfo>();
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    auto ms = create_info<VkPipelineMultisampleStateCreateInfo>();
+    ms.rasterizationSamples = samples;
+
+    std::array dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT,         VK_DYNAMIC_STATE_SCISSOR,
+                                 VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_DEPTH_BOUNDS,
+                                 VK_DYNAMIC_STATE_CULL_MODE,        VK_DYNAMIC_STATE_FRONT_FACE};
+    auto dy = create_info<VkPipelineDynamicStateCreateInfo>();
+    dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
+    dy.pDynamicStates = dynamic_states.data();
+
+    std::array<VkVertexInputBindingDescription, 1> binding_descriptions{
+            VkVertexInputBindingDescription{
+                    .binding = 0,
+                    .stride = sizeof(glm::vec3) + sizeof(u32),
+                    .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+            }
+    };
+
+    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
+            VkVertexInputAttributeDescription{
+                    .location = 0,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32G32B32_SFLOAT,
+                    .offset = 0,
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 1,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = sizeof(glm::vec3),
+            },
+    };
+
+    auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
+    vertex_input.vertexBindingDescriptionCount = static_cast<u32>(binding_descriptions.size());
+    vertex_input.pVertexBindingDescriptions = binding_descriptions.data();
+    vertex_input.vertexAttributeDescriptionCount = static_cast<u32>(attribute_descriptions.size());
+    vertex_input.pVertexAttributeDescriptions = attribute_descriptions.data();
+
+    auto assembly_state = create_info<VkPipelineInputAssemblyStateCreateInfo>();
+    assembly_state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    assembly_state.primitiveRestartEnable = VK_FALSE;
+
+    auto ci = create_info<VkGraphicsPipelineCreateInfo>();
+    ci.pNext = &rendering_info;
+    ci.stageCount = static_cast<uint32_t>(stages.size());
+    ci.pStages = stages.data();
+    ci.pVertexInputState = &vertex_input;
+    ci.pInputAssemblyState = &assembly_state;
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pDepthStencilState = &ds;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &dy;
+    ci.layout = layout;
+    ci.basePipelineHandle = VK_NULL_HANDLE;
+    ci.basePipelineIndex = -1;
+
+    VkPipeline pipeline;
+    vkCreateGraphicsPipelines(device, cache, 1, &ci, nullptr, &pipeline);
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "predepth_alpha_tested");
+
+    // Cleanup local modules
+    vkDestroyShaderModule(device, vert_module, nullptr);
+    vkDestroyShaderModule(device, frag_module, nullptr);
+
+
+    return {pipeline, layout};
+}
+
 auto create_tonemap_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                              const std::string_view vert_entry, const std::string_view frag_entry,
@@ -221,6 +370,8 @@ auto create_tonemap_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &push_constant_range;
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pipeline_layout));
+        set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pipeline_layout, "tonemap");
+
 
     auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
     vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -331,6 +482,7 @@ auto create_tonemap_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
 
     VkPipeline pipeline{};
     vk_check(vkCreateGraphicsPipelines(device, cache, 1, &pipeline_info, nullptr, &pipeline));
+        set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "tonemap");
 
     vkDestroyShaderModule(device, vert_shader, nullptr);
     vkDestroyShaderModule(device, frag_shader, nullptr);

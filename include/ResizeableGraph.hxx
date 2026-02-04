@@ -8,6 +8,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <unordered_set>
 
 #include "Forward.hxx"
 #include "Types.hxx"
@@ -18,9 +19,39 @@ struct ResizeContext {
     u64 retire_value{0};
 
     auto get_device() const -> VkDevice;
+
     auto get_allocator() const -> VmaAllocator;
+
     auto get_instance() const -> VkInstance;
 };
+
+enum class ResizeTrigger : u32 {
+    None = 0,
+    Extent = 1 << 0, // Window/Resolution change
+    Shaders = 1 << 1, // Hot-reloading pipelines
+    Bindings = 1 << 2, // Descriptor set changes
+    All = 0xFFFFFFFF
+};
+
+constexpr ResizeTrigger operator|(ResizeTrigger a, ResizeTrigger b) {
+    return static_cast<ResizeTrigger>(static_cast<u32>(a) | static_cast<u32>(b));
+}
+
+constexpr ResizeTrigger operator&(ResizeTrigger a, ResizeTrigger b) {
+    return static_cast<ResizeTrigger>(static_cast<u32>(a) & static_cast<u32>(b));
+}
+
+constexpr bool operator!=(ResizeTrigger a, ResizeTrigger b) {
+    return static_cast<u32>(a) != static_cast<u32>(b);
+}
+
+constexpr bool operator!=(std::integral auto a, ResizeTrigger b) {
+    return static_cast<u32>(a) != static_cast<u32>(b);
+}
+
+constexpr bool operator!=(ResizeTrigger a, std::integral auto b) {
+    return static_cast<u32>(a) != static_cast<u32>(b);
+}
 
 struct ResizeGraph {
     using ResizeCallback = std::function<void(VkExtent2D, const ResizeContext &)>;
@@ -33,16 +64,19 @@ struct ResizeGraph {
         std::vector<NodeId> deps{}; // edges: dep -> this
         ResizeCallback rebuild{}; // called in topo order
         u32 insertion_index{0};
+        ResizeTrigger category{ResizeTrigger::Extent}; // Default to Extent
     };
 
-    auto add_node(std::string_view name, ResizeCallback &&rebuild) -> NodeId {
+    auto add_node(std::string_view name, ResizeCallback &&rebuild,
+                  ResizeTrigger category = ResizeTrigger::All) -> NodeId {
         const NodeId id = next_id++;
         nodes.push_back(Node{
-                .id = id,
-                .name = std::string{name},
-                .deps = {},
-                .rebuild = std::move(rebuild),
-                .insertion_index = static_cast<u32>(nodes.size()),
+            .id = id,
+            .name = std::string{name},
+            .deps = {},
+            .rebuild = std::move(rebuild),
+            .insertion_index = static_cast<u32>(nodes.size()),
+            .category = category,
         });
         id_to_index[id] = nodes.size() - 1;
         return id;
@@ -55,15 +89,34 @@ struct ResizeGraph {
         n->deps.push_back(depends_on);
     }
 
-    auto rebuild(VkExtent2D extent, const ResizeContext &rc) -> void {
-        if (extent.width == 0 || extent.height == 0)
-            return;
+    auto rebuild(const VkExtent2D extent, const ResizeContext &rc, ResizeTrigger trigger = ResizeTrigger::All) -> void {
+        if (extent.width == 0 || extent.height == 0) return;
 
         ensure_topo_cache();
-        for (NodeId id: topo_order_cache) {
-            nodes.at(id_to_index.at(id)).rebuild(extent, rc);
+
+        std::unordered_set<NodeId> dirty_nodes;
+
+        for (NodeId id : topo_order_cache) {
+            auto& node = nodes.at(id_to_index.at(id));
+
+            const bool category_match = (node.category & trigger) != 0;
+            const bool dependency_dirty = std::ranges::any_of(node.deps,
+                                                        [&](const NodeId& dep_id) { return dirty_nodes.contains(dep_id); });
+
+            if (category_match || dependency_dirty) {
+                node.rebuild(extent, rc);
+                dirty_nodes.insert(id);
+            }
         }
     }
+
+    auto trigger_resize(ResizeTrigger trigger) {
+            pending_triggers.fetch_or(static_cast<u32>(trigger));
+        }
+
+        auto get_and_clear_triggers() -> ResizeTrigger {
+                return static_cast<ResizeTrigger>(pending_triggers.exchange(0));
+            }
 
     [[nodiscard]] auto to_graphviz_dot(bool include_topo_rank = true) const -> std::string;
 
@@ -86,7 +139,7 @@ private:
     auto topo_sort_stable() const -> std::vector<NodeId> {
         // Build adjacency and indegrees.
         // deps: dep -> node edge
-        std::unordered_map<NodeId, std::vector<NodeId>> outgoing{};
+        std::unordered_map<NodeId, std::vector<NodeId> > outgoing{};
         outgoing.reserve(nodes.size());
 
         std::unordered_map<NodeId, u32> indegree{};
@@ -157,6 +210,8 @@ private:
     NodeId next_id{1};
     std::vector<Node> nodes{};
     std::unordered_map<NodeId, std::size_t> id_to_index{};
+
+    std::atomic<u32> pending_triggers{0};
 
     std::uint64_t graph_revision{0};
     std::uint64_t topo_cache_revision{0};

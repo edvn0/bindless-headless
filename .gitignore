@@ -15,3 +15,5 @@ CMakeUserPresets.json
 *.dot
 .venv
 venv
+
+assets/meshes

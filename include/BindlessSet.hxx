@@ -124,13 +124,13 @@ struct BindlessSet {
         return true;
     }
 
-
-    auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers) -> void {
+    // Returns true if we did resize, and caller needs to update pipelines etc.
+    auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers) -> bool {
         if (!need_repopulate) [[likely]]
-            return;
+            return false;
 
         // Ensure descriptor arrays are big enough for current pools (your existing policy)
-        grow_if_needed(textures.num_objects(), samplers.num_objects(), textures.num_objects(), 0u);
+        const auto did_resize=grow_if_needed(textures.num_objects(), samplers.num_objects(), textures.num_objects(), 0u);
 
         // Guard slot 0 must exist and be valid
         auto &dummy_sampler = *samplers.get(samplers.get_handle(0));
@@ -267,6 +267,8 @@ struct BindlessSet {
 
         vkUpdateDescriptorSets(device, num_writes, writes, 0, nullptr);
         need_repopulate = false;
+
+        return did_resize;
     }
 
 

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <volk.h>
 
 #include "Forward.hxx"
@@ -8,8 +10,8 @@
 #include <string_view>
 #include <vector>
 
-static constexpr u32 THREADS_PER_GROUP = 64;
-static constexpr u32 MAX_WAVES_PER_GROUP = 4;
+inline constexpr u32 THREADS_PER_GROUP = 64;
+inline constexpr u32 MAX_WAVES_PER_GROUP = 4;
 
 struct PointLightCullingPushConstants {
     const DeviceAddress ubo;
@@ -21,11 +23,23 @@ struct PointLightCullingPushConstants {
     const u32 light_count;
 };
 
+/**
+* struct PC {
+    UBO* frame_ubo;
+    Transform* transforms;
+    uint* draw_material_ids;
+    Material* materials;
+    uint       base_draw_id;
+    uint       sampler_index;
+};
+ */
 struct PredepthPushConstants {
     const DeviceAddress ubo;
     const DeviceAddress transforms;
     const DeviceAddress draw_material_ids;
-    const u32 base_draw_id;
+    const DeviceAddress materials;
+     u32 base_draw_id;
+    const u32 sampler_index {0};
 };
 
 struct RenderingPushConstants {
@@ -33,7 +47,7 @@ struct RenderingPushConstants {
     const DeviceAddress transforms;
     const DeviceAddress draw_material_ids;
     const DeviceAddress materials;
-    const u32 base_draw_id;
+     u32 base_draw_id;
     const u32 sampler_index;
 };
 
@@ -115,6 +129,8 @@ auto create_deferred_lighting_graphics_pipeline(
         VkFormat color_format) -> CompiledPipeline;
 
 auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &, VkFormat,
+                              VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
+auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &, const std::vector<uint32_t> &, VkFormat,
                               VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
 
 auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,

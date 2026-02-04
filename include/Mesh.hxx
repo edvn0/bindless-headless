@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <tl/expected.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -19,95 +20,11 @@
 #include <3PP/stb_image.h>
 #include <glm/glm.hpp>
 
-// -----------------------------------------------------------------------------
-// Materials
-// -----------------------------------------------------------------------------
-
-
-struct MaterialData {
-    std::string name{};
-    std::string albedo_map{};
-    glm::vec4 albedo_factor{1.0f};
-    std::string normal_map{};
-    std::string roughness_map{};
-    float roughness_factor{1.0f};
-    std::string metallic_map{};
-    float metallic_factor{1.0f};
-    std::string occlusion_map{};
-    std::string emissive_map{};
-    glm::vec3 emissive_factor{0.0f};
-};
-
-struct GPUMaterialData {
-    u32 albedo_map{};
-    glm::vec4 albedo_factor{1.0f};
-    u32 normal_map{};
-    u32 roughness_map{};
-    float roughness_factor{1.0f};
-    u32 metallic_map{};
-    float metallic_factor{1.0f};
-    u32 occlusion_map{};
-    u32 emissive_map{};
-    glm::vec3 emissive_factor{0.0f};
-    u32 flags{};
-
-    constexpr auto set_albedo_map(bool has_map) -> void {
-        if (has_map)
-            flags |= FLAG_ALBEDO_MAP;
-        else
-            flags &= ~FLAG_ALBEDO_MAP;
-    }
-    constexpr auto set_normal_map(bool has_map) -> void {
-        if (has_map)
-            flags |= FLAG_NORMAL_MAP;
-        else
-            flags &= ~FLAG_NORMAL_MAP;
-    }
-    constexpr auto set_roughness_map(bool has_map) -> void {
-        if (has_map)
-            flags |= FLAG_ROUGHNESS_MAP;
-        else
-            flags &= ~FLAG_ROUGHNESS_MAP;
-    }
-    constexpr auto set_metallic_map(bool has_map) -> void {
-        if (has_map)
-            flags |= FLAG_METALLIC_MAP;
-        else
-            flags &= ~FLAG_METALLIC_MAP;
-    }
-    constexpr auto set_occlusion_map(bool has_map) -> void {
-        if (has_map)
-            flags |= FLAG_OCCLUSION_MAP;
-        else
-            flags &= ~FLAG_OCCLUSION_MAP;
-    }
-    constexpr auto set_emissive_map(bool has_map) -> void {
-        if (has_map)
-            flags |= FLAG_EMISSIVE_MAP;
-        else
-            flags &= ~FLAG_EMISSIVE_MAP;
-    }
-
-    constexpr auto has_albedo_map() const -> bool { return (flags & FLAG_ALBEDO_MAP) != 0; }
-    constexpr auto has_normal_map() const -> bool { return (flags & FLAG_NORMAL_MAP) != 0; }
-    constexpr auto has_roughness_map() const -> bool { return (flags & FLAG_ROUGHNESS_MAP) != 0; }
-    constexpr auto has_metallic_map() const -> bool { return (flags & FLAG_METALLIC_MAP) != 0; }
-    constexpr auto has_occlusion_map() const -> bool { return (flags & FLAG_OCCLUSION_MAP) != 0; }
-    constexpr auto has_emissive_map() const -> bool { return (flags & FLAG_EMISSIVE_MAP) != 0; }
-
-    constexpr static u32 FLAG_ALBEDO_MAP = 1 << 0;
-    constexpr static u32 FLAG_NORMAL_MAP = 1 << 1;
-    constexpr static u32 FLAG_ROUGHNESS_MAP = 1 << 2;
-    constexpr static u32 FLAG_METALLIC_MAP = 1 << 3;
-    constexpr static u32 FLAG_OCCLUSION_MAP = 1 << 4;
-    constexpr static u32 FLAG_EMISSIVE_MAP = 1 << 5;
-};
+#include "AABB.hxx"
+#include "Material.hxx"
 
 auto load_mtl(const std::filesystem::path &mtl_path) -> std::unordered_map<std::string, MaterialData>;
 
-// -----------------------------------------------------------------------------
-// Textures
-// -----------------------------------------------------------------------------
 struct TextureLoadPacket {
     enum class Type { SRGB, Linear };
     enum class Class { Albedo, Normal, Roughness, Metallic, Occlusion, Emissive };
@@ -154,14 +71,11 @@ struct LoadedTextureCpu {
 auto load_texture_from_file(const std::filesystem::path &texture_path, const TextureLoadPacket::Type type,
                             const TextureLoadPacket::Class texture_class) -> TextureLoadPacket;
 
-// -----------------------------------------------------------------------------
-// Mesh layout: one big buffer + submeshes
-// -----------------------------------------------------------------------------
-
 struct Submesh {
     u32 index_offset{0};
     u32 index_count{0};
     u32 material_id{0};
+    bool alpha_tested{false};
 };
 
 struct Vertex {
@@ -189,39 +103,20 @@ struct MeshData {
     std::vector<Submesh> submeshes;
 };
 
-// -----------------------------------------------------------------------------
-// Defaults: global texture indices provided by you
-// -----------------------------------------------------------------------------
-
 struct DefaultTextureHandles {
     TextureHandle white{};
     TextureHandle black{};
     TextureHandle flat_normal{};
 };
 
-
-// -----------------------------------------------------------------------------
-// Material-id mapping (string -> dense id) built during OBJ parse
-// -----------------------------------------------------------------------------
-
 struct MaterialIdTable {
     std::unordered_map<std::string, u32> name_to_id;
     std::vector<std::string> id_to_name;
 };
 
-
-// -----------------------------------------------------------------------------
-// Resolve texture names to handles
-// -----------------------------------------------------------------------------
-
 struct LoadedTextureTable {
-    std::unordered_map<std::string, TextureHandle> by_name; // key: filename (as in MTL)
+    std::unordered_map<std::string, TextureHandle> by_stem;
 };
-
-
-// -----------------------------------------------------------------------------
-// Loader return type: mesh + GPU material buffer + debug info
-// -----------------------------------------------------------------------------
 
 struct LoadedObj {
     MeshData mesh;
@@ -233,14 +128,14 @@ struct LoadedObj {
     // Submesh -> Material mapping
     BufferHandle material_ids_buffer;
     BufferHandle vertex_buffer;
-    BufferHandle position_vertex_buffer;
+    BufferHandle pos_uv_buffer;
     BufferHandle index_buffer;
     u32 draw_count;
+
+    AABB mesh_aabb;
+    std::vector<AABB> submesh_aabbs;
+    BufferHandle aabb_buffer;
 };
 
-// -----------------------------------------------------------------------------
-// OBJ loader (full integration)
-// -----------------------------------------------------------------------------
-
 auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::filesystem::path &obj_path)
-        -> std::optional<LoadedObj>;
+        -> tl::expected<LoadedObj, Error>;

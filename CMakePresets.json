@@ -1,5 +1,5 @@
 ﻿{
-  "version": 6,
+  "version": 5,
   "cmakeMinimumRequired": {
     "major": 3,
     "minor": 23,
@@ -161,64 +161,6 @@
       "configurePreset": "x64-relwithdebinfo-tracy",
       "configuration": "Debug",
       "jobs": 20
-    }
-  ],
-  "workflowPresets": [
-    {
-      "name": "debug",
-      "displayName": "Debug Workflow",
-      "steps": [
-        {
-          "type": "configure",
-          "name": "x64-debug"
-        },
-        {
-          "type": "build",
-          "name": "debug"
-        }
-      ]
-    },
-    {
-      "name": "debug-tracy",
-      "displayName": "Tracy Debug Workflow",
-      "steps": [
-        {
-          "type": "configure",
-          "name": "x64-debug-tracy"
-        },
-        {
-          "type": "build",
-          "name": "debug-tracy"
-        }
-      ]
-    },
-    {
-      "name": "relwithdebinfo-tracy",
-      "displayName": "Tracy RelWithDebInfo Workflow",
-      "steps": [
-        {
-          "type": "configure",
-          "name": "x64-relwithdebinfo-tracy"
-        },
-        {
-          "type": "build",
-          "name": "relwithdebinfo-tracy"
-        }
-      ]
-    },
-    {
-      "name": "release",
-      "displayName": "Release Workflow",
-      "steps": [
-        {
-          "type": "configure",
-          "name": "x64-release"
-        },
-        {
-          "type": "build",
-          "name": "release"
-        }
-      ]
     }
   ]
 }

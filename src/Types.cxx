@@ -10,6 +10,47 @@ auto OffscreenTarget::is_stencil() const -> bool {
                    VK_FORMAT_D32_SFLOAT_S8_UINT);
 }
 
+auto OffscreenTarget::transition(
+    VkCommandBuffer cmd,
+    VkImageLayout old_layout,
+    VkImageLayout new_layout,
+    VkPipelineStageFlags2 src_stage,
+    VkAccessFlags2 src_access,
+    VkPipelineStageFlags2 dst_stage,
+    VkAccessFlags2 dst_access,
+    VkImageSubresourceRange subresource_range
+) const -> void
+{
+    VkImageMemoryBarrier2 barrier{
+        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .pNext               = nullptr,
+        .srcStageMask        = src_stage,
+        .srcAccessMask       = src_access,
+        .dstStageMask        = dst_stage,
+        .dstAccessMask       = dst_access,
+        .oldLayout           = old_layout,
+        .newLayout           = new_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image               = image,
+        .subresourceRange    = subresource_range,
+    };
+
+    VkDependencyInfo dep{
+        .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext                   = nullptr,
+        .dependencyFlags         = 0,
+        .memoryBarrierCount      = 0,
+        .pMemoryBarriers         = nullptr,
+        .bufferMemoryBarrierCount= 0,
+        .pBufferMemoryBarriers   = nullptr,
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers    = &barrier,
+    };
+
+    vkCmdPipelineBarrier2(cmd, &dep);
+}
+
 auto OffscreenTarget::transition_if_not_initialised(
     VkCommandBuffer cmd,
     VkImageLayout new_layout,
