@@ -1,11 +1,11 @@
 import common;
 
+static const uint MAX_CLUSTERS_PER_LIGHT = 64u;
+
 [[vk::constant_id(0)]]
 const int MAX_WAVES_PER_GROUP = 4;
 [[vk::constant_id(1)]]
 const int THREADS_PER_GROUP = 64;
-[[vk::constant_id(2)]]
-const uint MAX_CLUSTERS_PER_LIGHT = 32;
 
 struct Cluster
 {
@@ -16,8 +16,8 @@ struct Cluster
 struct PushConstants
 {
     UBO*        frame_ubo;
-    PointLight* lights;
-    uint        light_count;
+    PointLight* lights; // Compacted frustum culled
+    uint*        light_count; // Compacted frustum culled count
 
     float z_near;
     float z_far;
@@ -26,9 +26,9 @@ struct PushConstants
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
-
     uint cluster_count;
 
+    LightVisibility* visibility;
     uint*       cluster_counts;         // [cluster_count] - counts per cluster
     Cluster*    clusters;               // [cluster_count] - offset and count
     uint*       cluster_counters;       // [cluster_count] - write counters, reset to 0
@@ -129,63 +129,54 @@ uint cluster_index(uint x, uint y, uint z, uint tiles_x, uint tiles_y)
     return x + y * tiles_x + z * tiles_x * tiles_y;
 }
 
-// ============================================================================
-// Pass 1: Count lights per cluster
-// ============================================================================
-// Each thread processes one light and atomically increments the count
-// for each cluster it overlaps. Uses wave intrinsics to reduce atomics.
-// ============================================================================
+[numthreads(THREADS_PER_GROUP, 1, 1)]
+[shader("compute")]
+void LightVisibilityCS(uint3 dtid : SV_DispatchThreadID, uniform PushConstants pc)
+{
+    uint light_idx = dtid.x;
+    if (light_idx >= *pc.light_count) return;
+
+    PointLight l = pc.lights[light_idx];
+    uint x0, x1, y0, y1, z0, z1;
+    
+    compute_light_cluster_range(l, pc.frame_ubo, pc.z_near, pc.log_z_scale, 
+                                pc.tiles_x, pc.tiles_y, pc.tiles_z, 
+                                x0, x1, y0, y1, z0, z1);
+
+    LightVisibility vis;
+    vis.x0 = x0; vis.x1 = x1;
+    vis.y0 = y0; vis.y1 = y1;
+    vis.z0 = z0; vis.z1 = z1;
+    vis.is_visible = (x0 <= x1 && y0 <= y1 && z0 <= z1) ? 1u : 0u;
+
+    pc.visibility[light_idx] = vis;
+    }
 
 [numthreads(THREADS_PER_GROUP, 1, 1)]
 [shader("compute")]
-void LightClusterCountCS(
-    uint3 dtid : SV_DispatchThreadID,
-    uniform PushConstants pc)
+void LightClusterCountCS(uint3 dtid : SV_DispatchThreadID, uniform PushConstants pc)
 {
     uint light_idx = dtid.x;
-    if (light_idx >= pc.light_count)
-        return;
+    if (light_idx >= *pc.light_count) return;
 
-    PointLight l = pc.lights[light_idx];
+    LightVisibility vis = pc.visibility[light_idx];
+    if (vis.is_visible == 0) return;
 
-    // ---- compute cluster range ----
-    uint x0, x1, y0, y1, z0, z1;
-    compute_light_cluster_range(
-        l,
-        pc.frame_ubo,
-        pc.z_near,
-        pc.log_z_scale,
-        pc.tiles_x, pc.tiles_y, pc.tiles_z,
-        x0, x1, y0, y1, z0, z1);
-
-    // Early out if light doesn't overlap any clusters
-    if (x0 > x1 || y0 > y1 || z0 > z1)
-        return;
-
-    // ---- iterate overlapped clusters ----
-    for (uint z = z0; z <= z1; ++z)
-    for (uint y = y0; y <= y1; ++y)
-    for (uint x = x0; x <= x1; ++x)
+    for (uint z = vis.z0; z <= vis.z1; ++z)
+    for (uint y = vis.y0; y <= vis.y1; ++y)
+    for (uint x = vis.x0; x <= vis.x1; ++x)
     {
         uint c = cluster_index(x, y, z, pc.tiles_x, pc.tiles_y);
-
-        // Wave-aggregated atomic: all lanes in wave that touch this cluster
-        // sum their contributions and do a single atomic add
-        uint v = 1u;
-        uint wave_sum = WaveActiveSum(v);
-
-        if (WaveIsFirstLane())
-            InterlockedAdd(pc.cluster_counts[c], wave_sum);
-    }
+        
+        bool match = WaveActiveAllTrue(c == WaveReadLaneFirst(c));
+        uint count_matching = match ? WaveActiveCountBits(true) : 0;
+        
+        if (WaveIsFirstLane()) 
+        {
+            InterlockedAdd(pc.cluster_counts[c], count_matching);
+        }
+    } 
 }
-
-// ============================================================================
-// Pass 2: Prefix sum to compute light offsets
-// ============================================================================
-// Computes exclusive prefix sum of cluster_counts to determine where each
-// cluster's light indices should be written in the global index buffer.
-// Also computes total number of light indices needed.
-// ============================================================================
 
 groupshared uint g_wave_sums[MAX_WAVES_PER_GROUP];
 groupshared uint g_group_base;
@@ -194,141 +185,194 @@ groupshared uint g_group_base;
 [shader("compute")]
 void ClusterPrefixSumCS(
     uint3 dtid : SV_DispatchThreadID,
-    uint3 gid  : SV_GroupID,
-    uint  gidx : SV_GroupIndex,
+    uint gidx : SV_GroupIndex,
     uniform PushConstants pc)
 {
     uint idx = dtid.x;
+    uint v = (idx < pc.cluster_count) ? pc.cluster_counts[idx] : 0u;
 
-    // Load value for this cluster
-    uint v = 0u;
-    if (idx < pc.cluster_count)
-        v = pc.cluster_counts[idx];
-
-    uint lane      = WaveGetLaneIndex();
-    uint wave_size = WaveGetLaneCount();
-    uint wave_id   = gidx / wave_size;
-
-    // Prefix sum within wave
     uint wave_prefix = WavePrefixSum(v);
+    uint wave_sum    = WaveActiveSum(v);
+    uint wave_id     = gidx / WaveGetLaneCount();
 
-    // Last lane in each wave writes wave total to shared memory
-    if (lane == wave_size - 1)
-        g_wave_sums[wave_id] = wave_prefix + v;
+    if (WaveGetLaneIndex() == 0) 
+        g_wave_sums[wave_id] = wave_sum;
 
     GroupMemoryBarrierWithGroupSync();
 
-    // Compute prefix sum across waves (single thread per wave)
-    uint wave_count = (THREADS_PER_GROUP + wave_size - 1) / wave_size;
-
-    if (gidx < wave_count)
+    if (gidx < MAX_WAVES_PER_GROUP)
     {
-        uint acc = 0;
-        for (uint i = 0; i < gidx; ++i)
-            acc += g_wave_sums[i];
-
-        g_wave_sums[gidx] += acc;
+        uint wave_total = g_wave_sums[gidx];
+        g_wave_sums[gidx] = WavePrefixSum(wave_total);
     }
 
     GroupMemoryBarrierWithGroupSync();
 
-    // Compute final prefix sum for this thread
-    uint wave_offset = (wave_id > 0) ? g_wave_sums[wave_id - 1] : 0;
-    uint inclusive   = wave_prefix + wave_offset + v;
-    uint exclusive   = inclusive - v;
+    uint exclusive_offset = wave_prefix + g_wave_sums[wave_id];
 
-    // Write cluster offset and count
-    if (idx < pc.cluster_count)
-    {
-        pc.clusters[idx].light_offset = exclusive;
-        pc.clusters[idx].light_count  = v;
-    }
-
-    // First thread in group adds this group's total to global counter
     if (gidx == 0)
     {
-        uint group_total = g_wave_sums[wave_count - 1];
-        InterlockedAdd(pc.global_index_count[0], group_total, g_group_base);
+        uint last_wave = (THREADS_PER_GROUP / WaveGetLaneCount()) - 1;
+        uint total_group_sum = g_wave_sums[last_wave] + WaveActiveSum((wave_id == last_wave) ? wave_sum : 0);
+        
+        InterlockedAdd(pc.global_index_count[0], total_group_sum, g_group_base);
     }
 
     GroupMemoryBarrierWithGroupSync();
 
-    // Add group base offset to all clusters in this group
-    if (idx < pc.cluster_count && gidx == 0)
+    if (idx < pc.cluster_count)
     {
-        uint num_threads_in_group = min(THREADS_PER_GROUP, pc.cluster_count - gid.x * THREADS_PER_GROUP);
-        
-        for (uint i = 0; i < num_threads_in_group; ++i)
-        {
-            uint cluster_idx = gid.x * THREADS_PER_GROUP + i;
-            if (cluster_idx < pc.cluster_count)
-                pc.clusters[cluster_idx].light_offset += g_group_base;
+        pc.clusters[idx].light_offset = exclusive_offset + g_group_base;
+        pc.clusters[idx].light_count  = v;
+    }
+}
+
+
+[numthreads(THREADS_PER_GROUP, 1, 1)]
+[shader("compute")]
+void LightClusterWriteCS(uint3 dtid : SV_DispatchThreadID, uniform PushConstants pc)
+{
+    uint light_idx = dtid.x;
+    if (light_idx >= *pc.light_count) return;
+
+    LightVisibility vis = pc.visibility[light_idx];
+    if (vis.is_visible == 0) return;
+
+    for (uint z = vis.z0; z <= vis.z1; ++z)
+    for (uint y = vis.y0; y <= vis.y1; ++y)
+    for (uint x = vis.x0; x <= vis.x1; ++x)
+    {
+        uint c = cluster_index(x, y, z, pc.tiles_x, pc.tiles_y);
+        uint write_pos;
+        InterlockedAdd(pc.cluster_counters[c], 1u, write_pos);
+
+        if (write_pos < pc.clusters[c].light_count) {
+            uint dst = pc.clusters[c].light_offset + write_pos;
+            pc.cluster_light_indices[dst] = light_idx;
         }
     }
 }
 
-// ============================================================================
-// Pass 3: Write light indices to clusters
-// ============================================================================
-// Each thread processes one light again and writes its index to all
-// overlapping clusters at the correct offset. Uses wave intrinsics to
-// reduce atomic operations when multiple threads write to same cluster.
-// ============================================================================
+import common;
 
-[numthreads(THREADS_PER_GROUP, 1, 1)]
+static const uint MAX_LIGHTS_PER_CLUSTER = 128;
+static const uint CLUSTER_BUILD_THREADS = 64;
+
+groupshared uint g_light_count;
+groupshared uint g_light_indices[MAX_LIGHTS_PER_CLUSTER];
+
+
+bool light_intersects_cluster(
+    PointLight l,
+    UBO* ubo,
+    float z_near,
+    float log_z_scale,
+    uint tiles_x,
+    uint tiles_y,
+    uint tiles_z,
+    uint cluster_x,
+    uint cluster_y,
+    uint cluster_z)
+{
+    float3 world_pos = l.position_radius.xyz;
+    float radius = l.position_radius.w;
+    
+    float3 view_pos = mul(ubo->view, float4(world_pos, 1.0)).xyz;
+    
+    if (view_pos.z + radius <= 0.0)
+        return false;
+    
+    float z_min = max(view_pos.z - radius, -z_near);
+    float z_max = view_pos.z + radius;
+    
+    uint z0 = z_to_slice(z_min, z_near, log_z_scale);
+    uint z1 = z_to_slice(z_max, z_near, log_z_scale);
+    z0 = min(z0, tiles_z - 1);
+    z1 = min(z1, tiles_z - 1);
+    
+    if (cluster_z < z0 || cluster_z > z1)
+        return false;
+    
+    float3 vx = view_pos + float3(radius, 0, 0);
+    float3 vxn = view_pos - float3(radius, 0, 0);
+    float3 vy = view_pos + float3(0, radius, 0);
+    float3 vyn = view_pos - float3(0, radius, 0);
+    
+    float2 ndc0 = project_to_ndc(vxn, ubo->projection);
+    float2 ndc1 = project_to_ndc(vx, ubo->projection);
+    float2 ndc2 = project_to_ndc(vyn, ubo->projection);
+    float2 ndc3 = project_to_ndc(vy, ubo->projection);
+    
+    float ndc_min_x = min(min(ndc0.x, ndc1.x), min(ndc2.x, ndc3.x));
+    float ndc_max_x = max(max(ndc0.x, ndc1.x), max(ndc2.x, ndc3.x));
+    float ndc_min_y = min(min(ndc0.y, ndc1.y), min(ndc2.y, ndc3.y));
+    float ndc_max_y = max(max(ndc0.y, ndc1.y), max(ndc2.y, ndc3.y));
+    
+    uint x0 = ndc_to_tile_x(ndc_min_x, tiles_x);
+    uint x1 = ndc_to_tile_x(ndc_max_x, tiles_x);
+    uint y0 = ndc_to_tile_y(ndc_max_y, tiles_y);
+    uint y1 = ndc_to_tile_y(ndc_min_y, tiles_y);
+    
+    return (cluster_x >= x0 && cluster_x <= x1 &&
+            cluster_y >= y0 && cluster_y <= y1);
+}
+
+[numthreads(CLUSTER_BUILD_THREADS, 1, 1)]
 [shader("compute")]
-void LightClusterWriteCS(
-    uint3 dtid : SV_DispatchThreadID,
+void BuildClusterCS(
+    uint3 group_id : SV_GroupID,
+    uint group_index : SV_GroupIndex,
     uniform PushConstants pc)
 {
-    uint light_idx = dtid.x;
-    if (light_idx >= pc.light_count)
+    uint cluster_idx = group_id.x;
+    if (cluster_idx >= pc.cluster_count)
         return;
-
-    PointLight l = pc.lights[light_idx];
-
-    // ---- compute cluster range again ----
-    uint x0, x1, y0, y1, z0, z1;
-    compute_light_cluster_range(
-        l,
-        pc.frame_ubo,
-        pc.z_near,
-        pc.log_z_scale,
-        pc.tiles_x, pc.tiles_y, pc.tiles_z,
-        x0, x1, y0, y1, z0, z1);
-
-    // Early out if light doesn't overlap any clusters
-    if (x0 > x1 || y0 > y1 || z0 > z1)
-        return;
-
-    // ---- iterate overlapped clusters ----
-    for (uint z = z0; z <= z1; ++z)
-    for (uint y = y0; y <= y1; ++y)
-    for (uint x = x0; x <= x1; ++x)
+    
+    uint z = cluster_idx / (pc.tiles_x * pc.tiles_y);
+    uint rem = cluster_idx % (pc.tiles_x * pc.tiles_y);
+    uint y = rem / pc.tiles_x;
+    uint x = rem % pc.tiles_x;
+    
+    if (group_index == 0)
+        g_light_count = 0;
+    
+    GroupMemoryBarrierWithGroupSync();
+    
+    uint total_lights = *pc.light_count;
+    
+    for (uint light_idx = group_index; light_idx < total_lights; light_idx += CLUSTER_BUILD_THREADS)
     {
-        uint c = cluster_index(x, y, z, pc.tiles_x, pc.tiles_y);
-
-        // Wave-aggregated atomic for write position
-        uint v = 1u;
-
-        uint wave_prefix = WavePrefixSum(v);
-        uint wave_total  = WaveActiveSum(v);
-
-        // First lane atomically reserves space for entire wave
-        uint base;
-        if (WaveIsFirstLane())
-            InterlockedAdd(pc.cluster_counters[c], wave_total, base);
-
-        // Broadcast base to all lanes
-        base = WaveReadLaneFirst(base);
-
-        // Compute final write destination
-        uint dst =
-            pc.clusters[c].light_offset +
-            base +
-            wave_prefix;
-
-        // Write light index
-        pc.cluster_light_indices[dst] = light_idx;
+        PointLight light = pc.lights[light_idx];
+        
+        if (light_intersects_cluster(light, pc.frame_ubo, pc.z_near, pc.log_z_scale,
+                                     pc.tiles_x, pc.tiles_y, pc.tiles_z,
+                                     x, y, z))
+        {
+            uint slot;
+            InterlockedAdd(g_light_count, 1, slot);
+            
+            if (slot < MAX_LIGHTS_PER_CLUSTER)
+                g_light_indices[slot] = light_idx;
+        }
+    }
+    
+    // ===== BARRIER: Wait for all light tests to complete =====
+    GroupMemoryBarrierWithGroupSync();
+    
+    // ===== PHASE 3: Write cluster metadata =====
+    uint actual_count = min(g_light_count, MAX_LIGHTS_PER_CLUSTER);
+    
+    if (group_index == 0)
+    {
+        pc.clusters[cluster_idx].light_offset = cluster_idx * MAX_LIGHTS_PER_CLUSTER;
+        pc.clusters[cluster_idx].light_count = actual_count;
+    }
+    
+    // ===== PHASE 4: Write light indices to global memory =====
+    uint base_offset = cluster_idx * MAX_LIGHTS_PER_CLUSTER;
+    
+    for (uint i = group_index; i < actual_count; i += CLUSTER_BUILD_THREADS)
+    {
+        pc.cluster_light_indices[base_offset + i] = g_light_indices[i];
     }
 }

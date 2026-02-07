@@ -4,6 +4,15 @@ struct PointLight
     float4 colour_intensity;
 };
 
+struct LightVisibility
+{
+    uint x0, x1;
+    uint y0, y1;
+    uint z0, z1;
+    uint is_visible; 
+    uint _pad;
+};
+
 struct UBO {
     float4x4 view;
     float4x4 projection;
@@ -13,6 +22,7 @@ struct UBO {
     float4 camera_position;
     float4 frustum_planes[6];
     float4 sun_direction_intensity;
+    float2 viewport_size;
 
     property sun_dir : float3
     {
@@ -25,36 +35,26 @@ struct UBO {
         }
 };
 
-struct UV4
-{
-    float2 uv0;
-    float2 uv1;
-};
-
 struct Transform {
     float3x4 m;
 };
 
-UV4 unpack_uvs_snorm4x8(uint packed)
+/*float2 unpack_uvs(uint packed_uvs)
 {
-    // 1.0 / 127.0 matches GLM's constant
-    const float inv_127 = 0.0078740157480315f;
+    uint x_bits = packed_uvs & 0xFFFF;
+    uint y_bits = (packed_uvs >> 16) & 0xFFFF;
+    
+    float x = float(x_bits) / 65535.0;
+    float y = float(y_bits) / 65535.0;
+    
+    return float2(x, y);
+}*/
 
-    // Use GLSL-style bit extraction and cast to signed integers
-    // This replicates the "union" behavior by interpreting the bits as signed
-    int b0 = int(packed << 24) >> 24;
-    int b1 = int(packed << 16) >> 24;
-    int b2 = int(packed <<  8) >> 24;
-    int b3 = int(packed      ) >> 24;
-
-    UV4 r;
-    // Map to [-1.0, 1.0] and clamp to handle the -128 case correctly
-    r.uv0.x = clamp(float(b0) * inv_127, -1.0f, 1.0f);
-    r.uv0.y = clamp(float(b1) * inv_127, -1.0f, 1.0f);
-    r.uv1.x = clamp(float(b2) * inv_127, -1.0f, 1.0f);
-    r.uv1.y = clamp(float(b3) * inv_127, -1.0f, 1.0f);
-
-    return r;
+float2 unpack_uvs(uint packed_uvs)
+{
+    // Native Slang/HLSL function for Unorm 2x16
+    printf("%u", packed_uvs);
+    return unpackUnorm2x16ToFloat(packed_uvs).yx;
 }
 
 float4 unpackSnorm3x10_1x2(uint packed)

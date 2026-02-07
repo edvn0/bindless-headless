@@ -26,8 +26,7 @@ auto vk_check(VkResult result) -> void {
 }
 
 namespace {
-    auto calc_mip_levels(u32 width, u32 height) -> u32
-    {
+    auto calc_mip_levels(u32 width, u32 height) -> u32 {
         u32 levels = 1;
         while (width > 1 || height > 1) {
             width = std::max(1u, width >> 1);
@@ -37,12 +36,11 @@ namespace {
         return levels;
     }
 
-     auto mip_extent(u32 base_w, u32 base_h, u32 level) -> VkExtent3D
-    {
+    auto mip_extent(u32 base_w, u32 base_h, u32 level) -> VkExtent3D {
         return VkExtent3D{
-            .width = std::max(1u, base_w >> level),
-            .height = std::max(1u, base_h >> level),
-            .depth = 1,
+                .width = std::max(1u, base_w >> level),
+                .height = std::max(1u, base_h >> level),
+                .depth = 1,
         };
     }
 
@@ -136,17 +134,7 @@ namespace destruction {
         dev = VK_NULL_HANDLE;
     }
 
-    auto bindless_set(VkDevice device, BindlessSet &bs) -> void {
-        if (bs.pool) {
-            vkDestroyDescriptorPool(device, bs.pool, nullptr);
-        }
-        if (bs.layout) {
-            vkDestroyDescriptorSetLayout(device, bs.layout, nullptr);
-        }
-        bs.pool = VK_NULL_HANDLE;
-        bs.layout = VK_NULL_HANDLE;
-        bs.set = VK_NULL_HANDLE;
-    }
+    auto bindless_set(BindlessSet &bs) -> void { bs.destroy(); }
 
     auto allocator(VmaAllocator &alloc) -> void {
         if (alloc) {
@@ -157,7 +145,7 @@ namespace destruction {
 
     auto swapchain(Swapchain &sc) -> void { sc.destroy(); }
 
-    auto tl(VkDevice dev, auto& t) -> void {
+    auto tl(VkDevice dev, auto &t) -> void {
         if (t.pool)
             vkDestroyCommandPool(dev, t.pool, nullptr);
         if (t.timeline)
@@ -165,17 +153,11 @@ namespace destruction {
         t = {};
     }
 
-    auto timeline(VkDevice device, ComputeTimeline &t) -> void {
-        tl(device, t);
-    }
+    auto timeline(VkDevice device, ComputeTimeline &t) -> void { tl(device, t); }
 
-    auto timeline(VkDevice device, GraphicsTimeline &t) -> void {
-        tl(device, t);
-    }
+    auto timeline(VkDevice device, GraphicsTimeline &t) -> void { tl(device, t); }
 
-    auto timeline(VkDevice device, TransferTimeline &t) -> void {
-        tl(device, t);
-    }
+    auto timeline(VkDevice device, TransferTimeline &t) -> void { tl(device, t); }
 
     auto pipeline(VkDevice dev, VkPipeline &p, VkPipelineLayout &l) -> void {
         if (p != VK_NULL_HANDLE) {
@@ -300,16 +282,8 @@ auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_vie
     return sampler;
 }
 
-auto create_offscreen_target(
-    VmaAllocator &alloc,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    VkSampleCountFlagBits samples,
-    TargetSamplerConfiguration config,
-    std::string_view name
-) -> OffscreenTarget
-{
+auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
+                             TargetSamplerConfiguration config, std::string_view name) -> OffscreenTarget {
     OffscreenTarget t{};
     t.width = width;
     t.height = height;
@@ -323,7 +297,7 @@ auto create_offscreen_target(
     auto want_transfer = config.sampled_storage_transfer[2];
 
     VkImageUsageFlags const usage =
-        make_color_image_usage(ai.physicalDevice, format, samples, want_sampled, want_storage, want_transfer);
+            make_color_image_usage(ai.physicalDevice, format, samples, want_sampled, want_storage, want_transfer);
 
     u32 const mip_levels = std::max(1u, config.dims.mip_levels);
     u32 const array_layers = std::max(1u, config.dims.array_layers);
@@ -359,16 +333,14 @@ auto create_offscreen_target(
         vci.viewType = config.dims.view_type;
     }
     vci.format = format;
-    vci.components = {
-        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY
-    };
+    vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                      VK_COMPONENT_SWIZZLE_IDENTITY};
     vci.subresourceRange = {
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = mip_levels,
-        .baseArrayLayer = 0,
-        .layerCount = array_layers,
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = mip_levels,
+            .baseArrayLayer = 0,
+            .layerCount = array_layers,
     };
 
     // Attachment view
@@ -576,25 +548,16 @@ auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat fo
     return t;
 }
 
-auto create_image_from_mips_v2(
-    VmaAllocator alloc,
-    GlobalCommandContext& cmd_ctx,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    std::span<const std::byte> data,
-    std::span<const u32> mip_offsets,
-    std::span<const u32> mip_sizes,
-    std::string_view name
-) -> OffscreenTarget
-{
-    std::span<const u8> data_u8 = std::span(std::bit_cast<u8 const*>(data.data()), data.size());
+auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const std::byte> data, std::span<const u32> mip_offsets,
+                               std::span<const u32> mip_sizes, std::string_view name) -> OffscreenTarget {
+    std::span<const u8> data_u8 = std::span(std::bit_cast<u8 const *>(data.data()), data.size());
     // forward to the u8 overload
     return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format, data_u8, mip_offsets, mip_sizes, name);
 }
 
 // Helper to detect if a format is block-compressed
- auto is_block_compressed_format(VkFormat format) -> bool {
+auto is_block_compressed_format(VkFormat format) -> bool {
     switch (format) {
         case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
         case VK_FORMAT_BC1_RGB_SRGB_BLOCK:
@@ -619,25 +582,15 @@ auto create_image_from_mips_v2(
 }
 
 // Wrapper that creates images with proper usage flags for compressed formats
-auto create_texture_image_v2(
-    VmaAllocator alloc,
-    GlobalCommandContext& cmd_ctx,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    std::span<const u8> data,
-    std::span<const u32> mip_offsets,
-    std::span<const u32> mip_sizes,
-    std::string_view name
-) -> OffscreenTarget
-{
+auto create_texture_image_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height, VkFormat format,
+                             std::span<const u8> data, std::span<const u32> mip_offsets, std::span<const u32> mip_sizes,
+                             std::string_view name) -> OffscreenTarget {
     // For compressed formats, we need to bypass create_offscreen_target's
     // assumption that all color images are attachments
     u32 const mip_levels = static_cast<u32>(mip_offsets.size());
     if (mip_levels == 0 || mip_sizes.size() != mip_levels) {
         // fallback: use the standard path
-        return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format,
-                                        data, mip_offsets, mip_sizes, name);
+        return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format, data, mip_offsets, mip_sizes, name);
     }
 
     bool const is_compressed = is_block_compressed_format(format);
@@ -653,9 +606,8 @@ auto create_texture_image_v2(
         vmaGetAllocatorInfo(alloc, &ai);
 
         // Compressed formats: SAMPLED + TRANSFER (no COLOR_ATTACHMENT)
-        VkImageUsageFlags const usage = VK_IMAGE_USAGE_SAMPLED_BIT |
-                                       VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        VkImageUsageFlags const usage =
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
         VkImageCreateInfo ici{};
         ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -679,22 +631,20 @@ auto create_texture_image_v2(
         vci.image = t.image;
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = format;
-        vci.components = {
-            VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-            VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY
-        };
+        vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                          VK_COMPONENT_SWIZZLE_IDENTITY};
         vci.subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = mip_levels,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = mip_levels,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
         };
 
         // Create sampled view (no attachment view for compressed formats)
         vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.sampled_view));
         t.attachment_view = VK_NULL_HANDLE; // Not usable as attachment
-        t.storage_view = VK_NULL_HANDLE;    // BC7 doesn't support storage
+        t.storage_view = VK_NULL_HANDLE; // BC7 doesn't support storage
 
         set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
         set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
@@ -715,21 +665,21 @@ auto create_texture_image_v2(
             staging_aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 
             VkBufferCreateInfo bci{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .pNext = nullptr,
-                .flags = 0,
-                .size = static_cast<VkDeviceSize>(data.size_bytes()),
-                .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = 0,
-                .pQueueFamilyIndices = nullptr,
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = 0,
+                    .size = static_cast<VkDeviceSize>(data.size_bytes()),
+                    .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                    .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                    .queueFamilyIndexCount = 0,
+                    .pQueueFamilyIndices = nullptr,
             };
 
             VkBuffer staging{};
             VmaAllocation staging_alloc{};
             vk_check(vmaCreateBuffer(alloc, &bci, &staging_aci, &staging, &staging_alloc, nullptr));
 
-            void* mapped{};
+            void *mapped{};
             vk_check(vmaMapMemory(alloc, staging_alloc, &mapped));
             std::memcpy(mapped, data.data(), data.size_bytes());
             vmaUnmapMemory(alloc, staging_alloc);
@@ -745,11 +695,11 @@ auto create_texture_image_v2(
                 pre.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
                 pre.image = t.image;
                 pre.subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = mip_levels,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .baseMipLevel = 0,
+                        .levelCount = mip_levels,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1,
                 };
 
                 auto di_pre = create_info<VkDependencyInfo>();
@@ -767,24 +717,25 @@ auto create_texture_image_v2(
                     u32 const lh = std::max(1u, height >> level);
 
                     VkBufferImageCopy bic{
-                        .bufferOffset = static_cast<VkDeviceSize>(mip_offsets[level]),
-                        .bufferRowLength = 0,
-                        .bufferImageHeight = 0,
-                        .imageSubresource = {
-                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                            .mipLevel = level,
-                            .baseArrayLayer = 0,
-                            .layerCount = 1,
-                        },
-                        .imageOffset = {0, 0, 0},
-                        .imageExtent = {lw, lh, 1},
+                            .bufferOffset = static_cast<VkDeviceSize>(mip_offsets[level]),
+                            .bufferRowLength = 0,
+                            .bufferImageHeight = 0,
+                            .imageSubresource =
+                                    {
+                                            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                            .mipLevel = level,
+                                            .baseArrayLayer = 0,
+                                            .layerCount = 1,
+                                    },
+                            .imageOffset = {0, 0, 0},
+                            .imageExtent = {lw, lh, 1},
                     };
 
                     copies.push_back(bic);
                 }
 
                 vkCmdCopyBufferToImage(cb, staging, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                      static_cast<u32>(copies.size()), copies.data());
+                                       static_cast<u32>(copies.size()), copies.data());
 
                 // Transition to GENERAL for sampling
                 auto post = create_info<VkImageMemoryBarrier2>();
@@ -796,13 +747,12 @@ auto create_texture_image_v2(
                 post.newLayout = VK_IMAGE_LAYOUT_GENERAL;
                 post.image = t.image;
                 post.subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = mip_levels,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .baseMipLevel = 0,
+                        .levelCount = mip_levels,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1,
                 };
-
 
 
                 auto di_post = create_info<VkDependencyInfo>();
@@ -821,23 +771,13 @@ auto create_texture_image_v2(
         return t;
     } else {
         // Uncompressed format: use the standard path
-        return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format,
-                                        data, mip_offsets, mip_sizes, name);
+        return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format, data, mip_offsets, mip_sizes, name);
     }
 }
 
-auto create_image_from_mips_v2(
-    VmaAllocator alloc,
-    GlobalCommandContext& cmd_ctx,
-    u32 width,
-    u32 height,
-    VkFormat format,
-    std::span<const u8> data,
-    std::span<const u32> mip_offsets,
-    std::span<const u32> mip_sizes,
-    std::string_view name
-) -> OffscreenTarget
-{
+auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const u8> data, std::span<const u32> mip_offsets,
+                               std::span<const u32> mip_sizes, std::string_view name) -> OffscreenTarget {
     u32 const mip_levels = static_cast<u32>(mip_offsets.size());
     if (mip_levels == 0 || mip_sizes.size() != mip_levels) {
         // fallback: create empty
@@ -846,7 +786,8 @@ auto create_image_from_mips_v2(
 
     // You need create_offscreen_target to accept mip_levels (or provide a new helper).
     // I’m assuming you can add a mip_levels parameter; otherwise you must modify it internally.
-    auto t = create_offscreen_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, TargetSamplerConfiguration{.dims = {.mip_levels = mip_levels}}, name);
+    auto t = create_offscreen_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT,
+                                     TargetSamplerConfiguration{.dims = {.mip_levels = mip_levels}}, name);
 
     if (data.empty()) {
         return t;
@@ -866,21 +807,21 @@ auto create_image_from_mips_v2(
     staging_aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
 
     VkBufferCreateInfo bci{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .pNext = nullptr,
-        .flags = 0,
-        .size = static_cast<VkDeviceSize>(data.size_bytes()),
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices = nullptr,
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .size = static_cast<VkDeviceSize>(data.size_bytes()),
+            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
     };
 
     VkBuffer staging{};
     VmaAllocation staging_alloc{};
     vk_check(vmaCreateBuffer(alloc, &bci, &staging_aci, &staging, &staging_alloc, nullptr));
 
-    void* mapped{};
+    void *mapped{};
     vk_check(vmaMapMemory(alloc, staging_alloc, &mapped));
     std::memcpy(mapped, data.data(), data.size_bytes());
     vmaUnmapMemory(alloc, staging_alloc);
@@ -897,18 +838,17 @@ auto create_image_from_mips_v2(
         pre.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         pre.image = t.image;
         pre.subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = mip_levels,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = mip_levels,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
         };
 
 
-
         auto di_pre = create_info<VkDependencyInfo>();
-            di_pre.imageMemoryBarrierCount = 1;
-            di_pre.pImageMemoryBarriers = &pre;
+        di_pre.imageMemoryBarrierCount = 1;
+        di_pre.pImageMemoryBarriers = &pre;
 
         vkCmdPipelineBarrier2(cb, &di_pre);
 
@@ -920,17 +860,18 @@ auto create_image_from_mips_v2(
             VkExtent3D const ext = mip_extent(width, height, level);
 
             VkBufferImageCopy bic{
-                .bufferOffset = static_cast<VkDeviceSize>(mip_offsets[level]),
-                .bufferRowLength = 0,
-                .bufferImageHeight = 0,
-                .imageSubresource = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevel = level,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-                .imageOffset = {0, 0, 0},
-                .imageExtent = ext,
+                    .bufferOffset = static_cast<VkDeviceSize>(mip_offsets[level]),
+                    .bufferRowLength = 0,
+                    .bufferImageHeight = 0,
+                    .imageSubresource =
+                            {
+                                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                    .mipLevel = level,
+                                    .baseArrayLayer = 0,
+                                    .layerCount = 1,
+                            },
+                    .imageOffset = {0, 0, 0},
+                    .imageExtent = ext,
             };
 
             copies.push_back(bic);
@@ -950,16 +891,16 @@ auto create_image_from_mips_v2(
         post.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         post.image = t.image;
         post.subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = mip_levels,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = mip_levels,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
         };
 
         auto di_post = create_info<VkDependencyInfo>();
-            di_post.imageMemoryBarrierCount = 1;
-            di_post.pImageMemoryBarriers = &post;
+        di_post.imageMemoryBarrierCount = 1;
+        di_post.pImageMemoryBarriers = &post;
 
         vkCmdPipelineBarrier2(cb, &di_post);
     };
@@ -972,9 +913,7 @@ auto create_image_from_mips_v2(
     return t;
 }
 
-auto pick_physical_device(VkInstance instance)
-    -> tl::expected<DeviceChoice, PhysicalDeviceChoice>
-{
+auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice> {
     u32 count{};
     vkEnumeratePhysicalDevices(instance, &count, nullptr);
     if (count == 0u) {
@@ -984,7 +923,7 @@ auto pick_physical_device(VkInstance instance)
     std::vector<VkPhysicalDevice> devices(count);
     vkEnumeratePhysicalDevices(instance, &count, devices.data());
 
-    for (VkPhysicalDevice pd : devices) {
+    for (VkPhysicalDevice pd: devices) {
         u32 qcount{};
         vkGetPhysicalDeviceQueueFamilyProperties(pd, &qcount, nullptr);
         if (qcount == 0u) {
@@ -1079,38 +1018,34 @@ auto pick_physical_device(VkInstance instance)
 
 namespace {
     auto collect_supported_extensions(VkPhysicalDevice pd) -> std::unordered_set<std::string> {
-    u32 ext_count{};
-    vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, nullptr);
+        u32 ext_count{};
+        vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, nullptr);
 
-    std::vector<VkExtensionProperties> props(ext_count);
-    vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, props.data());
+        std::vector<VkExtensionProperties> props(ext_count);
+        vkEnumerateDeviceExtensionProperties(pd, nullptr, &ext_count, props.data());
 
-    std::unordered_set<std::string> out;
-    out.reserve(ext_count);
+        std::unordered_set<std::string> out;
+        out.reserve(ext_count);
 
-    for (auto const& e : props) {
-        out.insert(e.extensionName);
+        for (auto const &e: props) {
+            out.insert(e.extensionName);
+        }
+        return out;
     }
-    return out;
-}
 
-auto enable_extensions(
-    std::unordered_set<std::string> const& supported,
-    std::span<char const* const> desired,
-    std::vector<char const*>& enabled_exts,
-    EnabledFeatureSet& enabled_set
-) -> void {
-    for (auto const* name : desired) {
-        if (supported.contains(name)) {
-            enabled_exts.push_back(name);
-            enabled_set.insert(name);
-            info("Enabling device extension '{}'.", name);
-        } else {
-            info("Device extension '{}' not supported; skipping.", name);
+    auto enable_extensions(std::unordered_set<std::string> const &supported, std::span<char const *const> desired,
+                           std::vector<char const *> &enabled_exts, EnabledFeatureSet &enabled_set) -> void {
+        for (auto const *name: desired) {
+            if (supported.contains(name)) {
+                enabled_exts.push_back(name);
+                enabled_set.insert(name);
+                info("Enabling device extension '{}'.", name);
+            } else {
+                info("Device extension '{}' not supported; skipping.", name);
+            }
         }
     }
-}
-}
+} // namespace
 
 auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u32 transfer_index)
         -> std::tuple<VkDevice, VkQueue, VkQueue, VkQueue, EnabledFeatureSet> {
@@ -1140,19 +1075,22 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
 
     auto supported = collect_supported_extensions(pd);
 
-EnabledFeatureSet enabled_features;
-std::vector<char const*> enabled_exts;
+    EnabledFeatureSet enabled_features;
+    std::vector<char const *> enabled_exts;
 
-constexpr std::array desired_exts {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_EXT_MESH_SHADER_EXTENSION_NAME,
-    VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
-    VK_KHR_MAINTENANCE_9_EXTENSION_NAME,
-    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-    VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-};
+    constexpr std::array desired_exts{
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            VK_EXT_MESH_SHADER_EXTENSION_NAME,
+            VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
+            VK_KHR_MAINTENANCE_9_EXTENSION_NAME,
+            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+    };
 
-enable_extensions(supported, desired_exts, enabled_exts, enabled_features);
+
+    enable_extensions(supported, desired_exts, enabled_exts, enabled_features);
+
+    add_if_supported(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME, enabled_exts, enabled_features);
 
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features_khr{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
@@ -1241,13 +1179,13 @@ enable_extensions(supported, desired_exts, enabled_exts, enabled_features);
                                         .queueFamilyIndex = compute_index,
                                         .queueCount = 1u,
                                         .pQueuePriorities = &priority_compute};
-                                        float priority_transfer = 1.0f;
+    float priority_transfer = 1.0f;
     VkDeviceQueueCreateInfo qci_transfer{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                        .pNext = nullptr,
-                                        .flags = 0,
-                                        .queueFamilyIndex = transfer_index,
-                                        .queueCount = 1u,
-                                        .pQueuePriorities = &priority_transfer};
+                                         .pNext = nullptr,
+                                         .flags = 0,
+                                         .queueFamilyIndex = transfer_index,
+                                         .queueCount = 1u,
+                                         .pQueuePriorities = &priority_transfer};
 
     std::array<VkDeviceQueueCreateInfo, 3> qcis{qci_graphics, qci_compute, qci_transfer};
 

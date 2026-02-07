@@ -92,6 +92,8 @@ enum class Stage : u32 {
     Tonemapping = 3,
     CubeRotation = 4,
     DeferredLighting = 5,
+    LightClustering = 6,
+    UI = 7,
     Count,
 };
 
@@ -314,6 +316,27 @@ inline auto create_instance_with_debug(auto &callback, std::span<const std::stri
     return result;
 }
 
+constexpr auto viewport_scissors(VkExtent2D extent, bool flipped = true) {
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = static_cast<float>(extent.height);
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = -static_cast<float>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    if (!flipped) {
+        viewport.height = static_cast<float>(extent.height);
+        viewport.y = 0;
+    }
+
+    VkRect2D scissor{};
+    scissor.offset = VkOffset2D{0, 0};
+    scissor.extent = extent;
+    return std::make_pair(viewport, scissor);
+}
+
+
 struct PhysicalDeviceChoice {
     enum class Error { NoDevicesFound, NoQueuesFound };
 
@@ -323,8 +346,8 @@ struct PhysicalDeviceChoice {
 using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32, u32>;
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
-enum class ComputeStamp : u32 { RotateBegin, RotateEnd, CullBegin, CullEnd, Count };
-enum class ComputeIndex : u32 { Rotate = 0, Cull = 1, Count };
+enum class ComputeStamp : u32 { RotateBegin, RotateEnd, CullBegin, CullEnd, ClusteringBegin, ClusteringEnd, Count };
+enum class ComputeIndex : u32 { Rotate = 0, Cull = 1, Clustering, Count };
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
 inline constexpr u32 stats_compute_count = static_cast<u32>(ComputeIndex::Count);
@@ -340,9 +363,11 @@ enum class GraphicsStamp : u32 {
     TonemapEnd,
     PresentBegin,
     PresentEnd,
+    UIBegin,
+    UIEnd,
     Count
 };
-enum class GraphicsIndex : u32 { PreDepth = 0, GBuffer = 1, Deferred = 2, Tonemap = 3, Present = 4, Count };
+enum class GraphicsIndex : u32 { PreDepth = 0, GBuffer = 1, Deferred = 2, Tonemap = 3, Present = 4, UI = 5, Count };
 
 inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
 inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);
@@ -499,7 +524,7 @@ namespace destruction {
 
     auto device(VkDevice &dev) -> void;
 
-    auto bindless_set(VkDevice device, BindlessSet &bs) -> void;
+    auto bindless_set(BindlessSet &bs) -> void;
 
     auto allocator(VmaAllocator &alloc) -> void;
     auto swapchain(Swapchain &) -> void;

@@ -125,7 +125,7 @@ public:
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
-            return tl::unexpected{Error{Error::Type::CouldNotMapMemory}};
+            return tl::unexpected{Error{Error::Type::CouldNotMapMemory, "Buffer could not or was not mapped."}};
         }
         std::memcpy(pointer, slice.data(), slice.size_bytes());
         vk_check(vmaFlushAllocation(allocator, buffer.allocation(), 0, VK_WHOLE_SIZE));
@@ -168,7 +168,7 @@ public:
         if (const auto could = vmaCreateBuffer(allocator, &ci, &ai, &buffer.vk_buffer, &buffer.vma_allocation,
                                                &buffer.allocation_info);
             could != VK_SUCCESS) {
-            return tl::unexpected{Error{Error::Type::InvalidSize}};
+            return tl::unexpected{Error{Error::Type::InvalidSize, "Size is invalid."}};
         }
 
         buffer.set_name(allocator, name);
@@ -183,13 +183,15 @@ public:
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
-            return tl::unexpected{Error{Error::Type::CouldNotMapMemory}};
+            return tl::unexpected{Error{Error::Type::CouldNotMapMemory, "Buffer was not or could not be mapped."}};
         }
         std::memset(pointer, 0, aligned_size);
         vk_check(vmaFlushAllocation(allocator, buffer.allocation(), 0, VK_WHOLE_SIZE));
 
         return buffer;
     }
+
+    auto data_pointer() const { return allocation_info.pMappedData; }
 
 private:
     auto set_name(VmaAllocator &, std::string_view) const -> void;

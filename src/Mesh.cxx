@@ -2,13 +2,16 @@
 #include "CompilerGlue.hxx"
 
 #include <glm/gtc/packing.hpp>
+#include <glm/packing.hpp>
 #include <ktx.h>
 #include <ktxvulkan.h>
 
 #define TINYOBJLOADER_USE_MAPBOX_EARCUT
 #include <tiny_obj_loader.h>
 
+
 namespace {
+
     static auto pick_vk_format(TextureLoadPacket::Type type) -> VkFormat {
         switch (type) {
             case TextureLoadPacket::Type::SRGB:
@@ -176,11 +179,6 @@ namespace {
         return load_with_stb(texture_path, type, texture_class);
     }
 
-    auto unpack_uv(uint32_t packed) -> glm::vec2 {
-        const glm::vec4 u = glm::unpackSnorm4x8(packed);
-        return glm::vec2{u.x, u.y};
-    }
-
     auto unpack_normal(uint32_t packed) -> glm::vec3 {
         const glm::vec4 n4 = glm::unpackSnorm3x10_1x2(packed);
         return glm::vec3{n4.x, n4.y, n4.z};
@@ -228,9 +226,9 @@ namespace {
             const glm::vec3 p1 = v1.position;
             const glm::vec3 p2 = v2.position;
 
-            const glm::vec2 uv0 = unpack_uv(v0.uvs);
-            const glm::vec2 uv1 = unpack_uv(v1.uvs);
-            const glm::vec2 uv2 = unpack_uv(v2.uvs);
+            const auto uv0 = v0.uvs;
+            const auto uv1 = v1.uvs;
+            const auto uv2 = v2.uvs;
 
             const glm::vec3 e1 = p1 - p0;
             const glm::vec3 e2 = p2 - p0;
@@ -438,11 +436,12 @@ namespace {
     struct VertexHash {
         auto operator()(const Vertex &v) const noexcept -> size_t {
             size_t h = 0;
-            h ^= std::hash<float>()(v.position.x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<float>()(v.position.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<float>()(v.position.z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<float>()(v.position[0]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<float>()(v.position[1]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<float>()(v.position[2]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<float>()(v.uvs.x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<float>()(v.uvs.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.normal) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<u32>()(v.uvs) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.tangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.bitangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             return h;
@@ -454,13 +453,13 @@ namespace {
 
         if (idx.vertex_index >= 0) {
             const int base = 3 * idx.vertex_index;
-            v.position = glm::vec3{
+            v.position = {
                     attrib.vertices[base + 0],
                     attrib.vertices[base + 1],
                     attrib.vertices[base + 2],
             };
         } else {
-            v.position = glm::vec3{0.0f};
+            v.position = glm::vec3(0.0f);
         }
 
         glm::vec3 n{0.0f, 1.0f, 0.0f};
@@ -483,8 +482,7 @@ namespace {
             };
         }
         uv0.y = 1.0f - uv0.y;
-        v.uvs = glm::packSnorm4x8(glm::vec4{uv0, 0.0f, 0.0f});
-
+        v.uvs = uv0;
         return v;
     }
 } // namespace
@@ -613,7 +611,6 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
         const std::string &mat_name = material_ids.id_to_name[m_id];
         bool is_alpha = materials[mat_name].is_alpha_tested;
 
-        // 3. Create one consolidated submesh for this material
         mesh.submeshes.push_back(Submesh{
                 .index_offset = submesh_start_index,
                 .index_count = static_cast<u32>(mesh.indices.size()) - submesh_start_index,
@@ -624,9 +621,6 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
     compute_tangent_basis(mesh);
 
-    // -------------------------------------------------------------------------
-    // Texture loading (dedupe) - unchanged, driven by your MaterialData table
-    // -------------------------------------------------------------------------
     std::vector<std::future<LoadedTextureCpu>> load_futures;
     std::unordered_set<std::string> unique_texture_names;
     const std::filesystem::path base_path = obj_path.parent_path();
@@ -634,10 +628,12 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 #define LOAD_MAP(mat, field_name, t, clazz)                                                                            \
     do {                                                                                                               \
         if (!(mat).field_name.empty() && !unique_texture_names.contains((mat).field_name)) {                           \
-            load_futures.emplace_back(std::async(std::launch::async, [base_path, tex_name = (mat).field_name]() {      \
-                auto resolved = resolve_texture_path(base_path, tex_name);                                             \
-                return load_texture_unified(resolved, TextureLoadPacket::Type::t, TextureLoadPacket::Class::clazz);    \
-            }));                                                                                                       \
+            load_futures.emplace_back(                                                                                 \
+                    std::async(std::launch::async, [base_path, tex_name = (mat).field_name]() -> LoadedTextureCpu {    \
+                        auto resolved = resolve_texture_path(base_path, tex_name);                                     \
+                        return load_texture_unified(resolved, TextureLoadPacket::Type::t,                              \
+                                                    TextureLoadPacket::Class::clazz);                                  \
+                    }));                                                                                               \
             unique_texture_names.emplace((mat).field_name);                                                            \
         }                                                                                                              \
     } while (false)
@@ -720,17 +716,14 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
     }
     auto aabb_data = std::move(aabb_data_result.value());
 
-    struct VU {
-        glm::vec3 pos;
-        u32 uvs;
-    };
+
     auto position_vb = mesh.vertices | std::views::transform([](const auto &v) {
-                           return VU{
+                           return VertexWithUV{
                                    .pos = v.position,
                                    .uvs = v.uvs,
                            };
                        }) |
-                       to<std::vector<VU>>();
+                       to<std::vector<VertexWithUV>>();
 
     auto vertex_buffer =
             Buffer::from_slice<Vertex>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(vb_copy),
@@ -738,8 +731,8 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
                     .value();
 
     auto pos_uv_buffer =
-            Buffer::from_slice<VU>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(position_vb),
-                                   std::format("position_buffer_{}", obj_path.filename().string()))
+            Buffer::from_slice<VertexWithUV>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(position_vb),
+                                             std::format("position_buffer_{}", obj_path.filename().string()))
                     .value();
 
     auto index_buffer = Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, std::span(ib_copy),

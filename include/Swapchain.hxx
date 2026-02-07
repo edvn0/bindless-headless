@@ -41,6 +41,7 @@ public:
 
     auto present(VkQueue queue, u32 image_index, VkSemaphore render_finished) -> VkResult;
 
+    [[nodiscard]] auto image_count() const { return images.size(); }
     [[nodiscard]] auto extent() const -> VkExtent2D { return full_extent; }
     [[nodiscard]] auto format() const -> VkFormat { return surface_format.format; }
     [[nodiscard]] auto color_space() const -> VkColorSpaceKHR { return surface_format.colorSpace; }

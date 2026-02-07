@@ -65,7 +65,7 @@ struct detail::Impl {
 
     virtual auto compile_from_file(std::string_view path, std::span<const std::string_view> entries,
                                    std::span<ReflectionData> reflection_data)
-            -> tl::expected<std::vector<std::vector<u32>>, std::string> = 0;
+            -> tl::expected<std::vector<std::vector<u32>>, Error> = 0;
 };
 
 #if defined(ENGINE_OFFLINE_SHADERS)
@@ -118,24 +118,59 @@ struct RuntimeSlangCompiler final : detail::Impl {
 
         std::array<slang::CompilerOptionEntry, 5> opts = {
                 slang::CompilerOptionEntry{
-                        slang::CompilerOptionName::EmitSpirvDirectly,
-                        {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr},
+                        .name = slang::CompilerOptionName::EmitSpirvDirectly,
+                        .value =
+                                {
+                                        .kind = slang::CompilerOptionValueKind::Int,
+                                        .intValue0 = 1,
+                                        .intValue1 = 0,
+                                        .stringValue0 = nullptr,
+                                        .stringValue1 = nullptr,
+                                },
                 },
                 slang::CompilerOptionEntry{
-                        slang::CompilerOptionName::VulkanUseEntryPointName,
-                        {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr},
+                        .name = slang::CompilerOptionName::VulkanUseEntryPointName,
+                        .value =
+                                {
+                                        .kind = slang::CompilerOptionValueKind::Int,
+                                        .intValue0 = 1,
+                                        .intValue1 = 0,
+                                        .stringValue0 = nullptr,
+                                        .stringValue1 = nullptr,
+                                },
                 },
                 slang::CompilerOptionEntry{
-                        slang::CompilerOptionName::Optimization,
-                        {slang::CompilerOptionValueKind::Int, SLANG_OPTIMIZATION_LEVEL_HIGH, 0, nullptr, nullptr},
+                        .name = slang::CompilerOptionName::Optimization,
+                        .value =
+                                {
+                                        .kind = slang::CompilerOptionValueKind::Int,
+                                        .intValue0 = SLANG_OPTIMIZATION_LEVEL_HIGH,
+                                        .intValue1 = 0,
+                                        .stringValue0 = nullptr,
+                                        .stringValue1 = nullptr,
+                                },
                 },
                 slang::CompilerOptionEntry{
-                        slang::CompilerOptionName::MatrixLayoutColumn,
-                        {slang::CompilerOptionValueKind::Int, 1, 0, nullptr, nullptr},
+                        .name = slang::CompilerOptionName::MatrixLayoutColumn,
+                        .value =
+                                {
+                                        .kind = slang::CompilerOptionValueKind::Int,
+                                        .intValue0 = 1,
+                                        .intValue1 = 0,
+                                        .stringValue0 = nullptr,
+                                        .stringValue1 = nullptr,
+                                },
                 },
                 slang::CompilerOptionEntry{
-                        slang::CompilerOptionName::DebugInformation,
-                        {slang::CompilerOptionValueKind::Int, SLANG_DEBUG_INFO_LEVEL_MAXIMAL, 0, nullptr, nullptr},
+                        .name = slang::CompilerOptionName::DebugInformation,
+                        .value =
+                                {
+                                        .kind = slang::CompilerOptionValueKind::Int,
+                                        .intValue0 = SLANG_DEBUG_INFO_LEVEL_MAXIMAL,
+                                        .intValue1 = 0,
+                                        .stringValue0 = nullptr,
+                                        .stringValue1 = nullptr,
+                                },
                 },
         };
 
@@ -218,11 +253,15 @@ struct RuntimeSlangCompiler final : detail::Impl {
 
     auto compile_from_file(std::string_view path, std::span<const std::string_view> entries,
                            std::span<ReflectionData> reflection_data)
-            -> tl::expected<std::vector<std::vector<u32>>, std::string> override {
+            -> tl::expected<std::vector<std::vector<u32>>, Error> override {
         std::filesystem::path p{path};
-        const auto name = p.filename().string();
-        const auto src = load_file_to_string(p);
 
+        // Make both name AND path unique to bypass Slang's internal caching
+        const auto timestamp = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        const auto name = p.filename().string() + "_" + timestamp;
+        const auto unique_path = std::string(path) + "?" + timestamp; // Add query-string-like suffix
+
+        const auto src = load_file_to_string(p);
         std::vector<std::vector<u32>> result;
         result.resize(entries.size());
 
@@ -231,19 +270,20 @@ struct RuntimeSlangCompiler final : detail::Impl {
             for (std::size_t i = 0; i < std::min(entries.size(), reflection_data.size()); ++i) {
                 reflection_data[i] = ReflectionData{};
             }
-            return result;
+            return tl::make_unexpected(Error::make_error(Error::Type::FileNotFoundError, "Empty file at {}", path));
         }
 
         Slang::ComPtr<slang::IBlob> diagnostics;
         Slang::ComPtr<slang::IModule> slang_module_from_session;
-        slang_module_from_session =
-                session->loadModuleFromSourceString(name.c_str(), path.data(), src.c_str(), diagnostics.writeRef());
+        slang_module_from_session = session->loadModuleFromSourceString(name.c_str(), unique_path.c_str(), src.c_str(),
+                                                                        diagnostics.writeRef());
 
         if (diagnostics) {
             warn("Compiler diagnostic: {}", static_cast<const char *>(diagnostics->getBufferPointer()));
         }
         if (!slang_module_from_session) {
-            std::abort();
+            return tl::make_unexpected(
+                    Error::make_error(Error::Type::ShaderCompileError, "Failed to compiler shader."));
         }
 
         for (std::size_t i = 0; i < entries.size(); ++i) {
@@ -275,11 +315,11 @@ auto Compiler::operator=(Compiler &&) noexcept -> Compiler & = default;
 
 auto Compiler::compile_from_file(std::string_view path, std::span<const std::string_view> entries,
                                  std::span<ReflectionData> reflection_data)
-        -> tl::expected<std::vector<std::vector<u32>>, std::string> {
+        -> tl::expected<std::vector<std::vector<u32>>, Error> {
 
     std::filesystem::path p{path};
     if (!std::filesystem::exists(p)) {
-        return tl::make_unexpected("File not found: " + std::string(path));
+        return tl::make_unexpected(Error::make_error(Error::Type::FileNotFoundError, std::string(path)));
     }
 
     auto current_write_time = std::filesystem::last_write_time(p);
@@ -290,6 +330,8 @@ auto Compiler::compile_from_file(std::string_view path, std::span<const std::str
                 reflection_data[i] = it->second.reflection_results[i];
             }
             return it->second.spirv_results;
+        } else {
+            disk_cache.erase(it);
         }
     }
 

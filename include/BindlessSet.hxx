@@ -1,7 +1,6 @@
 #pragma once
 
-#define NO_MIN_MAX
-
+#include "BindlessHeadless.hxx"
 #include "RenderContext.hxx"
 #include "Types.hxx"
 
@@ -53,6 +52,7 @@ inline auto query_bindless_caps(VkPhysicalDevice pd) -> BindlessCaps {
 
 struct BindlessSet {
     VkDescriptorSetLayout layout{VK_NULL_HANDLE};
+    VkPipelineLayout pipeline_layout{VK_NULL_HANDLE};
     VkDescriptorPool pool{VK_NULL_HANDLE};
     VkDescriptorSet set{VK_NULL_HANDLE};
 
@@ -87,9 +87,12 @@ struct BindlessSet {
 
         if (pool)
             vkDestroyDescriptorPool(device, pool, nullptr);
+        if (pipeline_layout)
+            vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
         if (layout)
             vkDestroyDescriptorSetLayout(device, layout, nullptr);
         pool = VK_NULL_HANDLE;
+        pipeline_layout = VK_NULL_HANDLE;
         layout = VK_NULL_HANDLE;
         set = VK_NULL_HANDLE;
     }
@@ -124,15 +127,13 @@ struct BindlessSet {
         return true;
     }
 
-    // Returns true if we did resize, and caller needs to update pipelines etc.
     auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers) -> bool {
         if (!need_repopulate) [[likely]]
             return false;
 
-        // Ensure descriptor arrays are big enough for current pools (your existing policy)
-        const auto did_resize=grow_if_needed(textures.num_objects(), samplers.num_objects(), textures.num_objects(), 0u);
+        const auto did_resize =
+                grow_if_needed(textures.num_objects(), samplers.num_objects(), textures.num_objects(), 0u);
 
-        // Guard slot 0 must exist and be valid
         auto &dummy_sampler = *samplers.get(samplers.get_handle(0));
         auto &dummy_texture = *textures.get(textures.get_handle(0));
 
@@ -142,7 +143,6 @@ struct BindlessSet {
                                                         : dummy_texture.sampled_view;
         const VkSampler &dummy_vk_sampler = dummy_sampler;
 
-        // Fill whole descriptor arrays with defaults (no sparse holes)
         std::vector<VkDescriptorImageInfo> sampled_infos(max_textures);
         std::vector<VkDescriptorImageInfo> storage_infos(max_storage_images);
         std::vector<VkDescriptorImageInfo> sampler_infos(max_samplers);
@@ -171,8 +171,6 @@ struct BindlessSet {
             };
         }
 
-        // Now overwrite defaults for slots we actually have, CLAMPED to descriptor sizes.
-        // Important: descriptor index == pool slot index.
         {
             u32 idx = 0;
             const u32 limit = std::min<u32>(static_cast<u32>(textures.data().size()), max_textures);
@@ -184,8 +182,6 @@ struct BindlessSet {
 
                 const auto &texture = tex_entry.object;
 
-                // If your pool can contain invalid entries, keep dummy for those.
-                // (You can add your own "is_valid" predicate here if you have one.)
                 if (texture.sampled_view != VK_NULL_HANDLE) {
                     sampled_infos[idx] = VkDescriptorImageInfo{
                             .sampler = VK_NULL_HANDLE,
@@ -226,31 +222,34 @@ struct BindlessSet {
             }
         }
 
-        VkWriteDescriptorSet writes[3]{};
+        std::array<VkWriteDescriptorSet, 3> writes{};
         u32 num_writes = 0;
 
-        writes[num_writes++] = VkWriteDescriptorSet{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                                    .pNext = nullptr,
-                                                    .dstSet = set,
-                                                    .dstBinding = 0,
-                                                    .dstArrayElement = 0,
-                                                    .descriptorCount = max_textures,
-                                                    .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                                                    .pImageInfo = sampled_infos.data(),
-                                                    .pBufferInfo = nullptr,
-                                                    .pTexelBufferView = nullptr};
+        writes[num_writes++] = VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = max_textures,
+                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                .pImageInfo = sampled_infos.data(),
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+        };
 
-        writes[num_writes++] = VkWriteDescriptorSet{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                                    .pNext = nullptr,
-
-                                                    .dstSet = set,
-                                                    .dstBinding = 1,
-                                                    .dstArrayElement = 0,
-                                                    .descriptorCount = max_samplers,
-                                                    .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
-                                                    .pImageInfo = sampler_infos.data(),
-                                                    .pBufferInfo = nullptr,
-                                                    .pTexelBufferView = nullptr};
+        writes[num_writes++] = VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = max_samplers,
+                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+                .pImageInfo = sampler_infos.data(),
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+        };
 
         writes[num_writes++] = VkWriteDescriptorSet{
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -265,7 +264,7 @@ struct BindlessSet {
                 .pTexelBufferView = nullptr,
         };
 
-        vkUpdateDescriptorSets(device, num_writes, writes, 0, nullptr);
+        vkUpdateDescriptorSets(device, num_writes, writes.data(), 0, nullptr);
         need_repopulate = false;
 
         return did_resize;
@@ -331,6 +330,20 @@ private:
             pool_sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, max_accel_structs});
         }
 
+        VkPipelineLayoutCreateInfo plci{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .setLayoutCount = 1u,
+                .pSetLayouts = &layout,
+                .pushConstantRangeCount = 0u,
+                .pPushConstantRanges = nullptr,
+        };
+
+        vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pipeline_layout));
+        set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pipeline_layout, "bindless_pipeline_layout");
+
+
         VkDescriptorPoolCreateInfo pci{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
                                        .pNext = nullptr,
                                        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
@@ -339,6 +352,7 @@ private:
                                        .pPoolSizes = pool_sizes.data()};
 
         vk_check(vkCreateDescriptorPool(device, &pci, nullptr, &pool));
+        set_debug_name(device, VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, "bindless_descriptor_pool");
 
         VkDescriptorSetAllocateInfo dai{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                         .pNext = nullptr,
@@ -347,5 +361,6 @@ private:
                                         .pSetLayouts = &layout};
 
         vk_check(vkAllocateDescriptorSets(device, &dai, &set));
+        set_debug_name(device, VK_OBJECT_TYPE_DESCRIPTOR_SET, set, "bindless_descriptor_set");
     }
 };

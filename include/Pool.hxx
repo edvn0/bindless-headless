@@ -20,7 +20,12 @@ struct DeferredDestroyQueue {
 
     std::deque<Item> items;
 
-    auto enqueue(u64 v, std::function<void()> fn) -> void { items.push_back({v, std::move(fn)}); }
+    auto enqueue(u64 v, std::function<void()> fn) -> void {
+        items.push_back({
+                .retire_value = v,
+                .fn = std::move(fn),
+        });
+    }
 
     auto retire(u64 completed) -> void {
         std::erase_if(items, [&](Item const &it) {
@@ -31,7 +36,7 @@ struct DeferredDestroyQueue {
         });
     }
 
-    auto empty() const -> bool { return items.empty(); }
+    [[nodiscard]] auto empty() const -> bool { return items.empty(); }
 };
 
 
@@ -78,19 +83,44 @@ private:
 static_assert(std::is_trivially_copyable_v<Handle<class DebugFoo>>);
 static_assert(sizeof(Handle<class DebugFoo>) == sizeof(u64));
 
-template<typename T>
-class Holder {
-    RenderContext *context;
-    Handle<T> handle{};
+
+template<class T>
+concept HandleTag = requires { typename Handle<T>; } && std::is_trivially_copyable_v<Handle<T>> &&
+                    (sizeof(Handle<T>) == sizeof(u64));
+template<HandleTag T>
+class Holder final {
+    RenderContext *context{nullptr};
+    T handle{};
 
 public:
-    explicit Holder(RenderContext &ctx, Handle<T> h) : context(&ctx), handle(h) {}
-    ~Holder() { destroy(context, handle, std::numeric_limits<u64>::max()); }
+    explicit Holder(RenderContext &ctx, T h) : context(&ctx), handle(h) {}
+    ~Holder() { destroy(*context, handle); }
+    Holder() = default;
 
-    Holder(const Holder &) = delete;
-    auto operator=(const Holder &) = delete;
-    Holder(Holder &&) = delete;
-    auto operator=(Holder &&) = delete;
+    Holder(Holder &&other) : context(other.context), handle(other.handle) {}
+    auto operator=(const Holder &) -> Holder & = delete;
+    auto operator=(Holder &&other) -> Holder & {
+        std::swap(context, other.context);
+        std::swap(handle, other.handle);
+        return *this;
+    }
+    auto operator=(std::nullptr_t) -> Holder & {
+        reset();
+        return *this;
+    }
+    explicit(false) operator T() const { return handle; }
+    auto valid() const { return handle.valid(); }
+    auto empty() const { return handle.empty(); }
+    void reset() {
+        destroy(*context, handle);
+        context = nullptr;
+        handle = T{};
+    }
+    auto release() -> T {
+        context = nullptr;
+        return std::exchange(handle, T{});
+    }
+    auto index() const { return handle.index(); }
 };
 
 template<typename ObjectType, typename ImplObjectType>
@@ -137,37 +167,22 @@ public:
 
         entries[index].object = ImplObjectType{};
         entries[index].live = false;
-        ++entries[index].generation;
+        entries[index].generation++;
         entries[index].next_free = free_list_head;
         free_list_head = index;
-        --object_count;
-    }
-
-    [[nodiscard]] auto take(Handle<ObjectType> handle) -> std::optional<ImplObjectType> {
-        if (handle.empty()) {
-            return std::nullopt;
-        }
-
-        auto const index = handle.index();
-        assert(index < entries.size());
-        assert(handle.gen() == entries[index].generation);
-
-        ImplObjectType obj = std::move(entries[index].object);
-        entries[index].object = ImplObjectType{};
-        entries[index].live = false;
-        ++entries[index].generation;
-        entries[index].next_free = free_list_head;
-        free_list_head = index;
-        --object_count;
-        return obj;
+        object_count--;
     }
 
     [[nodiscard]] auto get(Handle<ObjectType> handle) const -> ImplObjectType const * {
         if (handle.empty()) {
             return nullptr;
         }
-
         auto const index = handle.index();
+        assert(index < entries.size());
+
+        if (!entries.at(index).live)
+            return nullptr;
+
         assert(index < entries.size());
         assert(handle.gen() == entries[index].generation);
         return &entries[index].object;
@@ -180,10 +195,13 @@ public:
         if (handle.empty()) {
             return nullptr;
         }
-
         auto const index = handle.index();
         assert(index < entries.size());
-        assert(handle.gen() == entries[index].generation);
+
+        if (!entries.at(index).live)
+            return nullptr;
+
+        assert(handle.gen() == entries[index].generation); // HERE!
         return &entries[index].object;
     }
 

@@ -4,8 +4,13 @@ struct RotateCubesPushConstant {
     uint cube_count;
     float delta_time;
     float rads_per_second;
+    float total_time;
+    uint light_count;
     Transform* transforms;
     Transform* previous_frame_transforms;
+    PointLight* previous_point_lights;
+    PointLight* point_lights;
+    PointLight* static_point_lights;
 };
 
 float3 get_random_factor(uint index) {
@@ -18,12 +23,29 @@ float3 get_random_factor(uint index) {
     return factors;
 }
 
+float3 get_light_offset_dir(uint index) {
+    float phase = float(index % 3);
+    if (phase == 0.0) return float3(1, 0, 0); // Move on X
+    if (phase == 1.0) return float3(0, 0, 1); // Move on Z
+    return float3(0, 1, 0);                   // Move on Y
+}
+
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void rotate_cs(uint3 threadID : SV_DispatchThreadID, uniform RotateCubesPushConstant pc)
 {
-    return;
-    /*uint idx = threadID.x;
+    /*
+    uint idx = threadID.x;
+    if (idx < pc.light_count) {
+        float offset = sin(pc.total_time) * 1.0f;
+float3 dir = get_light_offset_dir(idx);
+
+
+float4 base = pc.static_point_lights[idx].position_radius;
+base.xyz += dir * offset;
+        
+pc.point_lights[idx].position_radius = base;    }
+
     if (idx >= pc.cube_count) return;
 
     float3x4 m3x4 = pc.previous_frame_transforms[idx].m;

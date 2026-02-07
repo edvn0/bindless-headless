@@ -174,3 +174,49 @@ if(NOT ENGINE_OFFLINE_SHADERS)
     INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
   )
 endif()
+
+CPMAddPackage(
+  NAME ImGui
+  GITHUB_REPOSITORY ocornut/imgui
+  GIT_TAG v1.92.5-docking
+  GIT_SHALLOW YES
+  DOWNLOAD_ONLY YES
+)
+CPMAddPackage(
+  NAME ImPlot
+  GITHUB_REPOSITORY epezent/implot
+  GIT_TAG 81b8b1951392767cf458508385fa025fd087a252
+  GIT_SHALLOW YES
+  DOWNLOAD_ONLY YES
+)
+
+if(ImGui_ADDED AND ImPlot_ADDED)
+  set(IMGUI_SRCS
+    ${ImGui_SOURCE_DIR}/imgui.cpp
+    ${ImGui_SOURCE_DIR}/imgui_demo.cpp
+    ${ImGui_SOURCE_DIR}/imgui_draw.cpp
+    ${ImGui_SOURCE_DIR}/imgui_tables.cpp
+    ${ImGui_SOURCE_DIR}/imgui_widgets.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    ${ImGui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+  )
+
+  # Add ImPlot sources
+  set(IMPLOT_SRCS
+    ${ImPlot_SOURCE_DIR}/implot.cpp
+    ${ImPlot_SOURCE_DIR}/implot_items.cpp
+  )
+
+  add_library(imgui STATIC ${IMGUI_SRCS} ${IMPLOT_SRCS})
+  target_include_directories(imgui PUBLIC
+    ${ImGui_SOURCE_DIR}
+    ${ImGui_SOURCE_DIR}/backends
+    ${ImPlot_SOURCE_DIR} # Add ImPlot includes
+  )
+  target_link_libraries(imgui PUBLIC
+    glfw
+    volk
+    volk::volk_headers
+  )
+  target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_USER_CONFIG="imconfig.h")
+endif()

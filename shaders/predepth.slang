@@ -12,7 +12,7 @@ struct PC {
 
 struct VertexInput {
     float3 position;
-    uint   uvs;
+    float2   uvs;
 };
 
 struct VSOut {
@@ -48,9 +48,8 @@ VSOut main_vs_mdi(
     float4 world_pos = mul(model, float4(input.position, 1.0));
     o.position = mul(pc.frame_ubo->view_projection, world_pos);
 
-    // 3. Unpack UVs (Matches your G-Buffer logic)
-    UV4 uvpack = unpack_uvs_snorm4x8(input.uvs);
-    o.uv = uvpack.uv0;
+    float2 uvpack =input.uvs;
+    o.uv = uvpack;
 
     return o;
 }

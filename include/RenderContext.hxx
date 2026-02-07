@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Buffer.hxx"
+#include "PipelineCache.hxx"
+#include "Pipelines.hxx"
 #include "Pool.hxx"
 #include "Types.hxx"
-#include "Pipelines.hxx"
+
 
 struct QueryPoolState {
     VkQueryPool pool = VK_NULL_HANDLE;
@@ -26,7 +28,7 @@ struct RenderContext {
     VmaAllocator &allocator;
     DeferredDestroyQueue destroy_queue{};
     BindlessSet *bindless_set{nullptr};
-
+    std::unique_ptr<PipelineCache> pipeline_cache;
 
     TexturePool textures{};
     auto create_texture(OffscreenTarget &&) -> TextureHandle;
@@ -45,7 +47,11 @@ struct RenderContext {
     auto create_pipeline(CompiledPipeline &&) -> PipelineHandle;
 
     auto device_address(BufferHandle) -> DeviceAddress;
-    auto device_address(BufferHandle) const -> DeviceAddress;
+    auto flush_mapped_memory(BufferHandle, std::size_t offset, std::size_t size) const -> void;
+    [[nodiscard]] auto texture_format(TextureHandle) const -> VkFormat;
+    [[nodiscard]] auto device_address(BufferHandle) const -> DeviceAddress;
+    [[nodiscard]] auto get_mapped_pointer(BufferHandle) const -> tl::expected<void *, Error>;
+
     auto clear_all() -> void;
 
     [[nodiscard]] auto get_device() const -> VkDevice;
@@ -56,40 +62,3 @@ auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value = UINT64
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value = UINT64_MAX) -> void;
-
-namespace util {
-    template<typename Mesh>
-    concept MeshLike = requires(Mesh m) {
-        { m.vertex_buffer() };
-        { m.index_buffer() };
-    } || requires(Mesh m) {
-        { m.vertex_buffer };
-        { m.index_buffer };
-    };
-
-    struct MeshDrawHandles {
-        Buffer *vertex_buffer;
-        Buffer *index_buffer;
-    };
-
-    auto get_mesh_buffers(RenderContext &ctx, MeshLike auto const &mesh) -> MeshDrawHandles {
-        BufferHandle vb_handle;
-        BufferHandle ib_handle;
-
-        if constexpr (requires { mesh.vertex_buffer(); }) {
-            vb_handle = mesh.vertex_buffer();
-            ib_handle = mesh.index_buffer();
-        } else {
-            vb_handle = mesh.vertex_buffer;
-            ib_handle = mesh.index_buffer;
-        }
-
-        auto &&[vb, ib] = ctx.buffers.get_multiple(vb_handle, ib_handle);
-
-        return MeshDrawHandles{
-                .vertex_buffer = vb,
-                .index_buffer = ib,
-        };
-    }
-
-} // namespace util

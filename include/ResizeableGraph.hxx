@@ -7,8 +7,9 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <vector>
 #include <unordered_set>
+#include <vector>
+
 
 #include "Forward.hxx"
 #include "Types.hxx"
@@ -18,11 +19,9 @@ struct ResizeContext {
     RenderContext &ctx;
     u64 retire_value{0};
 
-    auto get_device() const -> VkDevice;
-
-    auto get_allocator() const -> VmaAllocator;
-
-    auto get_instance() const -> VkInstance;
+    [[nodiscard]] auto get_device() const -> VkDevice;
+    [[nodiscard]] auto get_allocator() const -> VmaAllocator;
+    [[nodiscard]] auto get_instance() const -> VkInstance;
 };
 
 enum class ResizeTrigger : u32 {
@@ -32,24 +31,25 @@ enum class ResizeTrigger : u32 {
     Bindings = 1 << 2, // Descriptor set changes
     All = 0xFFFFFFFF
 };
+inline auto to_string(ResizeTrigger flags) -> std::string;
 
-constexpr ResizeTrigger operator|(ResizeTrigger a, ResizeTrigger b) {
+constexpr auto operator|(ResizeTrigger a, ResizeTrigger b) -> ResizeTrigger {
     return static_cast<ResizeTrigger>(static_cast<u32>(a) | static_cast<u32>(b));
 }
 
-constexpr ResizeTrigger operator&(ResizeTrigger a, ResizeTrigger b) {
+constexpr auto operator&(ResizeTrigger a, ResizeTrigger b) -> ResizeTrigger {
     return static_cast<ResizeTrigger>(static_cast<u32>(a) & static_cast<u32>(b));
 }
 
-constexpr bool operator!=(ResizeTrigger a, ResizeTrigger b) {
+constexpr auto operator!=(ResizeTrigger a, ResizeTrigger b) -> bool {
     return static_cast<u32>(a) != static_cast<u32>(b);
 }
 
-constexpr bool operator!=(std::integral auto a, ResizeTrigger b) {
+constexpr auto operator!=(std::integral auto a, ResizeTrigger b) -> bool {
     return static_cast<u32>(a) != static_cast<u32>(b);
 }
 
-constexpr bool operator!=(ResizeTrigger a, std::integral auto b) {
+constexpr auto operator!=(ResizeTrigger a, std::integral auto b) -> bool {
     return static_cast<u32>(a) != static_cast<u32>(b);
 }
 
@@ -67,18 +67,19 @@ struct ResizeGraph {
         ResizeTrigger category{ResizeTrigger::Extent}; // Default to Extent
     };
 
-    auto add_node(std::string_view name, ResizeCallback &&rebuild,
-                  ResizeTrigger category = ResizeTrigger::All) -> NodeId {
+    auto add_node(std::string_view name, ResizeCallback &&rebuild, ResizeTrigger category = ResizeTrigger::All)
+            -> NodeId {
         const NodeId id = next_id++;
         nodes.push_back(Node{
-            .id = id,
-            .name = std::string{name},
-            .deps = {},
-            .rebuild = std::move(rebuild),
-            .insertion_index = static_cast<u32>(nodes.size()),
-            .category = category,
+                .id = id,
+                .name = std::string{name},
+                .deps = {},
+                .rebuild = std::move(rebuild),
+                .insertion_index = static_cast<u32>(nodes.size()),
+                .category = category,
         });
         id_to_index[id] = nodes.size() - 1;
+        topo_cache_valid = false;
         return id;
     }
 
@@ -87,21 +88,23 @@ struct ResizeGraph {
         if (!n)
             std::abort();
         n->deps.push_back(depends_on);
+        topo_cache_valid = false;
     }
 
     auto rebuild(const VkExtent2D extent, const ResizeContext &rc, ResizeTrigger trigger = ResizeTrigger::All) -> void {
-        if (extent.width == 0 || extent.height == 0) return;
+        if (extent.width == 0 || extent.height == 0)
+            return;
 
         ensure_topo_cache();
 
         std::unordered_set<NodeId> dirty_nodes;
 
-        for (NodeId id : topo_order_cache) {
-            auto& node = nodes.at(id_to_index.at(id));
+        for (NodeId id: topo_order_cache) {
+            auto &node = nodes.at(id_to_index.at(id));
 
             const bool category_match = (node.category & trigger) != 0;
-            const bool dependency_dirty = std::ranges::any_of(node.deps,
-                                                        [&](const NodeId& dep_id) { return dirty_nodes.contains(dep_id); });
+            const bool dependency_dirty =
+                    std::ranges::any_of(node.deps, [&](const NodeId &dep_id) { return dirty_nodes.contains(dep_id); });
 
             if (category_match || dependency_dirty) {
                 node.rebuild(extent, rc);
@@ -110,13 +113,9 @@ struct ResizeGraph {
         }
     }
 
-    auto trigger_resize(ResizeTrigger trigger) {
-            pending_triggers.fetch_or(static_cast<u32>(trigger));
-        }
+    auto trigger_resize(ResizeTrigger trigger) { pending_triggers.fetch_or(static_cast<u32>(trigger)); }
 
-        auto get_and_clear_triggers() -> ResizeTrigger {
-                return static_cast<ResizeTrigger>(pending_triggers.exchange(0));
-            }
+    auto get_and_clear_triggers() -> ResizeTrigger { return static_cast<ResizeTrigger>(pending_triggers.exchange(0)); }
 
     [[nodiscard]] auto to_graphviz_dot(bool include_topo_rank = true) const -> std::string;
 
@@ -137,9 +136,7 @@ private:
     }
 
     auto topo_sort_stable() const -> std::vector<NodeId> {
-        // Build adjacency and indegrees.
-        // deps: dep -> node edge
-        std::unordered_map<NodeId, std::vector<NodeId> > outgoing{};
+        std::unordered_map<NodeId, std::vector<NodeId>> outgoing{};
         outgoing.reserve(nodes.size());
 
         std::unordered_map<NodeId, u32> indegree{};
@@ -156,8 +153,6 @@ private:
             }
         }
 
-        // Ready set: nodes with indegree 0.
-        // Stable tie-breaker: insertion_index.
         std::vector<NodeId> ready{};
         ready.reserve(nodes.size());
 
@@ -180,7 +175,7 @@ private:
 
         while (!ready.empty()) {
             const NodeId n = ready.front();
-            ready.erase(ready.begin()); // small N, fine; can optimize later
+            ready.erase(ready.begin());
             out.push_back(n);
 
             auto it = outgoing.find(n);
@@ -195,12 +190,10 @@ private:
                 }
             }
 
-            // Preserve insertion order among newly-ready nodes too.
             stable_ready_sort();
         }
 
         if (out.size() != nodes.size()) {
-            // Cycle detected. Optional: print node names here.
             std::abort();
         }
 
@@ -218,3 +211,33 @@ private:
     bool topo_cache_valid{false};
     std::vector<NodeId> topo_order_cache{};
 };
+
+inline auto to_string(ResizeTrigger flags) -> std::string {
+    if (flags == ResizeTrigger::None)
+        return "None";
+
+    if (flags == ResizeTrigger::All)
+        return "All";
+
+    struct FlagName {
+        ResizeTrigger flag;
+        std::string_view name;
+    };
+
+    constexpr std::array<FlagName, 3> names = {
+            FlagName{.flag = ResizeTrigger::Extent, .name = "Extent"},
+            FlagName{.flag = ResizeTrigger::Shaders, .name = "Shaders"},
+            FlagName{.flag = ResizeTrigger::Bindings, .name = "Bindings"},
+    };
+
+    std::string result;
+    for (auto &[flag, name]: names) {
+        if ((flags & flag) == flag) {
+            if (!result.empty())
+                result += " | ";
+            result += name;
+        }
+    }
+
+    return result;
+}

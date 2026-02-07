@@ -1,6 +1,8 @@
+#include <tl/expected.hpp>
 #include "BindlessHeadless.hxx"
 #include "BindlessSet.hxx"
 #include "Pool.hxx"
+#include "vulkan/vulkan_core.h"
 
 
 auto RenderContext::get_device() const -> VkDevice {
@@ -41,16 +43,35 @@ auto RenderContext::create_pipeline(CompiledPipeline &&state) -> PipelineHandle 
 }
 
 auto RenderContext::device_address(BufferHandle handle) -> DeviceAddress {
-    if (const auto *buf = buffers.get(handle)) {
+    if (const auto *buf = buffers.get(handle)) [[likely]] {
         return buf->device_address();
     }
     return DeviceAddress::Invalid;
 }
 auto RenderContext::device_address(const BufferHandle handle) const -> DeviceAddress {
-    if (const auto *buf = buffers.get(handle)) {
+    if (const auto *buf = buffers.get(handle)) [[likely]] {
         return buf->device_address();
     }
     return DeviceAddress::Invalid;
+}
+auto RenderContext::get_mapped_pointer(const BufferHandle handle) const -> tl::expected<void *, Error> {
+    if (const auto *buf = buffers.get(handle)) [[likely]] {
+        vmaInvalidateAllocation(allocator, buf->allocation(), 0, VK_WHOLE_SIZE);
+        return buf->data_pointer();
+    }
+    return tl::make_unexpected(
+            Error::make_error(Error::Type::CouldNotMapMemory, "Buffer could not or was not mapped."));
+}
+auto RenderContext::flush_mapped_memory(const BufferHandle handle, std::size_t offset, std::size_t size) const -> void {
+    if (const auto *buf = buffers.get(handle)) [[likely]] {
+        vmaFlushAllocation(allocator, buf->allocation(), offset, size);
+    }
+}
+auto RenderContext::texture_format(TextureHandle handle) const -> VkFormat {
+    if (const auto *target = textures.get(handle)) [[likely]] {
+        return target->format;
+    }
+    return VK_FORMAT_UNDEFINED;
 }
 
 auto RenderContext::clear_all() -> void {
@@ -59,6 +80,7 @@ auto RenderContext::clear_all() -> void {
     buffers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     query_pools.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     pipeline_pool.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
+    pipeline_cache.reset();
 }
 
 namespace {
@@ -79,85 +101,101 @@ namespace {
         }
     }
 } // namespace
-
 auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void {
-    auto impl = ctx.textures.take(handle);
+    auto impl = ctx.textures.get(handle);
     if (!impl) {
         return;
     }
-
     ctx.bindless_set->need_repopulate = true;
 
-    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, img = std::move(*impl)]() mutable {
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(alloc, &info);
+    // Extract only the Vulkan handles needed for cleanup
+    VkImage image = impl->image;
+    VmaAllocation allocation = impl->allocation;
+    VkImageView attachment_view = impl->attachment_view;
+    VkImageView sampled_view = impl->sampled_view;
+    VkImageView storage_view = impl->storage_view;
 
-        destroy_unique_image_views(info.device, std::array<VkImageView, 3>{
-                                                        img.attachment_view,
-                                                        img.sampled_view,
-                                                        img.storage_view,
-                                                });
-
-        if (img.image != VK_NULL_HANDLE) {
-            vmaDestroyImage(alloc, img.image, img.allocation);
-            img.image = VK_NULL_HANDLE;
-            img.allocation = VK_NULL_HANDLE;
-        }
-    });
+    ctx.destroy_queue.enqueue(
+            retire_value, [alloc = ctx.allocator, image, allocation, attachment_view, sampled_view, storage_view]() {
+                VmaAllocatorInfo info{};
+                vmaGetAllocatorInfo(alloc, &info);
+                destroy_unique_image_views(info.device, std::array<VkImageView, 3>{
+                                                                attachment_view,
+                                                                sampled_view,
+                                                                storage_view,
+                                                        });
+                if (image != VK_NULL_HANDLE) {
+                    vmaDestroyImage(alloc, image, allocation);
+                }
+            });
+    ctx.textures.destroy(handle);
 }
 
-
 auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void {
-    auto impl = ctx.samplers.take(handle);
+    auto impl = ctx.samplers.get(handle);
     if (!impl) {
         return;
     }
-
     ctx.bindless_set->need_repopulate = true;
 
-    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, samp = std::move(*impl)]() {
+    // Sampler is just a VkSampler handle
+    VkSampler sampler = *impl;
+
+    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, sampler]() {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
-        vkDestroySampler(info.device, samp, nullptr);
+        vkDestroySampler(info.device, sampler, nullptr);
     });
+    ctx.samplers.destroy(handle);
 }
 
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value) -> void {
-    auto impl = ctx.buffers.take(handle);
+    auto impl = ctx.buffers.get(handle);
     if (!impl) {
         return;
     }
 
-    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, buf = std::move(*impl)]() {
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(alloc, &info);
-        if (buf.buffer())
-            vmaDestroyBuffer(alloc, buf.buffer(), buf.allocation());
+    // Extract buffer and allocation handles
+    VkBuffer buffer = impl->buffer();
+    VmaAllocation allocation = impl->allocation();
+
+    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, buffer, allocation]() {
+        if (buffer != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(alloc, buffer, allocation);
+        }
     });
+    ctx.buffers.destroy(handle);
 }
 
 auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value) -> void {
-    auto impl = ctx.query_pools.take(handle);
+    auto impl = ctx.query_pools.get(handle);
     if (!impl) {
         return;
     }
 
-    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, pool = std::move(*impl)]() {
+    // Extract only the VkQueryPool handle
+    VkQueryPool query_pool = impl->pool;
+
+    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, query_pool]() {
         VmaAllocatorInfo info{};
         vmaGetAllocatorInfo(alloc, &info);
-        vkDestroyQueryPool(info.device, pool.pool, nullptr);
+        vkDestroyQueryPool(info.device, query_pool, nullptr);
     });
+    ctx.query_pools.destroy(handle);
 }
 
 auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value) -> void {
-    auto impl = ctx.pipeline_pool.take(handle);
+    auto impl = ctx.pipeline_pool.get(handle);
     if (!impl) {
         return;
     }
 
-    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, pool = std::move(*impl)]() {
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(alloc, &info);
-        destruction::pipeline(info.device, pool);
+    // Extract pipeline and layout handles
+    VkPipeline pipeline = impl->pipeline;
+    VkPipelineLayout layout = impl->layout;
+
+    ctx.destroy_queue.enqueue(retire_value, [context = &ctx, pipeline, layout]() {
+        destruction::pipeline(context->get_device(), std::tuple{pipeline, layout});
     });
+    ctx.pipeline_pool.destroy(handle);
 }

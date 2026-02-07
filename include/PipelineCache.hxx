@@ -7,7 +7,9 @@
 #include <vector>
 #include <volk.h>
 
+#include "CreateInfo.hxx"
 #include "Logger.hxx"
+#include "Types.hxx"
 
 struct PipelineCache {
     VkDevice device{VK_NULL_HANDLE};
@@ -59,11 +61,11 @@ struct PipelineCache {
 
     ~PipelineCache() noexcept { destroy(); }
 
-    auto get() const noexcept -> VkPipelineCache { return cache; }
+    [[nodiscard]] auto get() const noexcept -> VkPipelineCache { return cache; }
     explicit(false) operator VkPipelineCache() const noexcept { return cache; }
 
 private:
-    auto read_cache() const -> std::vector<std::uint8_t> {
+    [[nodiscard]] auto read_cache() const -> std::vector<std::uint8_t> {
         if (!has_path)
             return {};
 

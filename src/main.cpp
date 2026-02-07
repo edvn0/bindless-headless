@@ -7,7 +7,9 @@
 #include "Camera.hxx"
 #include "Compiler.hxx"
 #include "CompilerGlue.hxx"
+#include "EventSystem.hxx"
 #include "GlobalCommandContext.hxx"
+#include "ImGuiRenderer.hxx"
 #include "ImageOperations.hxx"
 #include "Logger.hxx"
 #include "PipelineCache.hxx"
@@ -17,6 +19,7 @@
 #include "RenderContext.hxx"
 #include "ResizeableGraph.hxx"
 #include "Swapchain.hxx"
+#include "ui/PerformanceGraph.hxx"
 
 
 #include <GLFW/glfw3.h>
@@ -29,9 +32,12 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
+#include <imgui.h>
 #include <iostream>
+#include <random>
 #include <ranges>
 #include <thread>
+
 
 #include "3PP/PerlinNoise.hpp"
 #include "3PP/stb_image.h"
@@ -40,7 +46,15 @@
 #include "Constants.hxx"
 #include "Mesh.hxx"
 #include "Types.hxx"
-#include "vulkan/vulkan_core.h"
+
+
+static constexpr auto widget = [](const std::string_view name, auto &&func) {
+    ImGui::Begin(name.data());
+    func();
+    ImGui::End();
+};
+
+extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 
 struct ClusterConfig {
     u32 tiles_x;
@@ -51,61 +65,8 @@ struct ClusterConfig {
     float z_far;
     float log_z_scale;
 };
-auto compute_cluster_config_preset(u32 width, u32 height, float z_near, float z_far) {
-    u32 tiles_x, tiles_y;
-    u32 tiles_z = 16u; // standard depth slices
-
-    // Determine grid based on resolution
-    if (width <= 1280 && height <= 720) {
-        // 720p and below: 10x6 grid (128x120 px/tile @ 1280x720)
-        tiles_x = 10u;
-        tiles_y = 6u;
-    } else if (width <= 1920 && height <= 1080) {
-        // 1080p: 16x9 grid (120x120 px/tile @ 1920x1080)
-        tiles_x = 16u;
-        tiles_y = 9u;
-    } else if (width <= 2560 && height <= 1440) {
-        // 1440p: 20x12 grid (128x120 px/tile @ 2560x1440)
-        tiles_x = 20u;
-        tiles_y = 12u;
-    } else if (width <= 3840 && height <= 2160) {
-        // 4K: 32x18 grid (120x120 px/tile @ 3840x2160)
-        tiles_x = 32u;
-        tiles_y = 18u;
-    } else {
-        // Higher resolutions: compute dynamically with 120px target
-        tiles_x = (width + 119u) / 120u;
-        tiles_y = (height + 119u) / 120u;
-        tiles_x = std::min(tiles_x, 64u);
-        tiles_y = std::min(tiles_y, 64u);
-    }
-
+auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) {
     u32 cluster_count = tiles_x * tiles_y * tiles_z;
-    float log_z_scale = static_cast<float>(tiles_z) / std::log2f(z_far / z_near);
-
-    return ClusterConfig{
-            .tiles_x = tiles_x,
-            .tiles_y = tiles_y,
-            .tiles_z = tiles_z,
-            .cluster_count = cluster_count,
-            .z_near = z_near,
-            .z_far = z_far,
-            .log_z_scale = log_z_scale,
-    };
-}
-auto compute_cluster_config(u32 width, u32 height, float z_near, float z_far,
-                            u32 target_tile_size = 128u, // pixels per tile (adjust for performance)
-                            u32 depth_slices = 16u) // number of depth slices
-{
-    u32 tiles_x = (width + target_tile_size - 1u) / target_tile_size;
-    u32 tiles_y = (height + target_tile_size - 1u) / target_tile_size;
-
-    tiles_x = std::max(1u, std::min(tiles_x, 64u));
-    tiles_y = std::max(1u, std::min(tiles_y, 64u));
-
-    u32 tiles_z = depth_slices;
-    u32 cluster_count = tiles_x * tiles_y * tiles_z;
-
     float log_z_scale = static_cast<float>(tiles_z) / std::log2f(z_far / z_near);
 
     return ClusterConfig{
@@ -129,14 +90,12 @@ constexpr auto spawn_lights_in_aabb = [](AABB const &aabb, std::span<PointLight>
     auto x_distrib = std::uniform_real_distribution{aabb.min.x, aabb.max.x};
     auto y_distrib = std::uniform_real_distribution{aabb.min.y, aabb.max.y};
     auto z_distrib = std::uniform_real_distribution{aabb.min.z, aabb.max.z};
-    auto radius_distrib = std::uniform_real_distribution{0.1F, 3.0F};
+    auto radius_distrib = std::uniform_real_distribution{30.0F, 60.0F};
     auto intensity_distrib = std::uniform_real_distribution{100.0F, 500.0F};
 
     auto color_distribution = std::uniform_real_distribution{0.0F, 1.0F};
 
-    for (size_t idx = 0; idx < lights.size(); ++idx) {
-        auto &[position_radius, colour_intensity] = lights[idx];
-
+    for (auto &&[position_radius, colour_intensity]: lights) {
         auto const intensity = intensity_distrib(rng);
         auto const radius = radius_distrib(rng);
 
@@ -306,45 +265,38 @@ struct ComputeGpuStats {
 };
 
 
-auto read_graphics_stats = [](auto &ctx, auto &device, const auto h) -> std::optional<GraphicsGpuStats> {
+auto read_graphics_stats = [](const auto &ctx, VkDevice device,
+                              QueryPoolHandle h) -> std::optional<std::vector<GraphicsGpuStats>> {
     const auto *qs = ctx.query_pools.get(h);
-    if (!qs)
+    if (!qs || qs->query_count == 0)
         return std::nullopt;
 
-    std::array<u64, 8> stats{}; // Match the number of statistics you requested
-    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
-                                         sizeof(stats), stats.data(), sizeof(u64), VK_QUERY_RESULT_64_BIT);
+    const u32 count = qs->query_count;
+    std::vector<GraphicsGpuStats> results(count);
+
+    VkResult r = vkGetQueryPoolResults(device, qs->pool, 0, count, count * sizeof(GraphicsGpuStats), results.data(),
+                                       sizeof(GraphicsGpuStats), // Stride is the size of one full struct
+                                       VK_QUERY_RESULT_64_BIT);
 
     if (r != VK_SUCCESS)
         return std::nullopt;
-
-    return GraphicsGpuStats{
-            .input_assembly_vertices = stats[0],
-            .input_assembly_primitives = stats[1],
-            .vertex_shader_invocations = stats[2],
-            .clipping_invocations = stats[3],
-            .clipping_primitives = stats[4],
-            .fragment_shader_invocations = stats[5],
-            .mesh_shader_invocations = stats[7],
-            .task_shader_invocations = stats[6],
-    };
+    return results;
 };
 
-auto read_compute_stats = [](auto &ctx, auto &device, const auto h) -> std::optional<ComputeGpuStats> {
+auto read_compute_stats = [](auto &ctx, auto &device, const auto h) -> std::optional<std::vector<ComputeGpuStats>> {
     const auto *qs = ctx.query_pools.get(h);
     if (!qs)
         return std::nullopt;
 
-    std::array<u64, 1> stats{}; // Match the number of statistics you requested
-    const auto r = vkGetQueryPoolResults(device, qs->pool, 0, 1, // Query index 0, count 1
-                                         sizeof(stats), stats.data(), sizeof(u64), VK_QUERY_RESULT_64_BIT);
+    const u32 count = qs->query_count;
+    std::vector<ComputeGpuStats> results(count);
+
+    VkResult r = vkGetQueryPoolResults(device, qs->pool, 0, count, count * sizeof(ComputeGpuStats), results.data(),
+                                       sizeof(ComputeGpuStats), VK_QUERY_RESULT_64_BIT);
 
     if (r != VK_SUCCESS)
         return std::nullopt;
-
-    return ComputeGpuStats{
-            .compute_shader_invocations = stats[0],
-    };
+    return results;
 };
 
 struct FrustumPlane {
@@ -362,7 +314,6 @@ glm::mat4 PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNea
     m[2][3] = -1.0f;
     m[3][2] = zNear;
 
-    // Vulkan: Z ∈ [0, 1], reverse-Z, infinite far plane
     m[2][2] = 0.0f;
 
     return m;
@@ -373,23 +324,8 @@ auto fill_zeros(VkCommandBuffer cmd, auto &buffers_ctx, auto &&...buffer_handles
     (vkCmdFillBuffer(cmd, buffers_ctx.get(buffer_handles)->buffer(), 0, VK_WHOLE_SIZE, 0), ...);
 }
 
-constexpr auto viewport_scissors(VkExtent2D extent) {
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = static_cast<float>(extent.height);
-    viewport.width = static_cast<float>(extent.width);
-    viewport.height = -static_cast<float>(extent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-
-    VkRect2D scissor{};
-    scissor.offset = VkOffset2D{0, 0};
-    scissor.extent = extent;
-    return std::make_pair(viewport, scissor);
-}
 
 auto extract_frustum_planes = [](const glm::mat4 &inv_proj) -> std::array<FrustumPlane, 6> {
-    // 1. Correct NDC Corners for ZO (0 to 1)
     constexpr std::array<glm::vec4, 8> ndc_corners = {
             glm::vec4{-1, -1, 0, 1}, {1, -1, 0, 1}, {-1, 1, 0, 1}, {1, 1, 0, 1}, // Near (0-3)
             glm::vec4{-1, -1, 1, 1}, {1, -1, 1, 1}, {-1, 1, 1, 1}, {1, 1, 1, 1} // Far  (4-7)
@@ -402,7 +338,6 @@ auto extract_frustum_planes = [](const glm::mat4 &inv_proj) -> std::array<Frustu
     }
 
     auto compute_plane = [](glm::vec3 a, glm::vec3 b, glm::vec3 c) {
-        // This order ensures the normal points INSIDE the frustum
         glm::vec3 normal = glm::normalize(glm::cross(c - a, b - a));
         return glm::vec4(normal, -glm::dot(normal, a));
     };
@@ -440,17 +375,19 @@ static auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndire
                                 AlignedRingBuffer<u32> &material_id_ring, const MeshData &mesh, u32 instance_count,
                                 u32 first_instance) -> DrawRanges {
     const u32 total_submeshes = static_cast<u32>(mesh.submeshes.size());
-    const u32 base = w.allocate(total_submeshes);
+    const u32 opaque_base = w.allocate(total_submeshes);
 
     std::vector<VkDrawIndexedIndirectCommand> opaque_cmds, alpha_cmds;
     std::vector<u32> opaque_mats, alpha_mats;
 
     for (const auto &s: mesh.submeshes) {
-        VkDrawIndexedIndirectCommand c{.indexCount = s.index_count,
-                                       .instanceCount = instance_count,
-                                       .firstIndex = s.index_offset,
-                                       .vertexOffset = 0,
-                                       .firstInstance = first_instance};
+        VkDrawIndexedIndirectCommand c{
+                .indexCount = s.index_count,
+                .instanceCount = instance_count,
+                .firstIndex = s.index_offset,
+                .vertexOffset = 0,
+                .firstInstance = first_instance,
+        };
 
         if (s.alpha_tested) {
             alpha_cmds.push_back(c);
@@ -464,19 +401,22 @@ static auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndire
     const u32 opaque_count = static_cast<u32>(opaque_cmds.size());
     const u32 alpha_count = static_cast<u32>(alpha_cmds.size());
 
-    // Write opaque commands first
     if (opaque_count > 0) {
-        cmd_ring.write_elements(ctx, frame_index, base, std::span(opaque_cmds));
-        material_id_ring.write_elements(ctx, frame_index, base, std::span(opaque_mats));
+        cmd_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_cmds));
+        material_id_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_mats));
     }
 
-    // Write alpha commands immediately after
     if (alpha_count > 0) {
-        cmd_ring.write_elements(ctx, frame_index, base + opaque_count, std::span(alpha_cmds));
-        material_id_ring.write_elements(ctx, frame_index, base + opaque_count, std::span(alpha_mats));
+        cmd_ring.write_elements(ctx, frame_index, opaque_base + opaque_count, std::span(alpha_cmds));
+        material_id_ring.write_elements(ctx, frame_index, opaque_base + opaque_count, std::span(alpha_mats));
     }
 
-    return {base, opaque_count, base + opaque_count, alpha_count};
+    return {
+            .opaque_base = opaque_base,
+            .opaque_count = opaque_count,
+            .alpha_base = opaque_base + opaque_count,
+            .alpha_count = alpha_count,
+    };
 }
 
 
@@ -489,6 +429,7 @@ struct FrameUBO {
     glm::vec4 camera_position;
     std::array<FrustumPlane, 6> frustum_planes; // left, right, bottom, top, near, far
     glm::vec4 sun_direction_intensity;
+    glm::vec2 viewport_size;
 };
 
 
@@ -515,11 +456,15 @@ auto generate_perlin(auto w, auto h) -> std::vector<std::uint8_t, default_alloca
     return data;
 }
 
-static VkBool32 debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
-                               VkDebugUtilsMessageTypeFlagsEXT,
-                               const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *) {
+static auto debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
+                           VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT *callback_data,
+                           void *) -> VkBool32 {
     if (message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
         error("Validation layer: {}", callback_data->pMessage);
+    }
+
+    if (message_severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+        trace("Validation info: {}", callback_data->pMessage);
     }
 
     return VK_FALSE;
@@ -613,6 +558,7 @@ struct AppState {
 
     glm::vec2 last_mouse{0.0f, 0.0f};
     bool mouse_inited{false};
+    EventSystem event_system;
 
     CameraInput cam_in{};
     EditorCamera cam{};
@@ -628,6 +574,7 @@ static auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, V
     ubo.view_projection = ubo.projection * ubo.view;
     ubo.camera_position = glm::vec4(cam.camera_position(), 1.0f);
     ubo.inv_view_projection = glm::inverse(ubo.view_projection);
+    ubo.viewport_size = glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
 
     const auto normal_projection = glm::inverse(glm::perspective(fov_y_radians, aspect, 0.1F, 1000.0F));
     const auto planes = extract_frustum_planes(normal_projection);
@@ -664,8 +611,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
     TracyGpuContext tracy_graphics{};
     TracyGpuContext tracy_compute{};
-    tracy_graphics.init_calibrated(instance, physical_device, device, graphics_queue, graphics_index, "Graphics Queue");
-    tracy_compute.init_calibrated(instance, physical_device, device, compute_queue, compute_index, "Compute Queue");
+    tracy_graphics.init_calibrated(instance, physical_device, device, "Graphics Queue");
+    tracy_compute.init_calibrated(instance, physical_device, device, "Compute Queue");
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
@@ -679,19 +626,19 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     VkSurfaceKHR surface{};
     vk_check(glfwCreateWindowSurface(instance.instance, window, nullptr, &surface));
 
-    auto maybe_swapchain = Swapchain::create(SwapchainCreateInfo{.physical_device = physical_device,
-                                                                 .device = device,
-                                                                 .surface = surface,
-                                                                 .graphics_family = graphics_index,
-                                                                 .extent = VkExtent2D{opts.width, opts.height},
-                                                                 .vsync = opts.vsync});
+    auto maybe_swapchain = Swapchain::create(SwapchainCreateInfo{
+            .physical_device = physical_device,
+            .device = device,
+            .surface = surface,
+            .graphics_family = graphics_index,
+            .extent = VkExtent2D{opts.width, opts.height},
+            .vsync = opts.vsync,
+    });
     if (!maybe_swapchain) {
         return 1;
     }
 
     auto swapchain = std::move(maybe_swapchain.value());
-
-    auto pipeline_cache = std::make_unique<PipelineCache>(device, opts.pipeline_cache_dir);
 
     auto command_context = create_global_cmd_context(device, graphics_queue, graphics_index);
 
@@ -713,6 +660,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     RenderContext ctx{
             .allocator = allocator,
             .bindless_set = &bindless,
+            .pipeline_cache = std::make_unique<PipelineCache>(device, opts.pipeline_cache_dir),
     };
 
     PipelineHandle flags_pipeline;
@@ -723,6 +671,11 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     PipelineHandle predepth_pipeline;
     PipelineHandle predepth_alpha_pipeline;
     PipelineHandle tonemap_pipeline;
+    PipelineHandle cluster_build_groups_pipeline;
+    PipelineHandle cluster_count_pipeline;
+    PipelineHandle cluster_prefix_pipeline;
+    PipelineHandle cluster_write_pipeline;
+    PipelineHandle cluster_visibility_pipeline;
 
     std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
@@ -924,17 +877,20 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     auto rng = std::default_random_engine{
             static_cast<u32>(std::chrono::high_resolution_clock::now().time_since_epoch().count())};
 
-    const auto mesh_aabb = cube_mesh.mesh_aabb.scaled(0.1F);
+    const auto mesh_aabb = cube_mesh.mesh_aabb;
     // Log the mesh bounds for debugging
     info("Mesh AABB: min({}, {}, {}) max({}, {}, {})", mesh_aabb.min.x, mesh_aabb.min.y, mesh_aabb.min.z,
          mesh_aabb.max.x, mesh_aabb.max.y, mesh_aabb.max.z);
     spawn_lights_in_aabb(mesh_aabb, all_point_lights, rng);
 
-    auto point_light_handle =
-            ctx.buffers.create(Buffer::from_slice<PointLight>(
-                                       allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                       all_point_lights, "point_light")
+    auto point_lights_base =
+            ctx.buffers.create(Buffer::from_slice<PointLight>(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                              all_point_lights, "base_static_point_lights")
                                        .value());
+
+    auto point_lights_ring =
+            AlignedRingBuffer<PointLight>::create(ctx, light_count, VkBufferUsageFlags{}, "point_lights_ring").value();
+    point_lights_ring.write_all_slots(ctx, all_point_lights);
 
     auto culled_light_count_handle = ctx.buffers.create(
             Buffer::from_value<u32>(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -943,9 +899,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
     constexpr auto mesh_count = 1;
 
-    auto cubes_transform_handle = AlignedRingBuffer<glm::mat4x3>::create(ctx, mesh_count, 0u, "transforms");
-    cubes_transform_handle->write_all_slots(
-            ctx, glm::mat4x3(glm::scale(glm::identity<glm::mat4x4>(), glm::vec3{0.1, 0.1, 0.1})));
+    auto cubes_transform_handle =
+            AlignedRingBuffer<glm::mat4x3>::create(ctx, mesh_count, VkBufferUsageFlags{}, "transforms");
+    cubes_transform_handle->write_all_slots(ctx, glm::mat4x3(glm::identity<glm::mat4x4>()));
 
     auto instance_count = static_cast<u32>(mesh_count);
 
@@ -967,40 +923,38 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     .value());
 
     //-----------------------------------
-    // Choose based on your target resolution and performance needs
-    // For 1920x1080: 16x9 gives 120x120 pixel tiles
-    ClusterConfig cluster_config = compute_cluster_config_preset(opts.width, opts.height, 0.1F, 1000.0F);
+    ClusterConfig light_clustering_config = cluster_config(16, 9, 16, 0.1F, 1000.0F);
 
-    // For higher resolution or more precision:
-    // tiles_x = 32, tiles_y = 18, tiles_z = 24 → 13,824 clusters
+    constexpr u32 MAX_LIGHTS_PER_CLUSTER = 128u; // TODO: Tuning!
+    u32 max_light_indices = light_clustering_config.cluster_count * MAX_LIGHTS_PER_CLUSTER;
 
-    // ----------------------------------------------------------------------------
-    // NEW: Clustered Culling Buffers
-    // ----------------------------------------------------------------------------
-    constexpr auto max_lights_per_cluster = 32u;
-
-    // 1. Per-cluster light counts (written by Pass 1, read by Pass 2)
-    std::vector<u32> zero_counts(cluster_config.cluster_count, 0u);
+    std::vector<u32> zero_counts(light_clustering_config.cluster_count, 0u);
     auto cluster_counts_handle = ctx.buffers.create(
             Buffer::from_slice<u32>(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                     zero_counts, "cluster_counts")
                     .value());
 
-    // 2. Per-cluster offset and count (written by Pass 2, read by Pass 3 and fragment shader)
     struct Cluster {
         u32 light_offset;
         u32 light_count;
     };
 
-    std::vector<Cluster> zero_clusters(cluster_config.cluster_count, Cluster{0u, 0u});
+    struct LightVisibility {
+        u32 x0, x1, y0, y1, z0, z1, is_visible, _pad;
+    };
+
+    auto visibility_buffer_handle =
+            ctx.buffers.create(Buffer::zeroes(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                              sizeof(LightVisibility) * light_count, "light_visibility_buffer")
+                                       .value());
+
     auto clusters_handle =
-            ctx.buffers.create(Buffer::from_slice<Cluster>(
-                                       allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                       zero_clusters, "clusters")
+            ctx.buffers.create(Buffer::zeroes(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                              sizeof(Cluster) * light_clustering_config.cluster_count, "clusters")
                                        .value());
 
     // 3. Per-cluster write counters (written by Pass 3)
-    std::vector<u32> zero_counters(cluster_config.cluster_count, 0u);
+    std::vector<u32> zero_counters(light_clustering_config.cluster_count, 0u);
     auto cluster_counters_handle = ctx.buffers.create(
             Buffer::from_slice<u32>(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                     zero_counters, "cluster_counters")
@@ -1009,11 +963,10 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     // 4. Global light index buffer
     // Size conservatively: assume avg 50 lights per cluster (tune based on profiling)
     // Or allocate max: light_count * cluster_count (wasteful but safe)
-    u32 max_light_indices = cluster_config.cluster_count * max_lights_per_cluster; // Conservative estimate
-    auto cluster_light_indices_handle = ctx.buffers.create(
-            Buffer::zeroes(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                           sizeof(u32) * max_light_indices, "cluster_light_indices")
-                    .value());
+    auto cluster_light_indices_handle =
+            ctx.buffers.create(Buffer::zeroes(allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                              sizeof(u32) * max_light_indices, "cluster_light_indices")
+                                       .value());
 
     // 5. Global counter for total light indices written
     auto global_index_count_handle = ctx.buffers.create(
@@ -1024,21 +977,73 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
     auto aligned_frame_buffer_handle = AlignedRingBuffer<FrameUBO>::create(ctx, "aligned_frame_ubo_buffer").value();
 
-    auto light_addr = ctx.device_address(point_light_handle);
     auto flags_addr = ctx.device_address(flags_handle);
     auto prefix_addr = ctx.device_address(prefix_handle);
     auto compact_addr = ctx.device_address(compact_lights_handle);
     auto culled_light_count_addr = ctx.device_address(culled_light_count_handle);
 
-    auto stats = FrameStats{};
-    FrameStats gpu_compute_ms{};
-    FrameStats gpu_graphics_ms{};
+    auto point_lights_base_addr = ctx.device_address(point_lights_base);
 
+    auto cluster_counts_addr = ctx.device_address(cluster_counts_handle);
+    auto clusters_addr = ctx.device_address(clusters_handle);
+    auto cluster_counters_addr = ctx.device_address(cluster_counters_handle);
+    auto cluster_light_indices_addr = ctx.device_address(cluster_light_indices_handle);
+    auto global_index_count_addr = ctx.device_address(global_index_count_handle);
+    auto visibility_addr = ctx.device_address(visibility_buffer_handle);
+
+
+    auto stats = FrameStats{};
+
+    enum class ClusterDebugMode : u32 {
+        None = 0,
+        ClusterGrid = 1, // Show grid lines between clusters
+        LightCount = 2, // Color-coded light count per cluster
+        LightDensity = 3, // Heat map of light density
+        ClusterIndex = 4, // Visualize cluster index as color
+        DepthSlices = 5, // Show depth slice layers
+        LightHeatmap = 6, // Detailed heatmap with thresholds
+        FirstLight = 7, // Show color of first light in cluster
+        ClusterOccupancy = 8, // XY grid with Z as brightness
+    };
+    static ClusterDebugMode current_debug_mode = ClusterDebugMode::None;
     AppState app_state{};
     glfwSetWindowUserPointer(window, &app_state);
-    glfwSetKeyCallback(window, [](auto w, auto k, auto, auto, auto) {
-        if (k == GLFW_KEY_ESCAPE) {
-            glfwSetWindowShouldClose(w, GLFW_TRUE);
+    glfwSetKeyCallback(window, [](GLFWwindow *w, int key, int scancode, int action, int mods) {
+        auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
+
+        // Forward to ImGui
+        auto &io = ImGui::GetIO();
+        if (action == GLFW_PRESS)
+            io.AddKeyEvent(ImGui_KeyToImGuiKey(key), true);
+        else if (action == GLFW_RELEASE)
+            io.AddKeyEvent(ImGui_KeyToImGuiKey(key), false);
+
+        if (!io.WantCaptureKeyboard) {
+            if (action == GLFW_PRESS) {
+                auto event = std::make_unique<KeyPressedEvent>();
+                event->key = key;
+                event->scancode = scancode;
+                event->mods = mods;
+                app.event_system.push_event(std::move(event));
+            } else if (action == GLFW_RELEASE) {
+                auto event = std::make_unique<KeyReleasedEvent>();
+                event->key = key;
+                event->scancode = scancode;
+                event->mods = mods;
+                app.event_system.push_event(std::move(event));
+            }
+        }
+    });
+    glfwSetCharCallback(window, [](GLFWwindow *w, unsigned int c) {
+        auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
+
+        auto &io = ImGui::GetIO();
+        io.AddInputCharacter(c);
+
+        if (!io.WantCaptureKeyboard) {
+            auto event = std::make_unique<CharInputEvent>();
+            event->codepoint = c;
+            app.event_system.push_event(std::move(event));
         }
     });
     glfwSetWindowSizeCallback(window, [](auto w, auto, auto) {
@@ -1050,43 +1055,165 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
         data.resized = true;
     });
 
-    glfwSetMouseButtonCallback(window, [](GLFWwindow *w, int button, int action, int) {
-        auto &a = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-        const bool down = (action == GLFW_PRESS);
+    glfwSetMouseButtonCallback(window, [](GLFWwindow *w, int button, int action, int mods) {
+        auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
+        auto &io = ImGui::GetIO();
 
-        if (button == GLFW_MOUSE_BUTTON_LEFT)
-            a.cam_in.lmb = down;
-        if (button == GLFW_MOUSE_BUTTON_MIDDLE)
-            a.cam_in.mmb = down;
-        if (button == GLFW_MOUSE_BUTTON_RIGHT)
-            a.cam_in.rmb = down;
+        if (action == GLFW_PRESS && button >= 0 && button < ImGuiMouseButton_COUNT)
+            io.AddMouseButtonEvent(button, true);
+        else if (action == GLFW_RELEASE && button >= 0 && button < ImGuiMouseButton_COUNT)
+            io.AddMouseButtonEvent(button, false);
 
-        if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-            glfwSetInputMode(w, GLFW_CURSOR, down ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
-            a.mouse_inited = false;
+        if (!io.WantCaptureMouse) {
+            if (action == GLFW_PRESS) {
+                auto event = std::make_unique<MouseButtonPressedEvent>();
+                event->button = button;
+                event->mods = mods;
+                app.event_system.push_event(std::move(event));
+            } else if (action == GLFW_RELEASE) {
+                auto event = std::make_unique<MouseButtonReleasedEvent>();
+                event->button = button;
+                event->mods = mods;
+                app.event_system.push_event(std::move(event));
+            }
         }
     });
 
     glfwSetCursorPosCallback(window, [](GLFWwindow *w, double x, double y) {
-        auto &a = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-        const glm::vec2 p{static_cast<float>(x), static_cast<float>(y)};
+        auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
 
-        if (!a.mouse_inited) {
-            a.last_mouse = p;
-            a.mouse_inited = true;
-            return;
+        // Forward to ImGui
+        auto &io = ImGui::GetIO();
+        io.AddMousePosEvent(static_cast<float>(x), static_cast<float>(y));
+
+        // Calculate delta
+        const glm::vec2 pos{static_cast<float>(x), static_cast<float>(y)};
+        glm::vec2 delta{0.0f};
+
+        if (!app.mouse_inited) {
+            app.last_mouse = pos;
+            app.mouse_inited = true;
+        } else {
+            delta = pos - app.last_mouse;
+            app.last_mouse = pos;
         }
 
-        const glm::vec2 d = p - a.last_mouse;
-        a.last_mouse = p;
+        // Create app event
+        if (!io.WantCaptureMouse) {
+            auto event = std::make_unique<CursorMovedEvent>();
+            event->position = pos;
+            event->delta = delta;
+            app.event_system.push_event(std::move(event));
+        }
+    });
+    glfwSetScrollCallback(window, [](GLFWwindow *w, double xoff, double yoff) {
+        auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
 
-        a.cam_in.mouse_delta += d;
+        // Forward to ImGui
+        auto &io = ImGui::GetIO();
+        io.AddMouseWheelEvent(static_cast<float>(xoff), static_cast<float>(yoff));
+
+        // Create app event
+        if (!io.WantCaptureMouse) {
+            auto event = std::make_unique<ScrollEvent>();
+            event->x_offset = static_cast<float>(xoff);
+            event->y_offset = static_cast<float>(yoff);
+            app.event_system.push_event(std::move(event));
+        }
     });
 
-    glfwSetScrollCallback(window, [](GLFWwindow *w, double, double yoff) {
-        auto &a = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-        a.cam_in.scroll_delta += static_cast<float>(yoff);
-    });
+    {
+        app_state.event_system.set_event_callback([&](Event &e) {
+            auto &io = ImGui::GetIO();
+            EventDispatcher dispatcher(e);
+
+            dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent &event) {
+                if (event.key == GLFW_KEY_ESCAPE) {
+                    glfwSetWindowShouldClose(window, GLFW_TRUE);
+                    return true;
+                }
+
+                if (event.key == GLFW_KEY_F1) {
+                    current_debug_mode = ClusterDebugMode::ClusterGrid;
+                    return true;
+                } else if (event.key == GLFW_KEY_F2) {
+                    current_debug_mode = ClusterDebugMode::LightCount;
+                    return true;
+                } else if (event.key == GLFW_KEY_F3) {
+                    current_debug_mode = ClusterDebugMode::LightDensity;
+                    return true;
+                } else if (event.key == GLFW_KEY_F4) {
+                    current_debug_mode = ClusterDebugMode::DepthSlices;
+                    return true;
+                } else if (event.key == GLFW_KEY_F5) {
+                    current_debug_mode = ClusterDebugMode::LightHeatmap;
+                    return true;
+                } else if (event.key == GLFW_KEY_F6) {
+                    current_debug_mode = ClusterDebugMode::FirstLight;
+                    return true;
+                } else if (event.key == GLFW_KEY_F7) {
+                    current_debug_mode = ClusterDebugMode::ClusterOccupancy;
+                    return true;
+                } else if (event.key == GLFW_KEY_F8) {
+                    current_debug_mode = ClusterDebugMode::None;
+                    return true;
+                }
+
+                return false;
+            });
+
+            dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent &event) {
+                if (event.button == GLFW_MOUSE_BUTTON_LEFT) {
+                    app_state.cam_in.lmb = true;
+                    return true;
+                } else if (event.button == GLFW_MOUSE_BUTTON_MIDDLE) {
+                    app_state.cam_in.mmb = true;
+                    return true;
+                } else if (event.button == GLFW_MOUSE_BUTTON_RIGHT) {
+                    app_state.cam_in.rmb = true;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    return true;
+                }
+
+                return false;
+            });
+
+            dispatcher.dispatch<MouseButtonReleasedEvent>([&](MouseButtonReleasedEvent &event) {
+                if (io.WantCaptureMouse)
+                    return false;
+
+                if (event.button == GLFW_MOUSE_BUTTON_LEFT) {
+                    app_state.cam_in.lmb = false;
+                    return true;
+                } else if (event.button == GLFW_MOUSE_BUTTON_MIDDLE) {
+                    app_state.cam_in.mmb = false;
+                    return true;
+                } else if (event.button == GLFW_MOUSE_BUTTON_RIGHT) {
+                    app_state.cam_in.rmb = false;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                    return true;
+                }
+
+                return false;
+            });
+
+            dispatcher.dispatch<CursorMovedEvent>([&](CursorMovedEvent &event) {
+                if (io.WantCaptureMouse)
+                    return false;
+
+                app_state.cam_in.mouse_delta += event.delta;
+                return true;
+            });
+
+            dispatcher.dispatch<ScrollEvent>([&](ScrollEvent &event) {
+                if (io.WantCaptureMouse)
+                    return false;
+
+                app_state.cam_in.scroll_delta += event.y_offset;
+                return true;
+            });
+        });
+    }
 
     glfwShowWindow(window);
     glfwFocusWindow(window);
@@ -1094,12 +1221,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     TextureHandle gbuffer0_handle; // ALBEDO_AO: VK_FORMAT_R8G8B8A8_UNORM
     TextureHandle gbuffer1_handle; // Normal OCT, Roughness Metallic: VK_FORMAT_R16G16B16A16_UNORM
     TextureHandle gbuffer2_handle; // Emissive HDR: VK_FORMAT_R16G16B16A16_SFLOAT
+    TextureHandle debug_culling_handle;
     TextureHandle lit_hdr_handle; // VK_FORMAT_R16G16B16A16_SFLOAT
     TextureHandle depth_handle; // VK_FORMAT_D32_SFLOAT
     TextureHandle tonemapped_target_handle;
 
     VkExtent2D last_extent = current_extent(window);
     ResizeGraph resize_graph{};
+    u32 pipelines_node;
     {
         const auto swapchain_node =
                 resize_graph.add_node("swapchain", [&](VkExtent2D new_extent, const ResizeContext &) {
@@ -1122,6 +1251,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
             const auto old_g0 = gbuffer0_handle;
             const auto old_g1 = gbuffer1_handle;
             const auto old_g2 = gbuffer2_handle;
+            const auto old_culling = debug_culling_handle;
             const auto old_hdr = lit_hdr_handle;
             const auto old_depth = depth_handle;
 
@@ -1134,6 +1264,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
             gbuffer2_handle = ctx.create_texture(create_offscreen_target(
                     allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
 
+            debug_culling_handle = ctx.create_texture(create_offscreen_target(
+                    allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
+
             depth_handle = ctx.create_texture(create_depth_target(allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT,
                                                                   VK_SAMPLE_COUNT_1_BIT, false, "depth"));
 
@@ -1145,21 +1278,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
             destroy(ctx, old_g2, rc.retire_value);
             destroy(ctx, old_hdr, rc.retire_value);
             destroy(ctx, old_depth, rc.retire_value);
+            destroy(ctx, old_culling, rc.retire_value);
         });
 
         const auto uniforms_node = resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D, const ResizeContext &) {
             // TODO: When something needs to be done with the uniforms node.
         });
 
-#define TRY_UNWRAP(var_name, expected_expr, msg)                                                                       \
-    auto var_name##_tmp = (expected_expr);                                                                             \
-    if (!var_name##_tmp.has_value()) {                                                                                 \
-        warn("{}: {}", msg, var_name##_tmp.error());                                                                   \
-        return;                                                                                                        \
-    }                                                                                                                  \
-    auto var_name = std::move(var_name##_tmp.value());
-
-        const auto pipelines_node = resize_graph.add_node(
+        pipelines_node = resize_graph.add_node(
                 "pipelines",
                 [&](VkExtent2D, const ResizeContext &rc) {
                     const auto old_gbuffer_pipeline_lighting = gbuffer_pipeline_lighting;
@@ -1170,70 +1296,95 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     const auto old_predepth_pipeline = predepth_pipeline;
                     const auto old_predepth_alpha_pipeline = predepth_alpha_pipeline;
                     const auto old_tonemap_pipeline = tonemap_pipeline;
+                    const auto old_cluster_count_pipeline = cluster_count_pipeline;
+                    const auto old_cluster_prefix_pipeline = cluster_prefix_pipeline;
+                    const auto old_cluster_write_pipeline = cluster_write_pipeline;
+                    const auto old_cluster_visibility_pipeline = cluster_visibility_pipeline;
+                    const auto old_cluster_build_groups_pipeline = cluster_build_groups_pipeline;
 
                     std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
                     std::array<ReflectionData, names.size()> reflection_data = {};
-                    TRY_UNWRAP(culling_code,
-                               compiler->compile_from_file("shaders/light_cull_compact_modern.slang", std::span(names),
-                                                           std::span(reflection_data)),
-                               "Failed to compile light culling shader");
+                    TRY_UNWRAP_WITH_DISCARD(culling_code,
+                                            compiler->compile_from_file("shaders/light_cull_compact_modern.slang",
+                                                                        std::span(names), std::span(reflection_data)),
+                                            "Failed to compile light culling shader");
+
+                    std::array<const std::string_view, 1> clustered_culling_names = {
+                            "BuildClusterCS",
+                    };
+                    std::array<ReflectionData, clustered_culling_names.size()> clustered_culling_reflection_data = {};
+                    TRY_UNWRAP_WITH_DISCARD(clustered_culling_code,
+                                            compiler->compile_from_file("shaders/clustering.slang",
+                                                                        std::span(clustered_culling_names),
+                                                                        std::span(clustered_culling_reflection_data)),
+                                            "Failed to compile light clustering shader");
 
                     std::array<const std::string_view, 2> predepth_names{"main_vs_mdi", "fs_main"};
                     std::array<ReflectionData, predepth_names.size()> predepth_reflection{};
-                    TRY_UNWRAP(predepth_code,
-                               compiler->compile_from_file("shaders/predepth.slang", std::span(predepth_names),
-                                                           std::span(predepth_reflection)),
-                               "Failed to compile predepth shader");
+                    TRY_UNWRAP_WITH_DISCARD(predepth_code,
+                                            compiler->compile_from_file("shaders/predepth.slang",
+                                                                        std::span(predepth_names),
+                                                                        std::span(predepth_reflection)),
+                                            "Failed to compile predepth shader");
 
                     std::array<const std::string_view, 2> tonemap_names{"vs_main", "fs_main"};
                     std::array<ReflectionData, tonemap_names.size()> tonemap_reflection{};
-                    TRY_UNWRAP(tonemap_code,
-                               compiler->compile_from_file("shaders/tonemap.slang", std::span(tonemap_names),
-                                                           std::span(tonemap_reflection)),
-                               "Failed to compile tonemap shader");
+                    TRY_UNWRAP_WITH_DISCARD(tonemap_code,
+                                            compiler->compile_from_file("shaders/tonemap.slang",
+                                                                        std::span(tonemap_names),
+                                                                        std::span(tonemap_reflection)),
+                                            "Failed to compile tonemap shader");
 
                     std::array<const std::string_view, 1> rotate_cubes_names{"rotate_cs"};
                     std::array<ReflectionData, rotate_cubes_names.size()> rotate_cubes_reflection{};
-                    TRY_UNWRAP(rotate_cubes_code,
-                               compiler->compile_from_file("shaders/rotate_cubes.slang", std::span(rotate_cubes_names),
-                                                           std::span(rotate_cubes_reflection)),
-                               "Failed to compile rotate cubes shader");
+                    TRY_UNWRAP_WITH_DISCARD(rotate_cubes_code,
+                                            compiler->compile_from_file("shaders/rotate_cubes.slang",
+                                                                        std::span(rotate_cubes_names),
+                                                                        std::span(rotate_cubes_reflection)),
+                                            "Failed to compile rotate cubes shader");
 
 
                     std::array<const std::string_view, 4> gbuffer_entry_point_names = {
                             "main_vs_mdi", "main_fs_mdi", "vs_fullscreen_main", "fs_fullscreen_main"};
                     std::array<ReflectionData, gbuffer_entry_point_names.size()> gbuffer_reflection{};
-                    TRY_UNWRAP(gbuffer_mrt_and_lighting_code,
-                               compiler->compile_from_file("shaders/gbuffer.slang",
-                                                           std::span(gbuffer_entry_point_names),
-                                                           std::span(gbuffer_reflection)),
-                               "Failed to compile gbuffer shader");
+                    TRY_UNWRAP_WITH_DISCARD(gbuffer_mrt_and_lighting_code,
+                                            compiler->compile_from_file("shaders/gbuffer.slang",
+                                                                        std::span(gbuffer_entry_point_names),
+                                                                        std::span(gbuffer_reflection)),
+                                            "Failed to compile gbuffer shader");
 
-                    auto &&[fp, cp] = create_compute_pipelines(device, *pipeline_cache, bindless.layout,
+                    auto &&[fp, cp] = create_compute_pipelines(device, *ctx.pipeline_cache, bindless.layout, {},
                                                                std::span(culling_code), std::span(names));
 
-                    auto &&[crp] =
-                            create_compute_pipelines(device, *pipeline_cache, bindless.layout,
-                                                     std::span(rotate_cubes_code), std::span(rotate_cubes_names));
+                    auto &&[crp] = create_compute_pipelines(
+                            device, *ctx.pipeline_cache, bindless.layout, sizeof(RotateCubesPushConstant),
+                            std::span(rotate_cubes_code), std::span(rotate_cubes_names));
+
+                    /*auto &&[cl_count, cl_prefix, cl_write, cl_visibility] = create_compute_pipelines(
+                            device, *ctx.pipeline_cache, bindless.layout, sizeof(ClusteredLightCullingPushConstants),
+                            std::span(clustered_culling_code), std::span(clustered_culling_names));*/
+                    auto &&[cl_groups] = create_compute_pipelines(
+                            device, *ctx.pipeline_cache, bindless.layout, sizeof(ClusteredLightCullingPushConstants),
+                            std::span(clustered_culling_code), std::span(clustered_culling_names));
 
                     auto gbuffer_pipeline = create_gbuffer_pipeline(
-                            device, *pipeline_cache, bindless.layout, gbuffer_mrt_and_lighting_code.at(0),
+                            device, *ctx.pipeline_cache, bindless.layout, gbuffer_mrt_and_lighting_code.at(0),
                             gbuffer_mrt_and_lighting_code.at(1), VK_FORMAT_R8G8B8A8_UNORM,
                             VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
 
                     auto gbuf_light = create_deferred_lighting_graphics_pipeline(
-                            device, *pipeline_cache, bindless.layout, gbuffer_mrt_and_lighting_code.at(2),
+                            device, *ctx.pipeline_cache, bindless.layout, gbuffer_mrt_and_lighting_code.at(2),
                             gbuffer_mrt_and_lighting_code.at(3), "vs_fullscreen_main", "fs_fullscreen_main",
                             VK_FORMAT_R16G16B16A16_SFLOAT);
 
-                    auto pp = create_predepth_pipeline(device, *pipeline_cache, bindless.layout, predepth_code.at(0),
-                                                       VK_FORMAT_D32_SFLOAT, msaa_samples);
+                    auto pp = create_predepth_pipeline(device, *ctx.pipeline_cache, bindless.layout,
+                                                       predepth_code.at(0), VK_FORMAT_D32_SFLOAT, msaa_samples);
                     auto pp_alpha =
-                            create_predepth_pipeline(device, *pipeline_cache, bindless.layout, predepth_code.at(0),
+                            create_predepth_pipeline(device, *ctx.pipeline_cache, bindless.layout, predepth_code.at(0),
                                                      predepth_code.at(1), VK_FORMAT_D32_SFLOAT, msaa_samples);
 
                     auto tp =
-                            create_tonemap_pipeline(device, *pipeline_cache, bindless.layout, tonemap_code.at(0),
+                            create_tonemap_pipeline(device, *ctx.pipeline_cache, bindless.layout, tonemap_code.at(0),
                                                     tonemap_code.at(1), "vs_main", "fs_main", VK_FORMAT_R8G8B8A8_SRGB);
                     gbuffer_pipeline_lighting = ctx.create_pipeline(std::move(gbuf_light));
                     cube_rotation_pipeline = ctx.create_pipeline(std::move(crp));
@@ -1243,6 +1394,11 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     predepth_pipeline = ctx.create_pipeline(std::move(pp));
                     predepth_alpha_pipeline = ctx.create_pipeline(std::move(pp_alpha));
                     tonemap_pipeline = ctx.create_pipeline(std::move(tp));
+                    /* cluster_count_pipeline = ctx.create_pipeline(std::move(cl_count));
+                    cluster_prefix_pipeline = ctx.create_pipeline(std::move(cl_prefix));
+                    cluster_write_pipeline = ctx.create_pipeline(std::move(cl_write));
+                    cluster_visibility_pipeline = ctx.create_pipeline(std::move(cl_visibility)); */
+                    cluster_build_groups_pipeline = ctx.create_pipeline(std::move(cl_groups));
 
 
                     destroy(ctx, old_gbuffer_pipeline_lighting, rc.retire_value);
@@ -1253,6 +1409,11 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     destroy(ctx, old_predepth_pipeline, rc.retire_value);
                     destroy(ctx, old_predepth_alpha_pipeline, rc.retire_value);
                     destroy(ctx, old_tonemap_pipeline, rc.retire_value);
+                    destroy(ctx, old_cluster_count_pipeline, rc.retire_value);
+                    destroy(ctx, old_cluster_prefix_pipeline, rc.retire_value);
+                    destroy(ctx, old_cluster_write_pipeline, rc.retire_value);
+                    destroy(ctx, old_cluster_visibility_pipeline, rc.retire_value);
+                    destroy(ctx, old_cluster_build_groups_pipeline, rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
 
@@ -1262,7 +1423,6 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
         resize_graph.add_dependency(pipelines_node, offscreen_node);
         resize_graph.add_dependency(uniforms_node, swapchain_node);
     }
-#undef TRY_UNWRAP
 
     resize_graph.rebuild(last_extent, ResizeContext{
                                               .ctx = ctx,
@@ -1301,6 +1461,41 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     watcher->watch();
 
 
+    auto begin_query_for_index = [&c = ctx](const auto &cmd, GraphicsIndex index, auto &stats_pool) -> auto {
+        u32 query_idx = static_cast<u32>(index);
+        const auto *qs = c.query_pools.get(stats_pool);
+        vkCmdBeginQuery(cmd, qs->pool, query_idx, 0);
+        return qs->pool;
+    };
+
+    auto end_query_for_index = [](const auto &cmd, GraphicsIndex index, const auto &pool) {
+        u32 query_idx = static_cast<u32>(index);
+        vkCmdEndQuery(cmd, pool, query_idx);
+    };
+
+    auto gui_renderer =
+            std::make_unique<ImGuiRenderer>(static_cast<u32>(swapchain.image_count()), ctx, command_context, *compiler);
+
+    auto gui_pipeline_node = resize_graph.add_node(
+            "gui_pipeline", [&gui = *gui_renderer](auto, const auto &) { gui.set_should_recompile(); },
+            ResizeTrigger::Shaders);
+    resize_graph.add_dependency(gui_pipeline_node, pipelines_node);
+
+    static PerformanceGraph<8, 120> gpu_frame_graph;
+    static bool graphs_initialized = false;
+
+    if (!graphs_initialized) {
+        gpu_frame_graph.add_line("Rotate");
+        gpu_frame_graph.add_line("Cull");
+        gpu_frame_graph.add_line("Clustering");
+        gpu_frame_graph.add_line("Pre-Depth");
+        gpu_frame_graph.add_line("GBuffer");
+        gpu_frame_graph.add_line("Deferred");
+        gpu_frame_graph.add_line("Tonemap");
+        gpu_frame_graph.add_line("Present");
+        graphs_initialized = true;
+    }
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
@@ -1320,10 +1515,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
             last_extent = extent;
 
+            light_clustering_config = cluster_config(16, 9, 16, 0.1F, 1000.0F);
+
             ResizeTrigger final_trigger = manual_trigger;
             if (window_resized) {
                 final_trigger = final_trigger | ResizeTrigger::Extent;
             }
+
+            info("Resize trigger to rebuild: {}", to_string(final_trigger));
 
             resize_graph.rebuild(extent,
                                  ResizeContext{
@@ -1350,12 +1549,12 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
         constexpr float z_near = 0.1f;
         write_camera_to_frame_ubo(ctx, aligned_frame_buffer_handle, bounded_frame_index, app_state.cam, frame_extent,
                                   fov_y, z_near);
+        static double total_time = 0.0;
+        total_time += dt;
         {
-            static double total_time = 0.0;
-            total_time += dt;
 
             constexpr auto rads_per_second = glm::radians(20.0f);
-            const float angle = static_cast<float>(total_time * rads_per_second);
+            const auto angle = static_cast<float>(total_time * rads_per_second);
 
             const glm::vec3 sun_dir = glm::normalize(glm::vec3(std::cos(angle), std::sin(angle), -0.4f));
 
@@ -1381,6 +1580,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
         }
 
         auto &fs = frames[bounded_frame_index];
+        gui_renderer->begin_frame(
+                std::make_tuple(extent, ctx.texture_format(tonemapped_target_handle), swapchain.color_space()));
 
         if (fs.frame_done_value > 0) {
             VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
@@ -1391,28 +1592,201 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                                    .pValues = &fs.frame_done_value};
             vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
 
-            if (auto ms = read_timestamp_pair_ms_any(ctx, compute_query_pool[bounded_frame_index],
-                                                     ComputeStamp::RotateBegin, ComputeStamp::CullEnd);
-                ms.has_value()) {
-                gpu_compute_ms.add_sample(ms.value());
-            }
-            if (auto ms = read_timestamp_pair_ms_any(ctx, graphics_query_pool[bounded_frame_index],
-                                                     GraphicsStamp::PreDepthBegin, GraphicsStamp::PresentEnd);
-                ms.has_value()) {
-                gpu_graphics_ms.add_sample(*ms);
+            static uint64_t total_frame_counter = 1;
+
+            auto compute_res = read_timestamp_pairs_ms(ctx, compute_query_pool[bounded_frame_index]);
+            auto c_stats = read_compute_stats(ctx, device, compute_stats_pool[bounded_frame_index]);
+            auto graphics_res = read_timestamp_pairs_ms(ctx, graphics_query_pool[bounded_frame_index]);
+            auto g_stats = read_graphics_stats(ctx, device, graphics_stats_pool[bounded_frame_index]);
+
+            if (compute_res.has_value()) {
+                const auto &c_times = *compute_res;
+                gpu_frame_graph.push_sample(0, c_times[static_cast<u32>(ComputeIndex::Rotate)]);
+                gpu_frame_graph.push_sample(1, c_times[static_cast<u32>(ComputeIndex::Cull)]);
+                gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::Clustering)]);
             }
 
+            if (graphics_res.has_value()) {
+                const auto &g_times = *graphics_res;
+                gpu_frame_graph.push_sample(3, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
+                gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
+                gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
+                gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
+                gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Present)]);
+            }
 
-            if (auto pipeline_stats = read_graphics_stats(ctx, device, graphics_stats_pool[bounded_frame_index]);
-                pipeline_stats.has_value()) {
-                volatile auto keep = *pipeline_stats;
-                (void) keep;
-            }
-            if (auto pipeline_stats = read_compute_stats(ctx, device, compute_stats_pool[bounded_frame_index]);
-                pipeline_stats.has_value()) {
-                volatile auto keep = *pipeline_stats;
-                (void) keep;
-            }
+            widget("Performance Graphs", [&] {
+                static int view_mode = 0;
+                static bool shared_scale = false;
+
+                ImGui::RadioButton("Combined View", &view_mode, 0);
+                ImGui::SameLine();
+                ImGui::RadioButton("Split View", &view_mode, 1);
+
+                if (view_mode == 1) {
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Shared Scale", &shared_scale);
+                }
+
+                ImGui::Separator();
+
+                if (view_mode == 0) {
+                    gpu_frame_graph.render("GPU Frame Times", ImVec2(0, 200));
+                } else {
+                    gpu_frame_graph.render_split("GPU", ImVec2(-1, 80), shared_scale);
+                }
+            });
+
+#ifdef ENABLED
+            widget("Frame Profile", [&] {
+                ImGui::Text("Frame Profile [#%llu]", total_frame_counter++);
+                ImGui::Separator();
+
+
+                if (compute_res.has_value()) {
+                    if (ImGui::CollapsingHeader("Compute Phases", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        if (ImGui::BeginTable("ComputeTable", 2,
+                                              ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg |
+                                                      ImGuiTableFlags_SizingFixedFit)) {
+                            ImGui::TableSetupColumn("Phase");
+                            ImGui::TableSetupColumn("Time (ms)");
+                            ImGui::TableHeadersRow();
+
+                            const auto &t = *compute_res;
+
+                            auto row_c = [&](const char *name, ComputeIndex idx) {
+                                u32 i = static_cast<u32>(idx);
+                                if (i >= t.size())
+                                    return;
+
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::TextUnformatted(name);
+
+                                ImGui::TableNextColumn();
+                                ImGui::Text("%.4f", t[i]);
+
+                                if (c_stats.has_value() && i < c_stats->size()) {
+                                    ImGui::TableNextRow();
+                                    ImGui::TableNextColumn();
+                                    ImGui::Indent();
+                                    ImGui::Text("Invocations:");
+                                    ImGui::Unindent();
+
+                                    ImGui::TableNextColumn();
+                                    ImGui::Text("%llu", (*c_stats)[i].compute_shader_invocations);
+                                }
+                            };
+
+                            row_c("Rotate", ComputeIndex::Rotate);
+                            row_c("Cull", ComputeIndex::Cull);
+                            row_c("Clustering", ComputeIndex::Clustering);
+
+                            ImGui::EndTable();
+                        }
+                    }
+                }
+
+
+                if (graphics_res.has_value()) {
+                    ImGui::Separator();
+
+                    if (ImGui::CollapsingHeader("Graphics Phases", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        if (ImGui::BeginTable("GraphicsTable", 2,
+                                              ImGuiTableFlags_BordersInner | ImGuiTableFlags_RowBg |
+                                                      ImGuiTableFlags_SizingFixedFit)) {
+                            ImGui::TableSetupColumn("Phase");
+                            ImGui::TableSetupColumn("Time (ms)");
+                            ImGui::TableHeadersRow();
+
+                            const auto &t = *graphics_res;
+
+                            auto row_g = [&](const char *name, GraphicsIndex idx) {
+                                u32 i = static_cast<u32>(idx);
+                                if (i >= t.size())
+                                    return;
+
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::TextUnformatted(name);
+
+                                ImGui::TableNextColumn();
+                                ImGui::Text("%.4f", t[i]);
+                            };
+
+                            row_g("Pre-Depth", GraphicsIndex::PreDepth);
+                            row_g("GBuffer", GraphicsIndex::GBuffer);
+                            row_g("Deferred", GraphicsIndex::Deferred);
+                            row_g("Tonemap", GraphicsIndex::Tonemap);
+                            row_g("Present", GraphicsIndex::Present);
+
+                            ImGui::EndTable();
+                        }
+
+                        // Geometry totals
+                        if (g_stats.has_value()) {
+                            ImGui::Separator();
+                            ImGui::Text("Geometry Totals");
+
+                            const auto &gb = (*g_stats)[static_cast<u32>(GraphicsIndex::GBuffer)];
+
+                            ImGui::BulletText("Vertices: %llu", gb.input_assembly_vertices);
+                            ImGui::BulletText("Primitives: %llu", gb.input_assembly_primitives);
+                            ImGui::BulletText("Fragment Invocations: %llu", gb.fragment_shader_invocations);
+                        }
+                    }
+                }
+
+                if (compute_res.has_value() && graphics_res.has_value()) {
+                    const auto &c_times = *compute_res;
+                    const auto &g_times = *graphics_res;
+
+                    double total_ms = 0.0;
+                    for (double m: c_times)
+                        total_ms += m;
+                    for (double m: g_times)
+                        total_ms += m;
+
+                    double clustering_ms = c_times[static_cast<u32>(ComputeIndex::Clustering)];
+                    double clustering_pct = (clustering_ms / total_ms) * 100.0;
+
+                    ImGui::Separator();
+                    ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Clustering is %.1f%% of GPU frame time",
+                                       clustering_pct);
+                }
+            });
+
+            widget("Targets", [&] {
+                using namespace std::string_view_literals;
+                struct TargetView {
+                    const std::string_view name;
+                    const TextureHandle handle;
+                };
+
+                static std::array targets = {
+                        TargetView{.name = "GBuffer0 (Albedo/AO)"sv, .handle = gbuffer0_handle},
+                        TargetView{.name = "GBuffer1 (Normal/RM)"sv, .handle = gbuffer1_handle},
+                        TargetView{.name = "GBuffer2 (Emissive)"sv, .handle = gbuffer2_handle},
+                        TargetView{.name = "Depth"sv, .handle = depth_handle},
+                        TargetView{.name = "Culling Debug"sv, .handle = debug_culling_handle},
+                        TargetView{.name = "Lit HDR"sv, .handle = lit_hdr_handle},
+                        TargetView{.name = "Tonemapped"sv, .handle = tonemapped_target_handle},
+                };
+
+                if (ImGui::BeginTabBar("##TargetTabs", ImGuiTabBarFlags_None)) {
+                    for (auto &&[idx, target]: targets | std::views::enumerate) {
+                        ImGui::PushID(static_cast<i32>(idx));
+                        if (ImGui::BeginTabItem(target.name.data())) {
+                            ImVec2 size = ImGui::GetContentRegionAvail();
+                            ImGui::Image(ImTextureRef{ImTextureID{target.handle.index()}}, size);
+                            ImGui::EndTabItem();
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndTabBar();
+                }
+            });
+#endif
 
             auto &&[a, b, c, d] = ctx.query_pools.get_multiple(
                     compute_query_pool[bounded_frame_index], graphics_query_pool[bounded_frame_index],
@@ -1447,41 +1821,61 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::RotateBegin);
                     begin_stats(cmd, *stats, ComputeIndex::Rotate);
 
-                    auto *buffer = ctx.buffers.get(cubes_transform_handle->handle());
+                    auto *cube_buffer = ctx.buffers.get(cubes_transform_handle->handle());
 
                     RotateCubesPushConstant pc{
                             .cube_count = instance_count,
                             .delta_time = static_cast<float>(dt),
                             .rads_per_second = glm::radians(20.0f),
+                            .total_time = static_cast<f32>(total_time),
+                            .light_count = static_cast<uint32_t>(all_point_lights.size()),
                             .transforms = cubes_transform_handle->slot_device_address(bounded_frame_index),
                             .previous_frame_transforms = cubes_transform_handle->slot_device_address(last_frame_index),
+                            .point_lights = point_lights_ring.slot_device_address(bounded_frame_index),
+                            .previous_point_lights = point_lights_ring.slot_device_address(last_frame_index),
+                            .static_point_light_base = point_lights_base_addr,
                     };
 
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
                     vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-                    const u32 groups = (instance_count + 63u) / 64u;
+
+                    // 1. UPDATE: Dispatch enough groups for the larger of the two sets
+                    const u32 work_items = std::max(instance_count, pc.light_count);
+                    const u32 groups = (work_items + 63u) / 64u;
                     vkCmdDispatch(cmd, groups, 1, 1);
 
                     end_stats(cmd, *stats, ComputeIndex::Rotate);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::RotateEnd);
 
-                    VkBufferMemoryBarrier2 mem_barrier{};
-                    mem_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                    mem_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    mem_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                    mem_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                    mem_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-                    mem_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    mem_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    mem_barrier.buffer = buffer->buffer();
-                    mem_barrier.offset =
+                    // --- BARRIERS ---
+                    std::array<VkBufferMemoryBarrier2, 2> barriers{};
+
+                    // Cube Transform Barrier (Existing)
+                    barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                    barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                    barriers[0].buffer = cube_buffer->buffer();
+                    barriers[0].offset =
                             static_cast<VkDeviceSize>(cubes_transform_handle->slot_offset_bytes(bounded_frame_index));
-                    mem_barrier.size = static_cast<VkDeviceSize>(instance_count * sizeof(glm::mat4x3));
+                    barriers[0].size = static_cast<VkDeviceSize>(instance_count * sizeof(glm::mat4x3));
+
+                    // 2. NEW: Light Buffer Barrier
+                    barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                    barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    // Make this available to wherever you use lights (usually Fragment or Compute)
+                    barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                    barriers[1].buffer = ctx.buffers.get(point_lights_ring.handle())->buffer();
+                    barriers[1].offset = 0;
+                    barriers[1].size = VK_WHOLE_SIZE;
 
                     VkDependencyInfo dep_info{};
                     dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                    dep_info.bufferMemoryBarrierCount = 1;
-                    dep_info.pBufferMemoryBarriers = &mem_barrier;
+                    dep_info.bufferMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+                    dep_info.pBufferMemoryBarriers = barriers.data();
 
                     vkCmdPipelineBarrier2(cmd, &dep_info);
                 },
@@ -1556,19 +1950,16 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     std::array<VkDeviceSize, 1> offsets = {0};
                     const auto size = VkDeviceSize{verts->size()};
                     vkCmdBindVertexBuffers2(cmd, 0, 1, buffers.data(), offsets.data(), &size, nullptr);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, bindless.pipeline_layout, 0, 1,
+                                            &bindless.set, 0, nullptr);
 
-                    // --- 1. OPAQUE PASS ---
                     if (ranges.opaque_count > 0) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
 
-                        // Always bind descriptors AFTER binding the pipeline
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->layout, 0, 1,
-                                                &bindless.set, 0, nullptr);
 
                         PredepthPushConstants opaque_pc = pc;
                         opaque_pc.base_draw_id = ranges.opaque_base;
 
-                        // Opaque pre-depth typically only has a Vertex Shader
                         vkCmdPushConstants(cmd, predepth->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(opaque_pc),
                                            &opaque_pc);
 
@@ -1580,18 +1971,12 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                                                  sizeof(VkDrawIndexedIndirectCommand));
                     }
 
-                    // --- 2. ALPHA TESTED PASS ---
                     if (ranges.alpha_count > 0) {
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->pipeline);
-
-                        // Re-bind descriptors if the alpha pipeline uses a different layout
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->layout, 0, 1,
-                                                &bindless.set, 0, nullptr);
 
                         PredepthPushConstants alpha_pc = pc;
                         alpha_pc.base_draw_id = ranges.alpha_base;
 
-                        // Alpha pre-depth MUST have Fragment access for texture sampling
                         vkCmdPushConstants(cmd, alpha->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                            sizeof(alpha_pc), &alpha_pc);
@@ -1613,9 +1998,14 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                 });
         fs.timeline_values[stage_index(Stage::Predepth)] = predepth_val;
 
-        const std::array culling_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
-                                                    .semaphore = tl_graphics.timeline,
-                                                    .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}};
+        const std::array culling_waits{
+                TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
+                             .semaphore = tl_graphics.timeline,
+                             .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
+                TimelineWait{.value = fs.timeline_values[stage_index(Stage::CubeRotation)],
+                             .semaphore = tl_compute.timeline,
+                             .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
+        };
         auto light_val = submit_stage(
                 tl_compute, device,
                 [&](VkCommandBuffer cmd) {
@@ -1629,7 +2019,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
                     const PointLightCullingPushConstants pc{
                             .ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
-                            .lights = light_addr,
+                            .lights = point_lights_ring.slot_device_address(bounded_frame_index),
                             .flags = flags_addr,
                             .prefix = prefix_addr,
                             .compact = compact_addr,
@@ -1677,12 +2067,186 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
                     end_stats(cmd, *css, ComputeIndex::Cull);
                     write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::CullEnd);
-
-                    TRACY_GPU_COLLECT(tracy_compute.ctx, cmd);
                 },
                 SubmitSynchronisation{.timeline_waits = culling_waits});
-
         fs.timeline_values[stage_index(Stage::LightCulling)] = light_val;
+
+        const std::array clustering_waits{TimelineWait{.value = fs.timeline_values[stage_index(Stage::LightCulling)],
+                                                       .semaphore = tl_compute.timeline,
+                                                       .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}};
+        auto light_clustering_val = submit_stage(
+                tl_compute, device,
+                [&](VkCommandBuffer cmd) {
+                    /*TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "ClusteredLightCulling");
+
+                    auto &&[cqs, css] = ctx.query_pools.get_multiple(compute_query_pool[bounded_frame_index],
+                                                                     compute_stats_pool[bounded_frame_index]);
+
+                    write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringBegin);
+                    begin_stats(cmd, *css, ComputeIndex::Clustering);
+
+                    // Build push constants
+                    const ClusteredLightCullingPushConstants pc{
+                            .frame_ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
+                            .culled_lights = compact_addr,
+                            .culled_light_count = culled_light_count_addr,
+
+                            .z_near = z_near,
+                            .z_far = 1000.0F,
+                            .log_z_scale = light_clustering_config.log_z_scale,
+
+                            .tiles_x = light_clustering_config.tiles_x,
+                            .tiles_y = light_clustering_config.tiles_y,
+                            .tiles_z = light_clustering_config.tiles_z,
+                            .cluster_count = light_clustering_config.cluster_count,
+
+                            .visibility = visibility_addr,
+                            .cluster_counts = cluster_counts_addr,
+                            .clusters = clusters_addr,
+                            .cluster_counters = cluster_counters_addr,
+                            .cluster_light_indices = cluster_light_indices_addr,
+                            .global_index_count = global_index_count_addr,
+                    };
+
+                    // --- Reset buffers ---
+                    vkCmdFillBuffer(cmd, ctx.buffers.get(cluster_counts_handle)->buffer(), 0, VK_WHOLE_SIZE, 0u);
+                    vkCmdFillBuffer(cmd, ctx.buffers.get(cluster_counters_handle)->buffer(), 0, VK_WHOLE_SIZE, 0u);
+                    vkCmdFillBuffer(cmd, ctx.buffers.get(global_index_count_handle)->buffer(), 0, VK_WHOLE_SIZE, 0u);
+
+                    // Barrier: Transfer → Compute
+                    {
+                        std::array<VkBufferMemoryBarrier2, 3> barriers = {};
+                        for (auto &b: barriers) {
+                            b.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                            b.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                            b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                            b.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                            b.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                            b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                            b.size = VK_WHOLE_SIZE;
+                        }
+                        barriers[0].buffer = ctx.buffers.get(cluster_counts_handle)->buffer();
+                        barriers[1].buffer = ctx.buffers.get(cluster_counters_handle)->buffer();
+                        barriers[2].buffer = ctx.buffers.get(global_index_count_handle)->buffer();
+
+                        VkDependencyInfo dep_info{};
+                        dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                        dep_info.bufferMemoryBarrierCount = static_cast<u32>(barriers.size());
+                        dep_info.pBufferMemoryBarriers = barriers.data();
+
+                        vkCmdPipelineBarrier2(cmd, &dep_info);
+                    }
+
+
+                    constexpr u32 threads_per_group = 64u;
+                    const u32 light_groups = (light_count + threads_per_group - 1u) / threads_per_group;
+                    const u32 cluster_groups =
+                            (light_clustering_config.cluster_count + threads_per_group - 1u) / threads_per_group;
+
+                    auto &&[count_pipe, prefix_pipe, write_pipe, visibility_pipe] =
+                            ctx.pipeline_pool.get_multiple(cluster_count_pipeline, cluster_prefix_pipeline,
+                                                           cluster_write_pipeline, cluster_visibility_pipeline);
+
+                    VkMemoryBarrier2 compute_barrier{};
+                    compute_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    compute_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    compute_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    compute_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    compute_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+
+                    VkDependencyInfo dep{};
+                    dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep.memoryBarrierCount = 1;
+                    dep.pMemoryBarriers = &compute_barrier;
+
+                    // --- Pass 0: Compute Visibility ---
+                    // Goal: Project spheres to cluster-AABBs once.
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_pipe->pipeline);
+                    vkCmdPushConstants(cmd, visibility_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                    vkCmdDispatch(cmd, light_groups, 1, 1);
+
+                    // Barrier: Visibility Write -> Visibility Read (for Count and Write passes)
+                    // Also ClusterCounts reset -> ClusterCounts Write
+                    VkMemoryBarrier2 visibility_barrier{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                                                        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                        .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                                                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT |
+                                                                         VK_ACCESS_2_SHADER_WRITE_BIT};
+                    VkDependencyInfo visibility_dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                                    .memoryBarrierCount = 1,
+                                                    .pMemoryBarriers = &visibility_barrier};
+                    vkCmdPipelineBarrier2(cmd, &visibility_dep);
+
+                    // --- Pass 1: Count lights per cluster ---
+                    // Uses Visibility Buffer + Atomics (Wave optimized)
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, count_pipe->pipeline);
+                    vkCmdDispatch(cmd, light_groups, 1, 1);
+
+                    // Barrier: ClusterCounts Write -> Prefix Sum Read
+                    vkCmdPipelineBarrier2(cmd, &dep); // Your existing compute_barrier dep
+
+                    // --- Pass 2: Prefix sum ---
+                    // Fully parallelized (No loop on thread 0)
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, prefix_pipe->pipeline);
+                    vkCmdDispatch(cmd, cluster_groups, 1, 1);
+
+                    // Barrier: Prefix Sum Write -> Write Pass Read (Clusters buffer)
+                    vkCmdPipelineBarrier2(cmd, &dep);
+
+                    // --- Pass 3: Write light indices ---
+                    // Uses Visibility Buffer + Prefix Sum Offsets
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, write_pipe->pipeline);
+                    vkCmdDispatch(cmd, light_groups, 1, 1);
+
+                    end_stats(cmd, *css, ComputeIndex::Clustering);
+                    write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringEnd);
+
+                    TRACY_GPU_COLLECT(tracy_compute.ctx, cmd);*/
+                    TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "ClusteredLightCulling");
+
+                    auto &&[cqs, css] = ctx.query_pools.get_multiple(compute_query_pool[bounded_frame_index],
+                                                                     compute_stats_pool[bounded_frame_index]);
+
+                    write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringBegin);
+                    begin_stats(cmd, *css, ComputeIndex::Clustering);
+
+                    const ClusteredLightCullingPushConstants pc{
+                            .frame_ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
+                            .culled_lights = compact_addr,
+                            .culled_light_count = culled_light_count_addr,
+
+                            .z_near = light_clustering_config.z_near,
+                            .z_far = light_clustering_config.z_far,
+                            .log_z_scale = light_clustering_config.log_z_scale,
+
+                            .tiles_x = light_clustering_config.tiles_x,
+                            .tiles_y = light_clustering_config.tiles_y,
+                            .tiles_z = light_clustering_config.tiles_z,
+                            .cluster_count = light_clustering_config.cluster_count,
+
+                            .visibility = visibility_addr,
+                            .cluster_counts = cluster_counts_addr,
+                            .clusters = clusters_addr,
+                            .cluster_counters = cluster_counters_addr,
+                            .cluster_light_indices = cluster_light_indices_addr,
+                            .global_index_count = global_index_count_addr,
+                    };
+
+                    auto build_pipe = ctx.pipeline_pool.get(cluster_build_groups_pipeline);
+
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, build_pipe->pipeline);
+                    vkCmdPushConstants(cmd, build_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                    vkCmdDispatch(cmd, light_clustering_config.cluster_count, 1, 1);
+
+                    end_stats(cmd, *css, ComputeIndex::Clustering);
+                    write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringEnd);
+                    TracyVkCollect(tracy_compute.ctx, cmd);
+                },
+                SubmitSynchronisation{.timeline_waits = clustering_waits});
+
+        fs.timeline_values[stage_index(Stage::LightClustering)] = light_clustering_val;
 
         const std::array gbuffer_waits{
                 TimelineWait{
@@ -1697,6 +2261,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                 },
         };
 
+
         auto gbuffer_val = submit_stage(
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
@@ -1704,6 +2269,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
                     auto *ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::GbufferBegin);
+                    auto *pool = begin_query_for_index(cmd, GraphicsIndex::GBuffer,
+                                                       graphics_stats_pool[bounded_frame_index]);
 
                     auto *mrt_pipeline = ctx.pipeline_pool.get(gbuffer_pipeline_mrt);
 
@@ -1805,7 +2372,6 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                                                  sizeof(VkDrawIndexedIndirectCommand));
                     }
 
-                    // --- Draw 2: ALPHA TESTED ---
                     if (ranges.alpha_count > 0) {
                         pc.base_draw_id = ranges.alpha_base;
                         vkCmdPushConstants(cmd, mrt_pipeline->layout,
@@ -1823,6 +2389,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     vkCmdEndRendering(cmd);
 
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::GbufferEnd);
+                    end_query_for_index(cmd, GraphicsIndex::GBuffer, pool);
                 },
                 SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         fs.timeline_values[stage_index(Stage::GBuffer)] = gbuffer_val;
@@ -1834,7 +2401,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                         .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                 },
                 TimelineWait{
-                        .value = fs.timeline_values[stage_index(Stage::LightCulling)],
+                        .value = fs.timeline_values[stage_index(Stage::LightClustering)],
                         .semaphore = tl_compute.timeline,
                         .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                 },
@@ -1847,6 +2414,8 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
                     auto &&ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::DeferredBegin);
+                    auto *pool = begin_query_for_index(cmd, GraphicsIndex::Deferred,
+                                                       graphics_stats_pool[bounded_frame_index]);
 
                     auto mrt_lighting = ctx.pipeline_pool.get(gbuffer_pipeline_lighting);
 
@@ -1981,14 +2550,24 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
                     DeferredLightingPushConstants pc{
                             .frame_ubo = aligned_frame_buffer_handle.slot_device_address(bounded_frame_index),
-                            .point_lights = compact_addr,
-                            .point_light_count = culled_light_count_addr,
+                            .point_lights = point_lights_ring.slot_device_address(bounded_frame_index),
+
+                            .tiles_x = light_clustering_config.tiles_x,
+                            .tiles_y = light_clustering_config.tiles_y,
+                            .tiles_z = light_clustering_config.tiles_z,
+                            .log_z_scale = light_clustering_config.log_z_scale,
+
+                            .clusters = clusters_addr,
+                            .cluster_light_indices = cluster_light_indices_addr,
+
                             .gbuffer0_index = gbuffer0_handle.index(),
                             .gbuffer1_index = gbuffer1_handle.index(),
                             .gbuffer2_index = gbuffer2_handle.index(),
                             .depth_index = depth_handle.index(),
                             .lit_hdr_uav_index = 0,
+                            .debug_output_index = debug_culling_handle.index(),
                             .sampler_index = linear_clamp_sampler_handle.index(),
+                            .debug_mode = static_cast<u32>(current_debug_mode),
                     };
 
                     vkCmdPushConstants(cmd, mrt_lighting->layout,
@@ -2020,6 +2599,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     vkCmdPipelineBarrier2(cmd, &dep2);
 
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::DeferredEnd);
+                    end_query_for_index(cmd, GraphicsIndex::Deferred, pool);
                 },
                 SubmitSynchronisation{.timeline_waits = deferred_waits});
 
@@ -2040,6 +2620,9 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 
                     auto &&ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::TonemapBegin);
+                    auto *pool = begin_query_for_index(cmd, GraphicsIndex::Tonemap,
+                                                       graphics_stats_pool[bounded_frame_index]);
+
 
                     auto *tonemap = ctx.pipeline_pool.get(tonemap_pipeline);
 
@@ -2097,14 +2680,75 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     vkCmdEndRendering(cmd);
 
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::TonemapEnd);
+                    end_query_for_index(cmd, GraphicsIndex::Tonemap, pool);
                 },
                 SubmitSynchronisation{.timeline_waits = tonemap_waits});
 
         fs.timeline_values[stage_index(Stage::Tonemapping)] = tonemap_val;
 
-        const std::array present_timeline_waits{
+
+        const std::array imgui_waits{
                 TimelineWait{
                         .value = fs.timeline_values[stage_index(Stage::Tonemapping)],
+                        .semaphore = tl_graphics.timeline,
+                },
+        };
+        auto imgui_val = submit_stage(
+                tl_graphics, device,
+                [&](VkCommandBuffer cmd) {
+                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "ImGui");
+
+                    auto &&ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::UIBegin);
+                    auto *pool =
+                            begin_query_for_index(cmd, GraphicsIndex::UI, graphics_stats_pool[bounded_frame_index]);
+
+                    auto &&ldr = ctx.textures.get(tonemapped_target_handle);
+
+                    // Transition tonemapped image for ImGui rendering
+                    ldr->transition(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+                    VkRenderingAttachmentInfo color_attachment{};
+                    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    color_attachment.imageView = ldr->sampled_view;
+                    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+                    VkRenderingInfo ri{};
+                    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                    ri.renderArea.offset = {.x = 0, .y = 0};
+                    ri.renderArea.extent = {.width = frame_extent.width, .height = frame_extent.height};
+                    ri.layerCount = 1;
+                    ri.colorAttachmentCount = 1;
+                    ri.pColorAttachments = &color_attachment;
+
+                    vkCmdBeginRendering(cmd, &ri);
+
+                    gui_renderer->end_frame(cmd);
+
+                    vkCmdEndRendering(cmd);
+
+                    ldr->transition(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                    VK_IMAGE_LAYOUT_GENERAL, // or PRESENT_SRC_KHR if final
+                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
+                                    VK_ACCESS_2_NONE);
+
+                    write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::UIEnd);
+                    end_query_for_index(cmd, GraphicsIndex::UI, pool);
+                },
+                SubmitSynchronisation{.timeline_waits = imgui_waits});
+
+        fs.timeline_values[stage_index(Stage::UI)] = imgui_val;
+
+
+        const std::array present_timeline_waits = {
+                TimelineWait{
+                        .value = fs.timeline_values[stage_index(Stage::UI)],
                         .semaphore = tl_graphics.timeline,
                 },
         };
@@ -2120,15 +2764,15 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                 tl_graphics, device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "BlitToSwapchain");
+                    auto *pool = begin_query_for_index(cmd, GraphicsIndex::Present,
+                                                       graphics_stats_pool[bounded_frame_index]);
 
                     auto &&tonemapped = ctx.textures.get(tonemapped_target_handle);
                     const auto dst_image = swapchain.image(swap_image_index);
                     const auto src_image = tonemapped->image;
 
-                    auto &&[ts, stats] = ctx.query_pools.get_multiple(graphics_query_pool[bounded_frame_index],
-                                                                      graphics_stats_pool[bounded_frame_index]);
+                    auto ts = ctx.query_pools.get(graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::PresentBegin);
-                    begin_stats(cmd, *stats, GraphicsIndex::Present);
 
                     // 1. Transition Barriers
                     const std::array barriers{VkImageMemoryBarrier2{
@@ -2161,39 +2805,52 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
                     // 2. The Blit Operation
                     // Blit automatically handles the R8G8B8A8 -> B8G8R8A8 conversion!
                     VkImageBlit region{};
-                    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    region.srcOffsets[0] = {0, 0, 0};
-                    region.srcOffsets[1] = {static_cast<int32_t>(frame_extent.width),
-                                            static_cast<int32_t>(frame_extent.height), 1};
+                    region.srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                             .mipLevel = 0,
+                                             .baseArrayLayer = 0,
+                                             .layerCount = 1};
+                    region.srcOffsets[0] = {.x = 0, .y = 0, .z = 0};
+                    region.srcOffsets[1] = {.x = static_cast<int32_t>(frame_extent.width),
+                                            .y = static_cast<int32_t>(frame_extent.height),
+                                            .z = 1};
 
-                    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                    region.dstOffsets[0] = {0, 0, 0};
-                    region.dstOffsets[1] = {static_cast<int32_t>(frame_extent.width),
-                                            static_cast<int32_t>(frame_extent.height), 1};
+                    region.dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                             .mipLevel = 0,
+                                             .baseArrayLayer = 0,
+                                             .layerCount = 1};
+                    region.dstOffsets[0] = {.x = 0, .y = 0, .z = 0};
+                    region.dstOffsets[1] = {.x = static_cast<int32_t>(frame_extent.width),
+                                            .y = static_cast<int32_t>(frame_extent.height),
+                                            .z = 1};
 
                     vkCmdBlitImage(cmd, src_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst_image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
                                    VK_FILTER_LINEAR); // Linear filtering in case of resize
 
                     // 3. Final Transition to Present
-                    VkImageMemoryBarrier2 present_barrier{
-                            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                            .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-                            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                            .image = dst_image,
-                            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-                    };
+                    auto present_barrier = create_info<VkImageMemoryBarrier2>();
+                    present_barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                    present_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    present_barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    present_barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    present_barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                    present_barrier.image = dst_image;
+                    present_barrier.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        .baseMipLevel = 0,
+                                                        .levelCount = 1,
+                                                        .baseArrayLayer = 0,
+                                                        .layerCount = 1};
 
-                    VkDependencyInfo end_dep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                                             .imageMemoryBarrierCount = 1,
-                                             .pImageMemoryBarriers = &present_barrier};
+                    auto end_dep = create_info<VkDependencyInfo>();
+                    end_dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    end_dep.imageMemoryBarrierCount = 1;
+                    end_dep.pImageMemoryBarriers = &present_barrier;
                     vkCmdPipelineBarrier2(cmd, &end_dep);
 
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::PresentEnd);
-                    end_stats(cmd, *stats, GraphicsIndex::Present);
+                    end_query_for_index(cmd, GraphicsIndex::Present, pool);
+
+                    TracyVkCollect(tracy_graphics.ctx, cmd);
                 },
                 SubmitSynchronisation{
                         .timeline_waits = present_timeline_waits,
@@ -2233,11 +2890,6 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     info("quartiles: {}", stats.quartiles());
     info("Total: {:.3f} s", stats.total() / 1000.0F);
 
-    info("GPU compute mean:   {:.3f} ms", gpu_compute_ms.avg());
-    info("GPU compute p95:    {:.3f} ms", gpu_compute_ms.p95());
-    info("GPU graphics mean:  {:.3f} ms", gpu_graphics_ms.avg());
-    info("GPU graphics p95:   {:.3f} ms", gpu_graphics_ms.p95());
-
 #ifdef HAS_IMAGE_WRITERS
     if (!opts.disable_output_images) {
         const auto &&[oth, gbuffer0, gbuffer1, gbuffer2, ph] = ctx.textures.get_multiple(
@@ -2246,22 +2898,25 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
         std::filesystem::create_directory(output_dir);
         const auto as_string = output_dir.string();
         ZoneScopedNC("batch_write_images", 0xFF00AA);
-        std::vector requests{image_operations::ImageWriteRequest{oth, std::format("{}/output.png", as_string)},
-                             image_operations::ImageWriteRequest{
-                                     gbuffer0,
-                                     std::format("{}/gbuffer0.png", as_string),
+        std::vector requests{image_operations::ImageWriteRequest{
+                                     .texture = oth,
+                                     .filename = std::format("{}/output.png", as_string),
                              },
                              image_operations::ImageWriteRequest{
-                                     gbuffer1,
-                                     std::format("{}/gbuffer1.png", as_string),
+                                     .texture = gbuffer0,
+                                     .filename = std::format("{}/gbuffer0.png", as_string),
                              },
                              image_operations::ImageWriteRequest{
-                                     gbuffer2,
-                                     std::format("{}/gbuffer2.png", as_string),
+                                     .texture = gbuffer1,
+                                     .filename = std::format("{}/gbuffer1.png", as_string),
                              },
                              image_operations::ImageWriteRequest{
-                                     ph,
-                                     std::format("{}/perlin.png", as_string),
+                                     .texture = gbuffer2,
+                                     .filename = std::format("{}/gbuffer2.png", as_string),
+                             },
+                             image_operations::ImageWriteRequest{
+                                     .texture = ph,
+                                     .filename = std::format("{}/perlin.png", as_string),
                              }};
         image_operations::write_batch_to_disk(
                 allocator, requests, [](float progress) { info("Image write progress: {:.2f} %", progress * 100.0f); });
@@ -2269,7 +2924,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
 #endif
     vkDeviceWaitIdle(device);
 
-    pipeline_cache.reset();
+    gui_renderer.reset();
     ctx.clear_all();
 
     compiler.reset();
@@ -2283,7 +2938,7 @@ auto execute(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int,
     tracy_graphics.shutdown();
 
     destruction::global_command_context(command_context);
-    destruction::bindless_set(device, bindless);
+    destruction::bindless_set(bindless);
     destruction::timelines(device, tl_graphics, tl_transfer, tl_compute);
     destruction::allocator(allocator);
     destruction::swapchain(swapchain);

@@ -49,22 +49,21 @@ struct TextureLoadPacket {
 
 
 struct LoadedTextureCpu {
-    std::string name {};
-    TextureLoadPacket::Type type {};
-    TextureLoadPacket::Class texture_class {};
+    std::string name{};
+    TextureLoadPacket::Type type{};
+    TextureLoadPacket::Class texture_class{};
 
-    u32 width {0};
-    u32 height {0};
-    u32 levels {1};
+    u32 width{0};
+    u32 height{0};
+    u32 levels{1};
 
-    VkFormat vk_format {VK_FORMAT_UNDEFINED};
+    VkFormat vk_format{VK_FORMAT_UNDEFINED};
 
-    std::vector<u8> data {};
-    std::vector<u32> level_offset {};
-    std::vector<u32> level_size {};
+    std::vector<u8> data{};
+    std::vector<u32> level_offset{};
+    std::vector<u32> level_size{};
 
-    auto level_span(u32 level) const -> std::span<const u8>
-    {
+    auto level_span(u32 level) const -> std::span<const u8> {
         return std::span<const u8>{data.data() + level_offset[level], level_size[level]};
     }
 };
@@ -79,23 +78,28 @@ struct Submesh {
 };
 
 struct Vertex {
-    glm::vec3 position;
-    u32 normal;    // packed 10_10_10_2
-    u32 uvs;       // packed 8_8_8_8
-    u32 tangent;   // packed 10_10_10_2 (xyz, w unused)
-    u32 bitangent; // packed 10_10_10_2 (xyz, w unused)
+    glm::vec3 position{};
+    glm::vec2 uvs{};
+    u32 normal{}; // packed 10_10_10_2
+    u32 tangent{}; // packed 10_10_10_2 (xyz, w unused)
+    u32 bitangent{}; // packed 10_10_10_2 (xyz, w unused)
 
     auto operator<=>(const Vertex &other) const {
-        return std::tie(position.x, position.y, position.z, normal, uvs, tangent, bitangent) <=>
-               std::tie(other.position.x, other.position.y, other.position.z, other.normal, other.uvs,
+        return std::tie(position.x, position.y, position.z, normal, uvs.x, uvs.y, tangent, bitangent) <=>
+               std::tie(other.position.x, other.position.y, other.position.z, other.normal, other.uvs.x, other.uvs.y,
                         other.tangent, other.bitangent);
     }
 
-    bool operator==(const Vertex &other) const = default;
+    auto operator==(const Vertex &other) const -> bool = default;
 };
 
-static_assert(std::is_trivial_v<Vertex>);
-static_assert(sizeof(Vertex) == 28);
+struct VertexWithUV {
+    glm::vec3 pos;
+    glm::vec2 uvs;
+};
+
+
+static_assert(sizeof(Vertex) == 32);
 
 struct MeshData {
     std::vector<Vertex> vertices;

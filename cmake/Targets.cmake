@@ -24,6 +24,7 @@ add_executable(BindlessHeadless
   "src/Mesh.cxx"
   "src/GlobalCommandContext.cxx"
   "src/ThreadPool.cxx"
+  "src/ImGuiRenderer.cxx"
 )
 
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
@@ -116,6 +117,7 @@ target_link_libraries(BindlessHeadless PRIVATE
   expected
   $<$<BOOL:${HAS_IMAGE_WRITERS}>:ImageOperations>
   tinyobjloader
+  imgui
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -146,7 +148,7 @@ endif()
 
 if(HAS_TRACY)
   target_link_libraries(BindlessHeadless PRIVATE Tracy::TracyClient)
-  target_compile_definitions(BindlessHeadless PRIVATE TRACY_ENABLE)
+  target_compile_definitions(BindlessHeadless PRIVATE TRACY_ENABLE TRACY_VK_USE_SYMBOL_TABLE)
 endif()
 
 DEFAULT_COMPILE_OPTIONS(BindlessHeadless)

@@ -55,12 +55,10 @@ using TracyVkCtx = void *;
 struct TracyGpuContext {
 #if defined(TRACY_ENABLE)
     VkDevice device{VK_NULL_HANDLE};
-    VkCommandPool pool{VK_NULL_HANDLE};
-    VkCommandBuffer init_cmd{VK_NULL_HANDLE};
     TracyVkCtx ctx{nullptr};
 #endif
 
-    auto init_calibrated(VkInstance, VkPhysicalDevice, VkDevice, VkQueue, u32, const char *) -> void;
+    auto init_calibrated(VkInstance, VkPhysicalDevice, VkDevice, std::string_view) -> void;
 
     auto shutdown() -> void;
 };
