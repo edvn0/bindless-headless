@@ -35,7 +35,7 @@ constexpr auto current_extent = [](GLFWwindow *win) {
 };
 
 constexpr auto clamp_msaa_samples = [](VkPhysicalDevice physical_device,
-                             VkSampleCountFlagBits requested) -> VkSampleCountFlagBits {
+                                       VkSampleCountFlagBits requested) -> VkSampleCountFlagBits {
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(physical_device, &props);
 
@@ -113,7 +113,7 @@ struct ClusterConfig {
     float z_far;
     float log_z_scale;
 };
-auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far)->ClusterConfig;
+auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) -> ClusterConfig;
 
 struct PointLight {
     std::array<float, 4> position_radius;

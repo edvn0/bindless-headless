@@ -54,9 +54,7 @@ auto RenderContext::create_pipeline(CompiledPipeline &&state) -> PipelineHandle 
     return pipeline_pool.create(std::move(state));
 }
 
-auto RenderContext::create_shader(VkShaderModule &&module) -> ShaderHandle {
-    return shaders.create(std::move(module));
-}
+auto RenderContext::create_shader(VkShaderModule &&module) -> ShaderHandle { return shaders.create(std::move(module)); }
 
 auto RenderContext::device_address(BufferHandle handle) -> DeviceAddress {
     if (const auto *buf = buffers.get(handle)) [[likely]] {

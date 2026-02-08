@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Types.hxx"
 #include "RenderContext.hxx"
+#include "Types.hxx"
 
 #include <volk.h>
 
@@ -20,8 +20,9 @@ static inline auto end_stats(VkCommandBuffer cmd, const QueryPoolState &qs, cons
 }
 
 
-static constexpr auto read_timestamp_pair_ms_any = [](const RenderContext &render_context, QueryPoolHandle h, const auto begin_idx,
-                                               const auto end_idx) -> std::optional<double> {
+static constexpr auto read_timestamp_pair_ms_any = [](const RenderContext &render_context, QueryPoolHandle h,
+                                                      const auto begin_idx,
+                                                      const auto end_idx) -> std::optional<double> {
     const auto *qs = render_context.query_pools.get(h);
     if (!qs) {
         return std::nullopt;
@@ -51,7 +52,7 @@ static constexpr auto read_timestamp_pair_ms_any = [](const RenderContext &rende
 };
 
 static constexpr auto read_timestamp_pairs_ms = [](const RenderContext &render_context,
-                                            QueryPoolHandle h) -> std::optional<std::vector<double>> {
+                                                   QueryPoolHandle h) -> std::optional<std::vector<double>> {
     const auto *qs = render_context.query_pools.get(h);
     if (!qs) {
         return std::nullopt;
@@ -88,7 +89,6 @@ static constexpr auto read_timestamp_pairs_ms = [](const RenderContext &render_c
 };
 
 
-
 struct GraphicsGpuStats {
     u64 input_assembly_vertices;
     u64 input_assembly_primitives;
@@ -106,7 +106,7 @@ struct ComputeGpuStats {
 
 
 static constexpr auto read_graphics_stats = [](const RenderContext &ctx,
-                              QueryPoolHandle h) -> std::optional<std::vector<GraphicsGpuStats>> {
+                                               QueryPoolHandle h) -> std::optional<std::vector<GraphicsGpuStats>> {
     const auto *qs = ctx.query_pools.get(h);
     if (!qs || qs->query_count == 0)
         return std::nullopt;
@@ -114,7 +114,8 @@ static constexpr auto read_graphics_stats = [](const RenderContext &ctx,
     const u32 count = qs->query_count;
     std::vector<GraphicsGpuStats> results(count);
 
-    VkResult r = vkGetQueryPoolResults(ctx.get_device(), qs->pool, 0, count, count * sizeof(GraphicsGpuStats), results.data(),
+    VkResult r = vkGetQueryPoolResults(ctx.get_device(), qs->pool, 0, count, count * sizeof(GraphicsGpuStats),
+                                       results.data(),
                                        sizeof(GraphicsGpuStats), // Stride is the size of one full struct
                                        VK_QUERY_RESULT_64_BIT);
 
@@ -123,7 +124,8 @@ static constexpr auto read_graphics_stats = [](const RenderContext &ctx,
     return results;
 };
 
-static constexpr auto read_compute_stats = [](const RenderContext &ctx, const auto h) -> std::optional<std::vector<ComputeGpuStats>> {
+static constexpr auto read_compute_stats = [](const RenderContext &ctx,
+                                              const auto h) -> std::optional<std::vector<ComputeGpuStats>> {
     const auto *qs = ctx.query_pools.get(h);
     if (!qs)
         return std::nullopt;
@@ -131,8 +133,8 @@ static constexpr auto read_compute_stats = [](const RenderContext &ctx, const au
     const u32 count = qs->query_count;
     std::vector<ComputeGpuStats> results(count);
 
-    VkResult r = vkGetQueryPoolResults(ctx.get_device(), qs->pool, 0, count, count * sizeof(ComputeGpuStats), results.data(),
-                                       sizeof(ComputeGpuStats), VK_QUERY_RESULT_64_BIT);
+    VkResult r = vkGetQueryPoolResults(ctx.get_device(), qs->pool, 0, count, count * sizeof(ComputeGpuStats),
+                                       results.data(), sizeof(ComputeGpuStats), VK_QUERY_RESULT_64_BIT);
 
     if (r != VK_SUCCESS)
         return std::nullopt;

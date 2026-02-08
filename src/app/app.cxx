@@ -18,18 +18,18 @@
 #include <thread>
 #include <unordered_map>
 
-#include "FrameQuery.hxx"
-#include "Mesh.hxx"
-#include "Compiler.hxx"
-#include "Constants.hxx"
 #include "BindlessHeadless.hxx"
 #include "BindlessSet.hxx"
+#include "Compiler.hxx"
+#include "Constants.hxx"
 #include "EventSystem.hxx"
+#include "FrameQuery.hxx"
 #include "GlobalCommandContext.hxx"
 #include "ImGuiRenderer.hxx"
+#include "Mesh.hxx"
 #include "Profiler.hxx"
-#include "Swapchain.hxx"
 #include "ResizeableGraph.hxx"
+#include "Swapchain.hxx"
 
 
 #include "app/frame.hxx"
@@ -132,7 +132,7 @@ struct AppPipelines {
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
 
-    LoadedObj cube_mesh{};
+    LoadedObj mesh{};
 
     std::vector<PointLight> all_point_lights{};
     std::vector<PointLight> all_point_lights_zero{};
@@ -142,7 +142,7 @@ struct AppResources {
     AlignedRingBuffer<PointLight> point_lights_ring{};
     BufferHandle culled_light_count{};
 
-    static constexpr u32 mesh_count = 10'000;
+    static constexpr u32 mesh_count = 1;
     AlignedRingBuffer<glm::mat4x3> transforms_ring{};
     u32 instance_count{0};
 
@@ -224,7 +224,7 @@ namespace {
         (vkCmdFillBuffer(cmd, buffers_ctx.get(buffer_handles)->buffer(), 0, VK_WHOLE_SIZE, 0), ...);
     }
 
-        auto set_window_callbacks(GLFWwindow *window, AppUi &ui) -> void {
+    auto set_window_callbacks(GLFWwindow *window, AppUi &ui) -> void {
         glfwSetWindowUserPointer(window, &ui.app_state);
 
         glfwSetKeyCallback(window, [](GLFWwindow *w, int key, int scancode, int action, int mods) {
@@ -479,7 +479,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
-        gpu.window = glfwCreateWindow(static_cast<i32>(opts.width), static_cast<i32>(opts.height), "Bindless", nullptr, nullptr);
+        gpu.window = glfwCreateWindow(static_cast<i32>(opts.width), static_cast<i32>(opts.height), "Bindless", nullptr,
+                                      nullptr);
         if (!gpu.window) {
             error("Could not create window");
             return 1;
@@ -517,7 +518,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     {
         const VkSampleCountFlagBits requested = msaa_from_cli(opts.msaa);
         gpu.msaa_samples = clamp_msaa_samples(gpu.physical_device, requested);
-        info("MSAA requested: {}, Engine supplied: {}", static_cast<u32>(requested), static_cast<u32>(gpu.msaa_samples));
+        info("MSAA requested: {}, Engine supplied: {}", static_cast<u32>(requested),
+             static_cast<u32>(gpu.msaa_samples));
 
         gpu.ctx = RenderContext{
                 .allocator = gpu.allocator,
@@ -539,8 +541,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         vkGetPhysicalDeviceProperties(gpu.physical_device, &props);
         const auto timestamp_period_ns = static_cast<double>(props.limits.timestampPeriod);
 
-        const VkQueryPoolCreateFlags reset_flags =
-                gpu.enabled_features.contains(VK_KHR_MAINTENANCE_9_EXTENSION_NAME) ? VK_QUERY_POOL_CREATE_RESET_BIT_KHR : 0;
+        const VkQueryPoolCreateFlags reset_flags = gpu.enabled_features.contains(VK_KHR_MAINTENANCE_9_EXTENSION_NAME)
+                                                           ? VK_QUERY_POOL_CREATE_RESET_BIT_KHR
+                                                           : 0;
 
         for (u32 fi = 0; fi < frames_in_flight; ++fi) {
             auto qpci = create_info<VkQueryPoolCreateInfo>();
@@ -553,7 +556,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
             pipes.compute_query_pool[fi] = gpu.ctx.create_query_pool(QueryPoolState{
                     .pool = qpc, .query_count = compute_query_count, .timestamp_period_ns = timestamp_period_ns});
-            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, qpc, std::format("compute_timestamp_query_pool_frame_{}", fi));
+            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, qpc,
+                           std::format("compute_timestamp_query_pool_frame_{}", fi));
 
             qpci.queryCount = graphics_query_count;
 
@@ -562,7 +566,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
             pipes.graphics_query_pool[fi] = gpu.ctx.create_query_pool(QueryPoolState{
                     .pool = qpg, .query_count = graphics_query_count, .timestamp_period_ns = timestamp_period_ns});
-            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, qpg, std::format("graphics_timestamp_query_pool_frame_{}", fi));
+            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, qpg,
+                           std::format("graphics_timestamp_query_pool_frame_{}", fi));
 
             VkQueryPoolCreateInfo stats_qpci{
                     .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
@@ -584,7 +589,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             vk_check(vkCreateQueryPool(gpu.device, &stats_qpci, nullptr, &stats_pool));
             pipes.graphics_stats_pool[fi] = gpu.ctx.create_query_pool(QueryPoolState{
                     .pool = stats_pool, .query_count = stats_graphics_count, .timestamp_period_ns = 0.0});
-            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, stats_pool, std::format("graphics_stats_query_pool_frame_{}", fi));
+            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, stats_pool,
+                           std::format("graphics_stats_query_pool_frame_{}", fi));
 
             VkQueryPoolCreateInfo compute_stats_qpci{
                     .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
@@ -599,7 +605,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             vk_check(vkCreateQueryPool(gpu.device, &compute_stats_qpci, nullptr, &compute_stats));
             pipes.compute_stats_pool[fi] = gpu.ctx.create_query_pool(QueryPoolState{
                     .pool = compute_stats, .query_count = stats_compute_count, .timestamp_period_ns = 0.0});
-            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, compute_stats, std::format("compute_stats_query_pool_frame_{}", fi));
+            set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, compute_stats,
+                           std::format("compute_stats_query_pool_frame_{}", fi));
 
             if (reset_flags == 0) {
                 vkResetQueryPool(gpu.device, qpc, 0, compute_query_count);
@@ -616,35 +623,32 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         std::array<u8, 4> black{0, 0, 0, 255};
         std::array<u8, 4> flat_normal{128, 128, 255, 255};
 
-        auto white_handle =
-                gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1,
-                                                                VK_FORMAT_R8G8B8A8_UNORM,
-                                                                std::as_bytes(std::span(white)), "white-texture"));
-        auto black_handle =
-                gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1,
-                                                                VK_FORMAT_R8G8B8A8_UNORM,
-                                                                std::as_bytes(std::span(black)), "black-texture"));
-        auto flat_normal_handle =
-                gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1,
-                                                                VK_FORMAT_R8G8B8A8_UNORM,
-                                                                std::as_bytes(std::span(flat_normal)), "flat-normals-texture"));
+        auto white_handle = gpu.ctx.create_texture(
+                create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                                          std::as_bytes(std::span(white)), "white-texture"));
+        auto black_handle = gpu.ctx.create_texture(
+                create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                                          std::as_bytes(std::span(black)), "black-texture"));
+        auto flat_normal_handle = gpu.ctx.create_texture(
+                create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                                          std::as_bytes(std::span(flat_normal)), "flat-normals-texture"));
 
 #ifndef NDEBUG
         assert(white_handle.index() == white_texture_index);
         assert(black_handle.index() == black_texture_index);
         assert(flat_normal_handle.index() == normal_texture_index);
 #else
-        (void)white_handle;
-        (void)black_handle;
-        (void)flat_normal_handle;
+        (void) white_handle;
+        (void) black_handle;
+        (void) flat_normal_handle;
 #endif
     }
 
     {
         auto noise = generate_perlin(2048, 2048);
-        res.perlin_noise = gpu.ctx.create_texture(
-                create_image_from_span_v2(gpu.allocator, gpu.command_context, 2048u, 2048u, VK_FORMAT_R8_UNORM,
-                                          std::span{noise}, "perlin_noise"));
+        res.perlin_noise =
+                gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, gpu.command_context, 2048u, 2048u,
+                                                                 VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
     }
 
     {
@@ -702,9 +706,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers);
 
     // --- Load meshes ---
-    TRY_PROPAGATE(cube_mesh, load_obj(gpu.ctx, gpu.command_context, "assets/meshes/ColourGridCube.obj"),
+    TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, gpu.command_context, "assets/meshes/Sponza-master/sponza.obj"),
                   "Failed to load cube mesh");
-    res.cube_mesh = std::move(cube_mesh);
+    res.mesh = std::move(loaded_mesh);
 
     // --- Lights + buffers ---
     {
@@ -712,9 +716,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.all_point_lights_zero = std::vector<PointLight>(opts.light_count);
         res.light_count = static_cast<u32>(res.all_point_lights.size());
 
-        const auto mesh_aabb = res.cube_mesh.mesh_aabb;
-        info("Mesh AABB: min({}, {}, {}) max({}, {}, {})",
-             mesh_aabb.min.x, mesh_aabb.min.y, mesh_aabb.min.z,
+        const auto mesh_aabb = res.mesh.mesh_aabb;
+        info("Mesh AABB: min({}, {}, {}) max({}, {}, {})", mesh_aabb.min.x, mesh_aabb.min.y, mesh_aabb.min.z,
              mesh_aabb.max.x, mesh_aabb.max.y, mesh_aabb.max.z);
 
         spawn_lights_in_aabb(mesh_aabb, res.all_point_lights);
@@ -724,19 +727,21 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                       res.all_point_lights, "base_static_point_lights")
                                                .value());
 
-        auto ring = AlignedRingBuffer<PointLight>::create(gpu.ctx, res.light_count, VkBufferUsageFlags{}, "point_lights_ring");
+        auto ring = AlignedRingBuffer<PointLight>::create(gpu.ctx, res.light_count, VkBufferUsageFlags{},
+                                                          "point_lights_ring");
         res.point_lights_ring = std::move(ring.value());
         res.point_lights_ring.write_all_slots(gpu.ctx, res.all_point_lights);
 
-        res.culled_light_count =
-                gpu.ctx.buffers.create(Buffer::from_value<u32>(gpu.allocator,
-                                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                               0u, "culled_point_light_count")
-                                               .value());
+        res.culled_light_count = gpu.ctx.buffers.create(
+                Buffer::from_value<u32>(gpu.allocator,
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0u,
+                                        "culled_point_light_count")
+                        .value());
 
-        auto transforms = AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, res.mesh_count, VkBufferUsageFlags{}, "transforms");
+        auto transforms =
+                AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, res.mesh_count, VkBufferUsageFlags{}, "transforms");
         res.transforms_ring = std::move(*transforms);
-        res.transforms_ring.write_all_slots(gpu.ctx, glm::mat4x3(glm::identity<glm::mat4x4>()));
+        res.transforms_ring.write_all_slots(gpu.ctx, glm::identity<glm::mat4x3>());
 
         res.instance_count = static_cast<u32>(res.mesh_count);
 
@@ -753,8 +758,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         .value());
 
         res.compact_lights = gpu.ctx.buffers.create(
-                Buffer::zeroes(gpu.allocator,
-                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                sizeof(PointLight) * opts.light_count, "compact_lights")
                         .value());
     }
@@ -782,15 +786,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             u32 x0, x1, y0, y1, z0, z1, is_visible, _pad;
         };
 
-        res.visibility = gpu.ctx.buffers.create(
-                Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                               sizeof(LightVisibility) * res.light_count, "light_visibility_buffer")
-                        .value());
+        res.visibility = gpu.ctx.buffers.create(Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                               sizeof(LightVisibility) * res.light_count,
+                                                               "light_visibility_buffer")
+                                                        .value());
 
-        res.clusters = gpu.ctx.buffers.create(
-                Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                               sizeof(Cluster) * res.clustering_config.cluster_count, "clusters")
-                        .value());
+        res.clusters =
+                gpu.ctx.buffers.create(Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                      sizeof(Cluster) * res.clustering_config.cluster_count, "clusters")
+                                               .value());
 
         std::vector<u32> zero_counters(res.clustering_config.cluster_count, 0u);
         res.cluster_counters = gpu.ctx.buffers.create(
@@ -799,15 +803,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                         zero_counters, "cluster_counters")
                         .value());
 
-        res.cluster_light_indices = gpu.ctx.buffers.create(
-                Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                               sizeof(u32) * res.max_light_indices, "cluster_light_indices")
-                        .value());
+        res.cluster_light_indices =
+                gpu.ctx.buffers.create(Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                      sizeof(u32) * res.max_light_indices, "cluster_light_indices")
+                                               .value());
 
         res.global_index_count = gpu.ctx.buffers.create(
                 Buffer::from_value<u32>(gpu.allocator,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        0u, "global_index_count")
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0u,
+                                        "global_index_count")
                         .value());
     }
 
@@ -820,10 +824,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                           VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, "frame_indirect_cmds")
                                           .value());
 
-    res.draw_material_id_ring = std::move(AlignedRingBuffer<u32>::create(
-                                                  gpu.ctx, AppResources::max_draws_per_frame,
-                                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "frame_draw_material_ids")
-                                                  .value());
+    res.draw_material_id_ring =
+            std::move(AlignedRingBuffer<u32>::create(gpu.ctx, AppResources::max_draws_per_frame,
+                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "frame_draw_material_ids")
+                              .value());
 
     set_window_callbacks(gpu.window, ui);
     wire_event_dispatch(gpu.window, ui);
@@ -847,46 +851,46 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 resize_graph.add_node("tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
                     const auto old_tonemap = res.tonemapped;
 
-                    res.tonemapped = gpu.ctx.create_texture(
-                            create_offscreen_target(gpu.allocator, e.width, e.height,
-                                                    VK_FORMAT_R8G8B8A8_UNORM, {}, "tonemapped"));
+                    res.tonemapped = gpu.ctx.create_texture(create_offscreen_target(
+                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "tonemapped"));
                     destroy(gpu.ctx, old_tonemap, resize_context.retire_value);
                 });
 
-        const auto offscreen_node =
-                resize_graph.add_node("offscreen_targets", [&](VkExtent2D e, const ResizeContext &rc) {
-                    const auto old_g0 = res.gbuffer0;
-                    const auto old_g1 = res.gbuffer1;
-                    const auto old_g2 = res.gbuffer2;
-                    const auto old_culling = res.debug_culling;
-                    const auto old_hdr = res.lit_hdr;
-                    const auto old_depth = res.depth;
+        const auto offscreen_node = resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
+                                                                                   const ResizeContext &rc) {
+            const auto old_g0 = res.gbuffer0;
+            const auto old_g1 = res.gbuffer1;
+            const auto old_g2 = res.gbuffer2;
+            const auto old_culling = res.debug_culling;
+            const auto old_hdr = res.lit_hdr;
+            const auto old_depth = res.depth;
 
-                    res.gbuffer0 = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "gbuffer0_albedo_ao"));
+            res.gbuffer0 = gpu.ctx.create_texture(create_offscreen_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "gbuffer0_albedo_ao"));
 
-                    res.gbuffer1 = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer1_normal_rough_metal"));
+            res.gbuffer1 = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
+                                                                          VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                                                          "gbuffer1_normal_rough_metal"));
 
-                    res.gbuffer2 = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
+            res.gbuffer2 = gpu.ctx.create_texture(create_offscreen_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
 
-                    res.debug_culling = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
+            res.debug_culling = gpu.ctx.create_texture(create_offscreen_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
 
-                    res.depth = gpu.ctx.create_texture(create_depth_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, false, "depth"));
+            res.depth = gpu.ctx.create_texture(create_depth_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, false, "depth"));
 
-                    res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "lit_hdr"));
+            res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
+                                                                         VK_FORMAT_R16G16B16A16_SFLOAT, {}, "lit_hdr"));
 
-                    destroy(gpu.ctx, old_g0, rc.retire_value);
-                    destroy(gpu.ctx, old_g1, rc.retire_value);
-                    destroy(gpu.ctx, old_g2, rc.retire_value);
-                    destroy(gpu.ctx, old_hdr, rc.retire_value);
-                    destroy(gpu.ctx, old_depth, rc.retire_value);
-                    destroy(gpu.ctx, old_culling, rc.retire_value);
-                });
+            destroy(gpu.ctx, old_g0, rc.retire_value);
+            destroy(gpu.ctx, old_g1, rc.retire_value);
+            destroy(gpu.ctx, old_g2, rc.retire_value);
+            destroy(gpu.ctx, old_hdr, rc.retire_value);
+            destroy(gpu.ctx, old_depth, rc.retire_value);
+            destroy(gpu.ctx, old_culling, rc.retire_value);
+        });
 
         const auto uniforms_node = resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D, const ResizeContext &) {
             // no-op for now
@@ -910,15 +914,16 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<ReflectionData, names.size()> reflection_data = {};
                     TRY_UNWRAP_WITH_DISCARD(culling_code,
                                             gpu.compiler->compile_from_file("shaders/light_cull_compact_modern.slang",
-                                                                            std::span(names), std::span(reflection_data)),
+                                                                            std::span(names),
+                                                                            std::span(reflection_data)),
                                             "Failed to compile light culling shader");
 
                     std::array<const std::string_view, 1> clustered_culling_names = {"BuildClusterCS"};
                     std::array<ReflectionData, clustered_culling_names.size()> clustered_culling_reflection_data = {};
                     TRY_UNWRAP_WITH_DISCARD(clustered_culling_code,
-                                            gpu.compiler->compile_from_file("shaders/clustering.slang",
-                                                                            std::span(clustered_culling_names),
-                                                                            std::span(clustered_culling_reflection_data)),
+                                            gpu.compiler->compile_from_file(
+                                                    "shaders/clustering.slang", std::span(clustered_culling_names),
+                                                    std::span(clustered_culling_reflection_data)),
                                             "Failed to compile light clustering shader");
 
                     std::array<const std::string_view, 2> predepth_names{"main_vs_mdi", "fs_main"};
@@ -962,17 +967,17 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(present_reflection)),
                                             "Failed to compile present shader");
 
-                    auto &&[fp, cp] = create_compute_pipelines(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, {},
-                                                               std::span(culling_code), std::span(names));
+                    auto &&[fp, cp] = create_compute_pipelines(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                                                               {}, std::span(culling_code), std::span(names));
 
-                    auto &&[crp] = create_compute_pipelines(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
-                                                            sizeof(RotateCubesPushConstant),
-                                                            std::span(rotate_cubes_code), std::span(rotate_cubes_names));
+                    auto &&[crp] = create_compute_pipelines(
+                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, sizeof(RotateCubesPushConstant),
+                            std::span(rotate_cubes_code), std::span(rotate_cubes_names));
 
-                    auto &&[cl_groups] = create_compute_pipelines(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
-                                                                  sizeof(ClusteredLightCullingPushConstants),
-                                                                  std::span(clustered_culling_code),
-                                                                  std::span(clustered_culling_names));
+                    auto &&[cl_groups] = create_compute_pipelines(
+                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                            sizeof(ClusteredLightCullingPushConstants), std::span(clustered_culling_code),
+                            std::span(clustered_culling_names));
 
                     auto gbuffer_pipeline = create_gbuffer_pipeline(
                             gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
@@ -1052,7 +1057,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                              gpu.command_context, *gpu.compiler);
 
     auto gui_pipeline_node = resize_graph.add_node(
-            "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); }, ResizeTrigger::Shaders);
+            "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },
+            ResizeTrigger::Shaders);
     resize_graph.add_dependency(gui_pipeline_node, pipelines_node);
 
     ui.watcher = std::unique_ptr<efsw::FileWatcher, Deleter>(new efsw::FileWatcher(false), Deleter{});
@@ -1079,7 +1085,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     auto stats = FrameStats{};
 
-     while (!glfwWindowShouldClose(gpu.window)) {
+    while (!glfwWindowShouldClose(gpu.window)) {
         glfwPollEvents();
 
         const u64 completed_now = std::min(gpu.tl_compute.completed, gpu.tl_graphics.completed);
@@ -1132,7 +1138,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         constexpr float fov_y = glm::radians(70.0f);
         constexpr float z_near = 0.1f;
 
-        write_camera_to_frame_ubo(gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam, frame_extent, fov_y, z_near);
+        write_camera_to_frame_ubo(gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam, frame_extent,
+                                  fov_y, z_near);
 
         ui.total_time += ui.dt;
         {
@@ -1147,23 +1154,19 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         }
 
         // mesh indirect
-        const auto ranges =
-                write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer,
-                                    res.indirect_ring, res.draw_material_id_ring,
-                                    res.cube_mesh.mesh, res.instance_count, 0u);
+        const auto ranges = write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,
+                                                res.draw_material_id_ring, res.mesh.mesh, res.instance_count, 0u);
 
         // bindless repopulate triggers shader rebuild
         if (gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers)) {
-            resize_graph.rebuild(current_extent(gpu.window), ResizeContext{.ctx = gpu.ctx, .retire_value = completed_now},
-                                 ResizeTrigger::Shaders);
+            resize_graph.rebuild(current_extent(gpu.window),
+                                 ResizeContext{.ctx = gpu.ctx, .retire_value = completed_now}, ResizeTrigger::Shaders);
             info("Bindless set was repopulated, resizing pipelines.");
         }
 
         auto &fs = res.frames[bounded_frame_index];
 
-        ui.gui->begin_frame(ImGuiFramebuffer(extent,
-                                             gpu.ctx.texture_format(res.tonemapped),
-                                             gpu.swapchain.format(),
+        ui.gui->begin_frame(ImGuiFramebuffer(extent, gpu.ctx.texture_format(res.tonemapped), gpu.swapchain.format(),
                                              gpu.swapchain.color_space()));
 
         draw_ui(ui.gpu_frame_graph, gpu.ctx, pipes.compute_query_pool, pipes.compute_stats_pool,
@@ -1217,7 +1220,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         const auto global_index_count_addr = gpu.ctx.device_address(res.global_index_count);
         const auto visibility_addr = gpu.ctx.device_address(res.visibility);
 
-        auto begin_query_for_index = [&c = gpu.ctx](const auto &cmd, GraphicsIndex index, auto &stats_pool) -> VkQueryPool {
+        auto begin_query_for_index = [&c = gpu.ctx](const auto &cmd, GraphicsIndex index,
+                                                    auto &stats_pool) -> VkQueryPool {
             u32 query_idx = static_cast<u32>(index);
             const auto *qs = c.query_pools.get(stats_pool);
             vkCmdBeginQuery(cmd, qs->pool, query_idx, 0);
@@ -1233,8 +1237,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "RotateCubesGPU");
 
-                    auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
-                                                                              pipes.compute_stats_pool[bounded_frame_index]);
+                    auto &&[ts, stats_pool] =
+                            gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
+                                                             pipes.compute_stats_pool[bounded_frame_index]);
 
                     auto *pipe = gpu.ctx.pipeline_pool.get(pipes.cube_rotation_pipeline);
 
@@ -1273,7 +1278,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                     barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                     barriers[0].buffer = cube_buffer->buffer();
-                    barriers[0].offset = static_cast<VkDeviceSize>(res.transforms_ring.slot_offset_bytes(bounded_frame_index));
+                    barriers[0].offset =
+                            static_cast<VkDeviceSize>(res.transforms_ring.slot_offset_bytes(bounded_frame_index));
                     barriers[0].size = static_cast<VkDeviceSize>(res.instance_count * sizeof(glm::mat4x3));
 
                     barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -1295,20 +1301,20 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         fs.timeline_values[stage_index(Stage::CubeRotation)] = rotate_cubes_gpu_val;
 
-        const std::array cube_rotate_waits{
-                TimelineWait{
-                        .value = fs.timeline_values[stage_index(Stage::CubeRotation)],
-                        .semaphore = gpu.tl_compute.timeline,
-                        .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
-                }};
+        const std::array cube_rotate_waits{TimelineWait{
+                .value = fs.timeline_values[stage_index(Stage::CubeRotation)],
+                .semaphore = gpu.tl_compute.timeline,
+                .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+        }};
 
         auto predepth_val = submit_stage(
                 gpu.tl_graphics, gpu.device,
                 [&](VkCommandBuffer cmd) {
                     TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "Predepth");
 
-                    auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(pipes.graphics_query_pool[bounded_frame_index],
-                                                                              pipes.graphics_stats_pool[bounded_frame_index]);
+                    auto &&[ts, stats_pool] =
+                            gpu.ctx.query_pools.get_multiple(pipes.graphics_query_pool[bounded_frame_index],
+                                                             pipes.graphics_stats_pool[bounded_frame_index]);
 
                     auto &&[predepth, alpha] =
                             gpu.ctx.pipeline_pool.get_multiple(pipes.predepth_pipeline, pipes.predepth_alpha_pipeline);
@@ -1318,8 +1324,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     auto &&depth = gpu.ctx.textures.get(res.depth);
                     auto &&[indirect, verts, idx, materials] =
-                            gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), res.cube_mesh.pos_uv_buffer,
-                                                         res.cube_mesh.index_buffer, res.cube_mesh.material_buffer);
+                            gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), res.mesh.pos_uv_buffer,
+                                                         res.mesh.index_buffer, res.mesh.material_buffer);
 
                     depth->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
                                                          {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
@@ -1372,7 +1378,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         PredepthPushConstants opaque_pc = pc;
                         opaque_pc.base_draw_id = ranges.opaque_base;
 
-                        vkCmdPushConstants(cmd, predepth->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(opaque_pc), &opaque_pc);
+                        vkCmdPushConstants(cmd, predepth->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(opaque_pc),
+                                           &opaque_pc);
 
                         const VkDeviceSize opaque_offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
@@ -1388,8 +1395,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         PredepthPushConstants alpha_pc = pc;
                         alpha_pc.base_draw_id = ranges.alpha_base;
 
-                        vkCmdPushConstants(cmd, alpha->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                           0, sizeof(alpha_pc), &alpha_pc);
+                        vkCmdPushConstants(cmd, alpha->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                           sizeof(alpha_pc), &alpha_pc);
 
                         const VkDeviceSize alpha_offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
@@ -1407,7 +1415,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         fs.timeline_values[stage_index(Stage::Predepth)] = predepth_val;
 
-        
+
         const std::array culling_waits{
                 TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
                              .semaphore = gpu.tl_graphics.timeline,
@@ -1419,10 +1427,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         auto light_val = submit_stage(
                 gpu.tl_compute, gpu.device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "LightCulling");
+                    TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "LightCulling");
 
                     auto &&[cqs, css] = gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
-                                                                     pipes.compute_stats_pool[bounded_frame_index]);
+                                                                         pipes.compute_stats_pool[bounded_frame_index]);
 
                     write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::CullBegin);
                     begin_stats(cmd, *css, ComputeIndex::Cull);
@@ -1438,8 +1446,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     };
 
                     auto bind_and_dispatch = [&](auto &pl, u32 groups_x) {
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.layout, 0, 1, &gpu.bindless.set, 0,
-                                                nullptr);
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.layout, 0, 1, &gpu.bindless.set,
+                                                0, nullptr);
 
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.pipeline);
 
@@ -1461,14 +1469,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     dep_info.memoryBarrierCount = 1;
                     dep_info.pMemoryBarriers = &mem_barrier;
 
-                    fill_zeros(cmd, gpu.ctx.buffers, res.flags, res.prefix, res.compact_lights,
-                               res.culled_light_count);
+                    fill_zeros(cmd, gpu.ctx.buffers, res.flags, res.prefix, res.compact_lights, res.culled_light_count);
 
                     vkCmdPipelineBarrier2(cmd, &dep_info);
 
                     const u32 gc = (res.light_count + THREADS_PER_GROUP - 1) / THREADS_PER_GROUP;
 
-                    auto &&[flags, compact] = gpu.ctx.pipeline_pool.get_multiple(pipes.flags_pipeline, pipes.compact_pipeline);
+                    auto &&[flags, compact] =
+                            gpu.ctx.pipeline_pool.get_multiple(pipes.flags_pipeline, pipes.compact_pipeline);
 
                     bind_and_dispatch(*flags, gc);
                     vkCmdPipelineBarrier2(cmd, &dep_info);
@@ -1487,10 +1495,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         auto light_clustering_val = submit_stage(
                 gpu.tl_compute, gpu.device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_compute.ctx, cmd, "ClusteredLightCulling");
+                    TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "ClusteredLightCulling");
 
                     auto &&[cqs, css] = gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
-                                                                     pipes.compute_stats_pool[bounded_frame_index]);
+                                                                         pipes.compute_stats_pool[bounded_frame_index]);
 
                     write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringBegin);
                     begin_stats(cmd, *css, ComputeIndex::Clustering);
@@ -1525,7 +1533,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     end_stats(cmd, *css, ComputeIndex::Clustering);
                     write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringEnd);
-                    TracyVkCollect(tracy_compute.ctx, cmd);
+                    TracyVkCollect(gpu.tracy_compute.ctx, cmd);
                 },
                 SubmitSynchronisation{.timeline_waits = clustering_waits});
 
@@ -1548,7 +1556,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         auto gbuffer_val = submit_stage(
                 gpu.tl_graphics, gpu.device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "GBuffer MRT");
+                    TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "GBuffer MRT");
 
                     auto *ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::GbufferBegin);
@@ -1557,10 +1565,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     auto *mrt_pipeline = gpu.ctx.pipeline_pool.get(pipes.gbuffer_pipeline_mrt);
 
-                    auto *g0 = gpu.ctx.textures.get(res.gbuffer0 );
-                    auto *g1 = gpu.ctx.textures.get(res.gbuffer1 );
-                    auto *g2 = gpu.ctx.textures.get(res.gbuffer2 );
-                    auto *depth = gpu.ctx.textures.get(res.depth );
+                    auto *g0 = gpu.ctx.textures.get(res.gbuffer0);
+                    auto *g1 = gpu.ctx.textures.get(res.gbuffer1);
+                    auto *g2 = gpu.ctx.textures.get(res.gbuffer2);
+                    auto *depth = gpu.ctx.textures.get(res.depth);
 
                     g0->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
@@ -1618,8 +1626,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
 
                     auto &&[indirect, verts, idx, materials] =
-                            gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), cube_mesh.vertex_buffer,
-                                                     cube_mesh.index_buffer, cube_mesh.material_buffer);
+                            gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), res.mesh.vertex_buffer,
+                                                         res.mesh.index_buffer, res.mesh.material_buffer);
 
                     RenderingPushConstants pc{
                             .ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
@@ -1693,7 +1701,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         auto deferred_val = submit_stage(
                 gpu.tl_graphics, gpu.device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "DeferredLighting(FS)");
+                    TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "DeferredLighting(FS)");
 
                     auto &&ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::DeferredBegin);
@@ -1850,7 +1858,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             .lit_hdr_uav_index = 0,
                             .debug_output_index = res.debug_culling.index(),
                             .sampler_index = pipes.linear_clamp.index(),
-                            //.debug_mode = static_cast<u32>(current_debug_mode),
+                            .debug_mode = static_cast<u32>(ui.debug_mode),
                     };
 
                     vkCmdPushConstants(cmd, mrt_lighting->layout,
@@ -1897,9 +1905,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         };
 
         auto tonemap_val = submit_stage(
-                    gpu.tl_graphics, gpu.device,
+                gpu.tl_graphics, gpu.device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "Tonemapping");
+                    TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "Tonemapping");
 
                     auto &&ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::TonemapBegin);
@@ -1940,8 +1948,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemap->pipeline);
 
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemap->layout, 0, 1, &gpu.bindless.set,
-                                            0, nullptr);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemap->layout, 0, 1,
+                                            &gpu.bindless.set, 0, nullptr);
 
                     float exposure = 1.0f;
                     TonemapPushConstants pc{
@@ -1979,12 +1987,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         auto imgui_val = submit_stage(
                 gpu.tl_graphics, gpu.device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "ImGui");
+                    TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "ImGui");
 
                     auto &&ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::UIBegin);
-                    auto *pool =
-                            begin_query_for_index(cmd, GraphicsIndex::UI, pipes.graphics_stats_pool[bounded_frame_index]);
+                    auto *pool = begin_query_for_index(cmd, GraphicsIndex::UI,
+                                                       pipes.graphics_stats_pool[bounded_frame_index]);
 
                     auto &&ldr = gpu.ctx.textures.get(res.tonemapped);
 
@@ -2046,13 +2054,13 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         auto swapchain_val = submit_stage(
                 gpu.tl_graphics, gpu.device,
                 [&](VkCommandBuffer cmd) {
-                    TRACY_GPU_ZONE(tracy_graphics.ctx, cmd, "PresentFullscreen");
+                    TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "PresentFullscreen");
 
                     auto *pool = begin_query_for_index(cmd, GraphicsIndex::Present,
                                                        pipes.graphics_stats_pool[bounded_frame_index]);
 
                     auto &&tonemapped = gpu.ctx.textures.get(res.tonemapped);
-        auto* present = gpu.ctx.pipeline_pool.get(pipes.present_pipeline);
+                    auto *present = gpu.ctx.pipeline_pool.get(pipes.present_pipeline);
 
                     VkImage dst_image = gpu.swapchain.image(swap_image_index);
                     VkImageView dst_view = gpu.swapchain.image_view(swap_image_index); // MUST be identity swizzle
@@ -2068,56 +2076,58 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     // Transition swapchain to color attachment
                     auto to_color = create_info<VkImageMemoryBarrier2>();
-                            to_color.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                            to_color.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                            to_color.srcAccessMask = VK_ACCESS_2_NONE;
-                            to_color.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                            to_color.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                            to_color.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                            to_color.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                            to_color.image = dst_image;
-                            to_color.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    to_color.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    to_color.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    to_color.srcAccessMask = VK_ACCESS_2_NONE;
+                    to_color.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    to_color.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    to_color.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    to_color.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    to_color.image = dst_image;
+                    to_color.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
                     auto dep_to_color = create_info<VkDependencyInfo>();
-                            dep_to_color.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                            dep_to_color.imageMemoryBarrierCount = 1;
-                            dep_to_color.pImageMemoryBarriers = &to_color;
+                    dep_to_color.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep_to_color.imageMemoryBarrierCount = 1;
+                    dep_to_color.pImageMemoryBarriers = &to_color;
                     vkCmdPipelineBarrier2(cmd, &dep_to_color);
 
                     auto color_attachment = create_info<VkRenderingAttachmentInfo>();
-                            color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                            color_attachment.imageView = dst_view;
-                            color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                            color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-                            color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    color_attachment.imageView = dst_view;
+                    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
                     auto ri = create_info<VkRenderingInfo>();
-                            ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                            ri.renderArea = {.offset = {0, 0}, .extent = gpu.swapchain.extent()};
-                            ri.layerCount = 1;
-                            ri.colorAttachmentCount = 1;
-                            ri.pColorAttachments = &color_attachment;
+                    ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                    ri.renderArea = {.offset = {0, 0}, .extent = gpu.swapchain.extent()};
+                    ri.layerCount = 1;
+                    ri.colorAttachmentCount = 1;
+                    ri.pColorAttachments = &color_attachment;
 
                     vkCmdBeginRendering(cmd, &ri);
 
-                           vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->layout, 0, 1, &gpu.bindless.set, 0, nullptr);
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->pipeline);
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->layout, 0, 1,
+                                            &gpu.bindless.set, 0, nullptr);
 
-        auto&& [vp, sc] = viewport_scissors(gpu.swapchain.extent());
-        vkCmdSetViewport(cmd, 0, 1, &vp);
-        vkCmdSetScissor(cmd, 0, 1, &sc);
-                        const bool swap_is_srgb = gpu.swapchain.format() == VK_FORMAT_B8G8R8A8_SRGB || gpu.swapchain.format() == VK_FORMAT_R8G8B8A8_SRGB;
+                    auto &&[vp, sc] = viewport_scissors(gpu.swapchain.extent());
+                    vkCmdSetViewport(cmd, 0, 1, &vp);
+                    vkCmdSetScissor(cmd, 0, 1, &sc);
+                    const bool swap_is_srgb = gpu.swapchain.format() == VK_FORMAT_B8G8R8A8_SRGB ||
+                                              gpu.swapchain.format() == VK_FORMAT_R8G8B8A8_SRGB;
 
-        PresentPushConstants pc{
-            .image_index = res.tonemapped.index(),
-            .sampler_index = pipes.linear_clamp.index(),
-            .dst_is_srgb = swap_is_srgb ? 1u : 0u,
-        };
+                    PresentPushConstants pc{
+                            .image_index = res.tonemapped.index(),
+                            .sampler_index = pipes.linear_clamp.index(),
+                            .dst_is_srgb = swap_is_srgb ? 1u : 0u,
+                    };
 
-        vkCmdPushConstants(cmd, present->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(pc), &pc);
+                    vkCmdPushConstants(cmd, present->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(pc), &pc);
 
-        vkCmdDraw(cmd, 3, 1, 0, 0);
+                    vkCmdDraw(cmd, 3, 1, 0, 0);
 
 
                     vkCmdEndRendering(cmd);
@@ -2137,14 +2147,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                     };
                     auto dep_to_present = create_info<VkDependencyInfo>();
-                           dep_to_present .imageMemoryBarrierCount = 1;
-                            dep_to_present.pImageMemoryBarriers = &to_present;
+                    dep_to_present.imageMemoryBarrierCount = 1;
+                    dep_to_present.pImageMemoryBarriers = &to_present;
                     vkCmdPipelineBarrier2(cmd, &dep_to_present);
 
                     write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::PresentEnd);
                     end_query_for_index(cmd, GraphicsIndex::Present, pool);
 
-                    TracyVkCollect(tracy_graphics.ctx, cmd);
+                    TracyVkCollect(gpu.tracy_graphics.ctx, cmd);
                 },
                 SubmitSynchronisation{
                         .timeline_waits = present_timeline_waits,
@@ -2153,15 +2163,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 });
 
         fs.frame_done_value = swapchain_val;
-        // end-of-frame: retire + present + stats, same as before
         const auto completed = std::min(gpu.tl_compute.completed, gpu.tl_graphics.completed);
         gpu.ctx.destroy_queue.retire(completed);
 
         auto frame_end = std::chrono::high_resolution_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(frame_end - start_time).count();
         stats.add_sample(ms);
-        
-        const VkResult present_res = gpu.swapchain.present(gpu.graphics_queue, swap_image_index, frame_sync.render_finished);
+
+        const VkResult present_res =
+                gpu.swapchain.present(gpu.graphics_queue, swap_image_index, frame_sync.render_finished);
         FrameMark;
         if (present_res == VK_ERROR_OUT_OF_DATE_KHR || present_res == VK_SUBOPTIMAL_KHR) {
             auto result = gpu.swapchain.recreate(current_extent(gpu.window));

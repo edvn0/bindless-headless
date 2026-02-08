@@ -111,7 +111,7 @@ public:
         if (const auto could = vmaCreateBuffer(allocator, &ci, &ai, &buffer.vk_buffer, &buffer.vma_allocation,
                                                &buffer.allocation_info);
             could != VK_SUCCESS) {
-            return tl::unexpected{Error{Error::Type::InvalidSize}};
+            return tl::unexpected{Error{.type = Error::Type::InvalidSize, .message = "Could not create buffer."}};
         }
 
         buffer.count = slice.size();
@@ -183,7 +183,8 @@ public:
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
-            return tl::unexpected{Error{Error::Type::CouldNotMapMemory, "Buffer was not or could not be mapped."}};
+            return tl::unexpected{
+                    Error{.type = Error::Type::CouldNotMapMemory, .message = "Buffer was not or could not be mapped."}};
         }
         std::memset(pointer, 0, aligned_size);
         vk_check(vmaFlushAllocation(allocator, buffer.allocation(), 0, VK_WHOLE_SIZE));
@@ -191,7 +192,30 @@ public:
         return buffer;
     }
 
-    auto data_pointer() const { return allocation_info.pMappedData; }
+    [[nodiscard]] auto data_pointer() const { return allocation_info.pMappedData; }
+
+    template<typename T>
+        requires std::is_trivially_copyable_v<T>
+    auto memset(VmaAllocator &allocator, const T &value) -> tl::expected<void, Error> {
+        assert(size() % sizeof(T) == 0 && "Value is not aligned with the size of this buffer.");
+
+        const auto pointer = data_pointer();
+        if (!pointer) {
+            return tl::unexpected{
+                    Error{.type = Error::Type::CouldNotMapMemory, .message = "Buffer was not or could not be mapped."}};
+        }
+
+        auto *typed_pointer = static_cast<T *>(pointer);
+        const auto element_count = size() / sizeof(T);
+
+        for (std::size_t i = 0; i < element_count; ++i) {
+            typed_pointer[i] = value;
+        }
+
+        vk_check(vmaFlushAllocation(allocator, vma_allocation, 0, VK_WHOLE_SIZE));
+
+        return {};
+    }
 
 private:
     auto set_name(VmaAllocator &, std::string_view) const -> void;

@@ -1,7 +1,7 @@
 #include "app/frame.hxx"
 
 auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent2D extent, float fov_y_radians,
-                                       float z_near) -> void {
+                                float z_near) -> void {
     const float aspect = static_cast<float>(extent.width) / std::max(1.0f, static_cast<float>(extent.height));
 
     ubo.view = cam.view_matrix();
@@ -17,9 +17,8 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     ubo.frustum_planes = {planes[0], planes[1], planes[2], planes[3], planes[4], planes[5]};
 }
 
- auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
-                                      const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float z_near)
-        -> void {
+auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
+                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float z_near) -> void {
     FrameUBO ubo{};
     fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, z_near);
 

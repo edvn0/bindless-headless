@@ -4,8 +4,8 @@
 #include "ResizeableGraph.hxx"
 
 auto ShaderSourceCodeChangeListener::compile_shader(const std::string &path) -> void {
-        info("Shader changed: {}", path);
-        resize_graph->trigger_resize(ResizeTrigger::Shaders);
+    info("Shader changed: {}", path);
+    resize_graph->trigger_resize(ResizeTrigger::Shaders);
 }
 
 void ShaderSourceCodeChangeListener::worker_loop() {

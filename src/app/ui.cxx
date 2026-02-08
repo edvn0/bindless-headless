@@ -1,8 +1,8 @@
 #include "app/ui.hxx"
 
+#include "BindlessHeadless.hxx"
 #include "Pool.hxx"
 #include "RenderContext.hxx"
-#include "BindlessHeadless.hxx"
 
 #include "FrameQuery.hxx"
 
@@ -12,13 +12,11 @@ static constexpr auto widget = [](const std::string_view name, auto &&func) {
     ImGui::End();
 };
 
-auto draw_ui(PerformanceGraph<8, 120>& gpu_frame_graph,
-             const RenderContext& ctx,
+auto draw_ui(PerformanceGraph<8, 120> &gpu_frame_graph, const RenderContext &ctx,
              std::span<QueryPoolHandle, frames_in_flight> compute_query_pool,
              std::span<QueryPoolHandle, frames_in_flight> compute_stats_pool,
              std::span<QueryPoolHandle, frames_in_flight> graphics_query_pool,
-             std::span<QueryPoolHandle, frames_in_flight> graphics_stats_pool,
-             uint32_t frame_index) -> void {
+             std::span<QueryPoolHandle, frames_in_flight> graphics_stats_pool, uint32_t frame_index) -> void {
 
     auto compute_res = read_timestamp_pairs_ms(ctx, compute_query_pool[frame_index]);
     auto c_stats = read_compute_stats(ctx, compute_stats_pool[frame_index]);

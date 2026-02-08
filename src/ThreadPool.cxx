@@ -15,7 +15,7 @@ ThreadPool::~ThreadPool() {
     }
     condition.notify_all();
 
-    for (auto &worker : workers) {
+    for (auto &worker: workers) {
         if (worker.joinable()) {
             worker.join();
         }
@@ -25,8 +25,7 @@ ThreadPool::~ThreadPool() {
 void ThreadPool::wait_all() {
     std::unique_lock<std::mutex> lock(queue_mutex);
     wait_condition.wait(lock, [this] {
-        return queued_tasks.load(std::memory_order_relaxed) == 0 &&
-               active_tasks.load(std::memory_order_relaxed) == 0;
+        return queued_tasks.load(std::memory_order_relaxed) == 0 && active_tasks.load(std::memory_order_relaxed) == 0;
     });
 }
 
@@ -36,9 +35,7 @@ void ThreadPool::worker_thread() {
 
         {
             std::unique_lock<std::mutex> lock(queue_mutex);
-            condition.wait(lock, [this] {
-                return stop.load(std::memory_order_relaxed) || !tasks.empty();
-            });
+            condition.wait(lock, [this] { return stop.load(std::memory_order_relaxed) || !tasks.empty(); });
 
             if (stop.load(std::memory_order_relaxed) && tasks.empty()) {
                 return;

@@ -21,29 +21,29 @@
 namespace {
 
     auto debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity, VkDebugUtilsMessageTypeFlagsEXT,
-        const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *) -> VkBool32 {
-            if (message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-                error("Validation layer: {}", callback_data->pMessage);
-            }
-            
-            if (message_severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-                trace("Validation info: {}", callback_data->pMessage);
-            }
-            
-            return VK_FALSE;
+                        const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *) -> VkBool32 {
+        if (message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+            error("Validation layer: {}", callback_data->pMessage);
         }
-        
+
+        if (message_severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+            trace("Validation info: {}", callback_data->pMessage);
+        }
+
+        return VK_FALSE;
     }
+
+} // namespace
 
 
 auto main(int argc, char **argv) -> int {
-    BindlessApp     app;
+    BindlessApp app;
 
     if (auto init = glfwInit(); init != GLFW_TRUE) {
         error("Could not initialize GLFW");
         return 1;
     }
-    
+
     auto opts = parse_cli(argc, argv);
 
     uint32_t count{};

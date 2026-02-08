@@ -11,7 +11,6 @@ auto OffscreenTarget::is_stencil() const -> bool {
 }
 
 
-
 auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
 #if defined(_MSC_VER)
     // MSVC: use _dupenv_s
@@ -31,52 +30,43 @@ auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
 #endif
 }
 
-auto OffscreenTarget::transition(
-    VkCommandBuffer cmd,
-    VkImageLayout old_layout,
-    VkImageLayout new_layout,
-    VkPipelineStageFlags2 src_stage,
-    VkAccessFlags2 src_access,
-    VkPipelineStageFlags2 dst_stage,
-    VkAccessFlags2 dst_access,
-    VkImageSubresourceRange subresource_range
-) const -> void
-{
+auto OffscreenTarget::transition(VkCommandBuffer cmd, VkImageLayout old_layout, VkImageLayout new_layout,
+                                 VkPipelineStageFlags2 src_stage, VkAccessFlags2 src_access,
+                                 VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst_access,
+                                 VkImageSubresourceRange subresource_range) const -> void {
     VkImageMemoryBarrier2 barrier{
-        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .pNext               = nullptr,
-        .srcStageMask        = src_stage,
-        .srcAccessMask       = src_access,
-        .dstStageMask        = dst_stage,
-        .dstAccessMask       = dst_access,
-        .oldLayout           = old_layout,
-        .newLayout           = new_layout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image               = image,
-        .subresourceRange    = subresource_range,
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = src_stage,
+            .srcAccessMask = src_access,
+            .dstStageMask = dst_stage,
+            .dstAccessMask = dst_access,
+            .oldLayout = old_layout,
+            .newLayout = new_layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = subresource_range,
     };
 
     VkDependencyInfo dep{
-        .sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .pNext                   = nullptr,
-        .dependencyFlags         = 0,
-        .memoryBarrierCount      = 0,
-        .pMemoryBarriers         = nullptr,
-        .bufferMemoryBarrierCount= 0,
-        .pBufferMemoryBarriers   = nullptr,
-        .imageMemoryBarrierCount = 1,
-        .pImageMemoryBarriers    = &barrier,
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &barrier,
     };
 
     vkCmdPipelineBarrier2(cmd, &dep);
 }
 
-auto OffscreenTarget::transition_if_not_initialised(
-    VkCommandBuffer cmd,
-    VkImageLayout new_layout,
-    std::pair<VkAccessFlags2, VkPipelineStageFlags2> destination_flags) -> void
-{
+auto OffscreenTarget::transition_if_not_initialised(VkCommandBuffer cmd, VkImageLayout new_layout,
+                                                    std::pair<VkAccessFlags2, VkPipelineStageFlags2> destination_flags)
+        -> void {
     if (initialized) [[likely]]
         return;
 
@@ -89,40 +79,40 @@ auto OffscreenTarget::transition_if_not_initialised(
         aspect = VK_IMAGE_ASPECT_COLOR_BIT;
 
     const VkImageSubresourceRange subresource_range{
-        .aspectMask     = aspect,
-        .baseMipLevel   = 0,
-        .levelCount     = VK_REMAINING_MIP_LEVELS,
-        .baseArrayLayer = 0,
-        .layerCount     = VK_REMAINING_ARRAY_LAYERS,
+            .aspectMask = aspect,
+            .baseMipLevel = 0,
+            .levelCount = VK_REMAINING_MIP_LEVELS,
+            .baseArrayLayer = 0,
+            .layerCount = VK_REMAINING_ARRAY_LAYERS,
     };
 
-    auto&& [dst_access, dst_stage] = destination_flags;
+    auto &&[dst_access, dst_stage] = destination_flags;
 
     const VkImageMemoryBarrier2 barrier{
-        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .pNext               = nullptr,
-        .srcStageMask        = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-        .srcAccessMask       = VK_ACCESS_2_NONE,
-        .dstStageMask        = dst_stage,
-        .dstAccessMask       = dst_access,
-        .oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED,
-        .newLayout           = new_layout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image               = image,
-        .subresourceRange    = subresource_range,
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+            .srcAccessMask = VK_ACCESS_2_NONE,
+            .dstStageMask = dst_stage,
+            .dstAccessMask = dst_access,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = new_layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = subresource_range,
     };
 
     const VkDependencyInfo dep{
-        .sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .pNext                    = nullptr,
-        .dependencyFlags          = 0,
-        .memoryBarrierCount       = 0,
-        .pMemoryBarriers          = nullptr,
-        .bufferMemoryBarrierCount = 0,
-        .pBufferMemoryBarriers    = nullptr,
-        .imageMemoryBarrierCount  = 1,
-        .pImageMemoryBarriers     = &barrier,
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &barrier,
     };
 
     vkCmdPipelineBarrier2(cmd, &dep);

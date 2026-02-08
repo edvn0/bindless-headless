@@ -17,11 +17,12 @@ using ImGuiFramebuffer = std::tuple<VkExtent2D, VkFormat, VkFormat, VkColorSpace
 
 class ImGuiRenderer {
 public:
-    ImGuiRenderer(GLFWwindow* main_window, u32 initial_slot_count, RenderContext&, GlobalCommandContext&, Compiler&, FontChoice = {});
+    ImGuiRenderer(GLFWwindow *main_window, u32 initial_slot_count, RenderContext &, GlobalCommandContext &, Compiler &,
+                  FontChoice = {});
     ~ImGuiRenderer();
 
-    ImGuiRenderer(ImGuiRenderer&&) = delete;
-    auto operator=(ImGuiRenderer&&) -> ImGuiRenderer& = delete;
+    ImGuiRenderer(ImGuiRenderer &&) = delete;
+    auto operator=(ImGuiRenderer &&) -> ImGuiRenderer & = delete;
 
     auto update_font(FontChoice) -> void;
 
@@ -44,25 +45,25 @@ private:
     Holder<SamplerHandle> sampler{};
     Holder<TextureHandle> font_texture{};
 
-    RenderContext& ctx;
-    GlobalCommandContext& command_ctx;
-    Compiler& compiler;
+    RenderContext &ctx;
+    GlobalCommandContext &command_ctx;
+    Compiler &compiler;
 
     f32 display_scale{1.0F};
 
     std::vector<DrawableData> drawables{};
-    u32 slots_per_frame{0};        // how many slots we budget per frame
-    u32 slot_cursor{0};            // how many slots used THIS frame
-    u32 frame_cursor{0};           // which frame-in-flight slot base we're on
+    u32 slots_per_frame{0}; // how many slots we budget per frame
+    u32 slot_cursor{0}; // how many slots used THIS frame
+    u32 frame_cursor{0}; // which frame-in-flight slot base we're on
 
     bool force_recompile{false};
 
 private:
     auto create_pipeline(VkFormat) -> tl::expected<CompiledPipeline, Error>;
 
-    auto render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, PipelineHandle) -> void;
+    auto render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, PipelineHandle) -> void;
 
-    auto acquire_draw_slot() -> DrawableData&;
+    auto acquire_draw_slot() -> DrawableData &;
 
     auto render_additional_viewports() -> void;
 };

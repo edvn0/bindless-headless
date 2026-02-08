@@ -63,7 +63,7 @@ glm::mat4 PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNea
 
     return m;
 }
-auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) ->ClusterConfig {
+auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) -> ClusterConfig {
     u32 cluster_count = tiles_x * tiles_y * tiles_z;
     float log_z_scale = static_cast<float>(tiles_z) / std::log2f(z_far / z_near);
 

@@ -17,156 +17,154 @@
 
 namespace {
 
-struct ImGuiViewportRenderTarget {
-    GLFWwindow* window{nullptr};
-    VkSurfaceKHR surface{VK_NULL_HANDLE};
-    Swapchain swapchain{};
+    struct ImGuiViewportRenderTarget {
+        GLFWwindow *window{nullptr};
+        VkSurfaceKHR surface{VK_NULL_HANDLE};
+        Swapchain swapchain{};
 
-    VkCommandPool command_pool{VK_NULL_HANDLE};
-    std::vector<VkCommandBuffer> command_buffers{};
-    std::vector<VkFence> fences{};
+        VkCommandPool command_pool{VK_NULL_HANDLE};
+        std::vector<VkCommandBuffer> command_buffers{};
+        std::vector<VkFence> fences{};
 
-    // local frame index for this viewport's command buffers/fences
-    u32 frame_index{0};
-};
+        // local frame index for this viewport's command buffers/fences
+        u32 frame_index{0};
+    };
 
-static std::unordered_map<GLFWwindow*, ImGuiViewportRenderTarget> viewport_targets{};
+    static std::unordered_map<GLFWwindow *, ImGuiViewportRenderTarget> viewport_targets{};
 
-static auto destroy_viewport_target(RenderContext& ctx, ImGuiViewportRenderTarget& rt) -> void {
-    VkDevice device = ctx.get_device();
+    static auto destroy_viewport_target(RenderContext &ctx, ImGuiViewportRenderTarget &rt) -> void {
+        VkDevice device = ctx.get_device();
 
-    if (rt.command_pool != VK_NULL_HANDLE) {
-        vkDestroyCommandPool(device, rt.command_pool, nullptr);
-        rt.command_pool = VK_NULL_HANDLE;
-    }
-
-    for (auto f : rt.fences) {
-        if (f != VK_NULL_HANDLE) {
-            vkDestroyFence(device, f, nullptr);
+        if (rt.command_pool != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(device, rt.command_pool, nullptr);
+            rt.command_pool = VK_NULL_HANDLE;
         }
-    }
-    rt.fences.clear();
-    rt.command_buffers.clear();
 
-    rt.swapchain.destroy();
-
-    if (rt.surface != VK_NULL_HANDLE) {
-        vkDestroySurfaceKHR(ctx.get_instance(), rt.surface, nullptr);
-        rt.surface = VK_NULL_HANDLE;
-    }
-
-    rt.window = nullptr;
-    rt.frame_index = 0;
-}
-
-static auto ensure_viewport_command_resources(RenderContext& ctx, ImGuiViewportRenderTarget& rt, u32 cmd_count) -> void {
-    VkDevice device = ctx.get_device();
-
-    if (rt.command_pool == VK_NULL_HANDLE) {
-        VkCommandPoolCreateInfo cpci{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = ctx.queues.graphics.family_index,
-        };
-        vk_check(vkCreateCommandPool(device, &cpci, nullptr, &rt.command_pool));
-        set_debug_name(device, VK_OBJECT_TYPE_COMMAND_POOL, rt.command_pool, "imgui_viewport_cmd_pool");
-    }
-
-    if (rt.command_buffers.size() != cmd_count) {
-        rt.command_buffers.assign(cmd_count, VK_NULL_HANDLE);
-
-        VkCommandBufferAllocateInfo cbai{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = nullptr,
-            .commandPool = rt.command_pool,
-            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = cmd_count,
-        };
-        vk_check(vkAllocateCommandBuffers(device, &cbai, rt.command_buffers.data()));
-
-        for (u32 i = 0; i < cmd_count; ++i) {
-            set_debug_name(device, VK_OBJECT_TYPE_COMMAND_BUFFER, rt.command_buffers[i],
-                           std::format("imgui_viewport_cmd_{}", i));
-        }
-    }
-
-    if (rt.fences.size() != cmd_count) {
-        for (auto f : rt.fences) {
+        for (auto f: rt.fences) {
             if (f != VK_NULL_HANDLE) {
                 vkDestroyFence(device, f, nullptr);
             }
         }
-        rt.fences.assign(cmd_count, VK_NULL_HANDLE);
+        rt.fences.clear();
+        rt.command_buffers.clear();
 
-        VkFenceCreateInfo fci{
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .pNext = nullptr,
-            .flags = VK_FENCE_CREATE_SIGNALED_BIT, // start signaled so first frame doesn't wait
-        };
-        for (u32 i = 0; i < cmd_count; ++i) {
-            vk_check(vkCreateFence(device, &fci, nullptr, &rt.fences[i]));
-            set_debug_name(device, VK_OBJECT_TYPE_FENCE, rt.fences[i],
-                           std::format("imgui_viewport_fence_{}", i));
+        rt.swapchain.destroy();
+
+        if (rt.surface != VK_NULL_HANDLE) {
+            vkDestroySurfaceKHR(ctx.get_instance(), rt.surface, nullptr);
+            rt.surface = VK_NULL_HANDLE;
+        }
+
+        rt.window = nullptr;
+        rt.frame_index = 0;
+    }
+
+    static auto ensure_viewport_command_resources(RenderContext &ctx, ImGuiViewportRenderTarget &rt, u32 cmd_count)
+            -> void {
+        VkDevice device = ctx.get_device();
+
+        if (rt.command_pool == VK_NULL_HANDLE) {
+            VkCommandPoolCreateInfo cpci{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+                    .queueFamilyIndex = ctx.queues.graphics.family_index,
+            };
+            vk_check(vkCreateCommandPool(device, &cpci, nullptr, &rt.command_pool));
+            set_debug_name(device, VK_OBJECT_TYPE_COMMAND_POOL, rt.command_pool, "imgui_viewport_cmd_pool");
+        }
+
+        if (rt.command_buffers.size() != cmd_count) {
+            rt.command_buffers.assign(cmd_count, VK_NULL_HANDLE);
+
+            VkCommandBufferAllocateInfo cbai{
+                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                    .pNext = nullptr,
+                    .commandPool = rt.command_pool,
+                    .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                    .commandBufferCount = cmd_count,
+            };
+            vk_check(vkAllocateCommandBuffers(device, &cbai, rt.command_buffers.data()));
+
+            for (u32 i = 0; i < cmd_count; ++i) {
+                set_debug_name(device, VK_OBJECT_TYPE_COMMAND_BUFFER, rt.command_buffers[i],
+                               std::format("imgui_viewport_cmd_{}", i));
+            }
+        }
+
+        if (rt.fences.size() != cmd_count) {
+            for (auto f: rt.fences) {
+                if (f != VK_NULL_HANDLE) {
+                    vkDestroyFence(device, f, nullptr);
+                }
+            }
+            rt.fences.assign(cmd_count, VK_NULL_HANDLE);
+
+            VkFenceCreateInfo fci{
+                    .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+                    .pNext = nullptr,
+                    .flags = VK_FENCE_CREATE_SIGNALED_BIT, // start signaled so first frame doesn't wait
+            };
+            for (u32 i = 0; i < cmd_count; ++i) {
+                vk_check(vkCreateFence(device, &fci, nullptr, &rt.fences[i]));
+                set_debug_name(device, VK_OBJECT_TYPE_FENCE, rt.fences[i], std::format("imgui_viewport_fence_{}", i));
+            }
         }
     }
-}
 
-static auto get_or_create_viewport_target(RenderContext& ctx, GLFWwindow* w) -> ImGuiViewportRenderTarget& {
-    auto it = viewport_targets.find(w);
-    if (it != viewport_targets.end()) {
-        return it->second;
+    static auto get_or_create_viewport_target(RenderContext &ctx, GLFWwindow *w) -> ImGuiViewportRenderTarget & {
+        auto it = viewport_targets.find(w);
+        if (it != viewport_targets.end()) {
+            return it->second;
+        }
+
+        ImGuiViewportRenderTarget rt{};
+        rt.window = w;
+
+        VkSurfaceKHR surface = VK_NULL_HANDLE;
+        vk_check(glfwCreateWindowSurface(ctx.get_instance(), w, nullptr, &surface));
+        rt.surface = surface;
+
+        // Create swapchain
+        int fb_w = 0, fb_h = 0;
+        glfwGetFramebufferSize(w, &fb_w, &fb_h);
+
+        SwapchainCreateInfo sci{
+                .physical_device = ctx.get_physical_device(),
+                .device = ctx.get_device(),
+                .surface = rt.surface,
+                .graphics_family = ctx.queues.graphics.family_index,
+                .extent = VkExtent2D{.width = static_cast<u32>(std::max(fb_w, 1)),
+                                     .height = static_cast<u32>(std::max(fb_h, 1))},
+                .vsync = true,
+                .preferred_format = VK_FORMAT_B8G8R8A8_SRGB,
+                .preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+        };
+
+        auto sc = Swapchain::create(sci);
+        if (!sc) {
+            // If swapchain creation fails, keep target but with empty swapchain.
+            // Caller will just skip rendering.
+            rt.swapchain = Swapchain{};
+        } else {
+            rt.swapchain = std::move(*sc);
+        }
+
+        ensure_viewport_command_resources(ctx, rt, static_cast<u32>(rt.swapchain.image_count()));
+
+        auto [ins_it, _] = viewport_targets.emplace(w, std::move(rt));
+        return ins_it->second;
     }
-
-    ImGuiViewportRenderTarget rt{};
-    rt.window = w;
-
-    VkSurfaceKHR surface = VK_NULL_HANDLE;
-    vk_check(glfwCreateWindowSurface(ctx.get_instance(), w, nullptr, &surface));
-    rt.surface = surface;
-
-    // Create swapchain
-    int fb_w = 0, fb_h = 0;
-    glfwGetFramebufferSize(w, &fb_w, &fb_h);
-
-    SwapchainCreateInfo sci{
-        .physical_device = ctx.get_physical_device(),
-        .device = ctx.get_device(),
-        .surface = rt.surface,
-        .graphics_family = ctx.queues.graphics.family_index,
-        .extent = VkExtent2D{ .width = static_cast<u32>(std::max(fb_w, 1)), .height = static_cast<u32>(std::max(fb_h, 1)) },
-        .vsync = true,
-        .preferred_format = VK_FORMAT_B8G8R8A8_SRGB,
-        .preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
-    };
-
-    auto sc = Swapchain::create(sci);
-    if (!sc) {
-        // If swapchain creation fails, keep target but with empty swapchain.
-        // Caller will just skip rendering.
-        rt.swapchain = Swapchain{};
-    } else {
-        rt.swapchain = std::move(*sc);
-    }
-
-    ensure_viewport_command_resources(ctx, rt, static_cast<u32>(rt.swapchain.image_count()));
-
-    auto [ins_it, _] = viewport_targets.emplace(w, std::move(rt));
-    return ins_it->second;
-}
 
 } // namespace
 
-ImGuiRenderer::ImGuiRenderer(GLFWwindow* w, u32 initial_slot_count, RenderContext& c, GlobalCommandContext& cc, Compiler& comp,
-                             FontChoice font)
-    : ctx(c)
-    , command_ctx(cc)
-    , compiler(comp) {
+ImGuiRenderer::ImGuiRenderer(GLFWwindow *w, u32 initial_slot_count, RenderContext &c, GlobalCommandContext &cc,
+                             Compiler &comp, FontChoice font) : ctx(c), command_ctx(cc), compiler(comp) {
 
     std::ignore = ImGui::CreateContext();
     std::ignore = ImPlot::CreateContext();
 
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO &io = ImGui::GetIO();
     io.BackendRendererName = "imgui-custom-vulkan";
     io.BackendPlatformName = "imgui_impl_glfw";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
@@ -178,7 +176,7 @@ ImGuiRenderer::ImGuiRenderer(GLFWwindow* w, u32 initial_slot_count, RenderContex
         io.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports;
         io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
 
-        ImGuiStyle& style = ImGui::GetStyle();
+        ImGuiStyle &style = ImGui::GetStyle();
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
@@ -198,11 +196,11 @@ ImGuiRenderer::ImGuiRenderer(GLFWwindow* w, u32 initial_slot_count, RenderContex
 }
 
 ImGuiRenderer::~ImGuiRenderer() {
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO &io = ImGui::GetIO();
     io.Fonts->TexID = nullptr;
 
     // Destroy viewport render targets
-    for (auto& [win, rt] : viewport_targets) {
+    for (auto &[win, rt]: viewport_targets) {
         destroy_viewport_target(ctx, rt);
     }
     viewport_targets.clear();
@@ -217,9 +215,9 @@ ImGuiRenderer::~ImGuiRenderer() {
 }
 
 auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
-    const auto& dim = std::get<VkExtent2D>(fb);
+    const auto &dim = std::get<VkExtent2D>(fb);
 
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2(dim.width / display_scale, dim.height / display_scale);
     io.DisplayFramebufferScale = ImVec2(display_scale, display_scale);
     io.IniFilename = nullptr;
@@ -246,7 +244,7 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
     ImGui::NewFrame();
 }
 
-auto ImGuiRenderer::acquire_draw_slot() -> DrawableData& {
+auto ImGuiRenderer::acquire_draw_slot() -> DrawableData & {
     // Ensure we have enough slots for the number of viewports we end up rendering this frame.
     if (slot_cursor >= slots_per_frame) {
         // Grow per-frame budget (double) and resize ring.
@@ -264,7 +262,7 @@ auto ImGuiRenderer::acquire_draw_slot() -> DrawableData& {
         slots_per_frame = new_slots_per_frame;
     }
 
-    DrawableData& out = drawables[frame_cursor * slots_per_frame + slot_cursor];
+    DrawableData &out = drawables[frame_cursor * slots_per_frame + slot_cursor];
     slot_cursor++;
     return out;
 }
@@ -278,23 +276,23 @@ auto ImGuiRenderer::end_frame(VkCommandBuffer cmd) -> void {
     render_draw_data(cmd, ImGui::GetDrawData(), main_pipeline);
 
     // Then do platform windows: we need UpdatePlatformWindows before using vp->DrawData
-    if (auto& io = ImGui::GetIO(); io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+    if (auto &io = ImGui::GetIO(); io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         ImGui::UpdatePlatformWindows();
         render_additional_viewports();
     }
 }
 
-auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, PipelineHandle pipeline) -> void {
+auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, PipelineHandle pipeline) -> void {
     if (!dd || dd->TotalIdxCount == 0) {
         return;
     }
 
-    const float fb_width  = dd->DisplaySize.x * dd->FramebufferScale.x;
+    const float fb_width = dd->DisplaySize.x * dd->FramebufferScale.x;
     const float fb_height = dd->DisplaySize.y * dd->FramebufferScale.y;
 
-    auto&& [vp, sc] = viewport_scissors({
-        static_cast<u32>(fb_width),
-        static_cast<u32>(fb_height),
+    auto &&[vp, sc] = viewport_scissors({
+            static_cast<u32>(fb_width),
+            static_cast<u32>(fb_height),
     });
 
     vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_ALWAYS);
@@ -309,9 +307,9 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, Pipeli
     const float T = dd->DisplayPos.y;
     const float B = dd->DisplayPos.y + dd->DisplaySize.y;
     const ImVec2 clip_offset = dd->DisplayPos;
-    const ImVec2 clip_scale  = dd->FramebufferScale;
+    const ImVec2 clip_scale = dd->FramebufferScale;
 
-    DrawableData& drawable = acquire_draw_slot();
+    DrawableData &drawable = acquire_draw_slot();
 
     if (static_cast<i32>(drawable.index_count) < dd->TotalIdxCount) {
         auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -329,7 +327,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, Pipeli
 
     {
         static std::vector<ImDrawVert> all_vtx;
-        static std::vector<ImDrawIdx>  all_itx;
+        static std::vector<ImDrawIdx> all_itx;
 
         all_vtx.clear();
         all_itx.clear();
@@ -338,7 +336,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, Pipeli
         all_itx.reserve(static_cast<size_t>(dd->TotalIdxCount));
 
         for (int n = 0; n < dd->CmdListsCount; n++) {
-            const auto* imgui_cmd = dd->CmdLists[n];
+            const auto *imgui_cmd = dd->CmdLists[n];
             all_vtx.insert(all_vtx.end(), imgui_cmd->VtxBuffer.Data,
                            imgui_cmd->VtxBuffer.Data + imgui_cmd->VtxBuffer.Size);
             all_itx.insert(all_itx.end(), imgui_cmd->IdxBuffer.Data,
@@ -349,21 +347,22 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, Pipeli
         ctx.buffers.get(drawable.index)->write_slice(ctx.allocator, std::span{all_itx}, 0);
     }
 
-    auto&& [itx, vtx] = ctx.buffers.get_multiple(drawable.index, drawable.vertex);
-    auto* pipe = ctx.pipeline_pool.get(pipeline);
+    auto &&[itx, vtx] = ctx.buffers.get_multiple(drawable.index, drawable.vertex);
+    auto *pipe = ctx.pipeline_pool.get(pipeline);
 
     vkCmdBindIndexBuffer(cmd, itx->buffer(), 0, VK_INDEX_TYPE_UINT16);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->layout, 0, 1, &ctx.bindless_set->set, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->layout, 0, 1, &ctx.bindless_set->set, 0,
+                            nullptr);
 
-    u32 index_offset  = 0;
+    u32 index_offset = 0;
     u32 vertex_offset = 0;
 
     for (int n = 0; n < dd->CmdListsCount; n++) {
-        const auto* command_list = dd->CmdLists[n];
+        const auto *command_list = dd->CmdLists[n];
 
         for (int cmd_i = 0; cmd_i < command_list->CmdBuffer.Size; cmd_i++) {
-            const auto& imgui_cmd = command_list->CmdBuffer[cmd_i];
+            const auto &imgui_cmd = command_list->CmdBuffer[cmd_i];
 
             ImVec2 clipMin((imgui_cmd.ClipRect.x - clip_offset.x) * clip_scale.x,
                            (imgui_cmd.ClipRect.y - clip_offset.y) * clip_scale.y);
@@ -385,37 +384,35 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, Pipeli
                 u32 texture_id{0};
                 u32 sampler_id{0};
             } bindData{
-                .LRTB = {L, R, T, B},
-                .vb = ctx.device_address(drawable.vertex),
-                .texture_id = static_cast<u32>(imgui_cmd.GetTexID()),
-                .sampler_id = sampler.index(),
+                    .LRTB = {L, R, T, B},
+                    .vb = ctx.device_address(drawable.vertex),
+                    .texture_id = static_cast<u32>(imgui_cmd.GetTexID()),
+                    .sampler_id = sampler.index(),
             };
 
-            vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, sizeof(VulkanImguiBindData), &bindData);
+            vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(VulkanImguiBindData), &bindData);
 
             VkRect2D scissor{
-                .offset = {static_cast<i32>(clipMin.x), static_cast<i32>(clipMin.y)},
-                .extent = {static_cast<u32>(clipMax.x - clipMin.x), static_cast<u32>(clipMax.y - clipMin.y)},
+                    .offset = {static_cast<i32>(clipMin.x), static_cast<i32>(clipMin.y)},
+                    .extent = {static_cast<u32>(clipMax.x - clipMin.x), static_cast<u32>(clipMax.y - clipMin.y)},
             };
             vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-            vkCmdDrawIndexed(cmd, imgui_cmd.ElemCount, 1,
-                             index_offset + imgui_cmd.IdxOffset,
-                             vertex_offset + imgui_cmd.VtxOffset,
-                             0);
+            vkCmdDrawIndexed(cmd, imgui_cmd.ElemCount, 1, index_offset + imgui_cmd.IdxOffset,
+                             vertex_offset + imgui_cmd.VtxOffset, 0);
         }
 
-        index_offset  += command_list->IdxBuffer.Size;
+        index_offset += command_list->IdxBuffer.Size;
         vertex_offset += command_list->VtxBuffer.Size;
     }
 }
 
 auto ImGuiRenderer::render_additional_viewports() -> void {
-    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
 
     for (int i = 0; i < pio.Viewports.Size; ++i) {
-        ImGuiViewport* vp = pio.Viewports[i];
+        ImGuiViewport *vp = pio.Viewports[i];
 
         if (!(vp->Flags & ImGuiViewportFlags_IsPlatformWindow)) {
             continue;
@@ -424,21 +421,21 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
             continue;
         }
 
-        auto* glfw_win = static_cast<GLFWwindow*>(vp->PlatformHandle);
+        auto *glfw_win = static_cast<GLFWwindow *>(vp->PlatformHandle);
         if (!glfw_win || !vp->DrawData) {
             continue;
         }
 
         // If the viewport is minimized/zero-size, skip
         VkExtent2D want_extent{
-            .width  = static_cast<u32>(std::max(0.0f, vp->Size.x)),
-            .height = static_cast<u32>(std::max(0.0f, vp->Size.y)),
+                .width = static_cast<u32>(std::max(0.0f, vp->Size.x)),
+                .height = static_cast<u32>(std::max(0.0f, vp->Size.y)),
         };
         if (want_extent.width == 0 || want_extent.height == 0) {
             continue;
         }
 
-        auto& rt = get_or_create_viewport_target(ctx, glfw_win);
+        auto &rt = get_or_create_viewport_target(ctx, glfw_win);
         if (rt.swapchain.image_count() == 0) {
             continue;
         }
@@ -471,10 +468,10 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
         vk_check(vkResetCommandBuffer(cmd, 0));
 
         VkCommandBufferBeginInfo cbbi{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = nullptr,
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = nullptr,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = nullptr,
         };
         vk_check(vkBeginCommandBuffer(cmd, &cbbi));
 
@@ -483,63 +480,65 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
         VkImage img = rt.swapchain.image(image_index);
 
         VkImageMemoryBarrier2 to_color{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = VK_ACCESS_2_NONE,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, // NOTE: swapchain images are effectively undefined each acquire; OK.
-            .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = img,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .pNext = nullptr,
+                .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+                .srcAccessMask = VK_ACCESS_2_NONE,
+                .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                .oldLayout =
+                        VK_IMAGE_LAYOUT_UNDEFINED, // NOTE: swapchain images are effectively undefined each acquire; OK.
+                .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = img,
+                .subresourceRange =
+                        {
+                                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                .baseMipLevel = 0,
+                                .levelCount = 1,
+                                .baseArrayLayer = 0,
+                                .layerCount = 1,
+                        },
         };
 
         VkDependencyInfo dep_to_color{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .pNext = nullptr,
-            .dependencyFlags = 0,
-            .memoryBarrierCount = 0,
-            .pMemoryBarriers = nullptr,
-            .bufferMemoryBarrierCount = 0,
-            .pBufferMemoryBarriers = nullptr,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &to_color,
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .pNext = nullptr,
+                .dependencyFlags = 0,
+                .memoryBarrierCount = 0,
+                .pMemoryBarriers = nullptr,
+                .bufferMemoryBarrierCount = 0,
+                .pBufferMemoryBarriers = nullptr,
+                .imageMemoryBarrierCount = 1,
+                .pImageMemoryBarriers = &to_color,
         };
         vkCmdPipelineBarrier2(cmd, &dep_to_color);
 
         VkRenderingAttachmentInfo color_attachment{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .pNext = nullptr,
-            .imageView = rt.swapchain.image_view(image_index),
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .resolveMode = VK_RESOLVE_MODE_NONE,
-            .resolveImageView = VK_NULL_HANDLE,
-            .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = VkClearValue{ .color = {{0.0f, 0.0f, 0.0f, 1.0f}} },
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .pNext = nullptr,
+                .imageView = rt.swapchain.image_view(image_index),
+                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .resolveMode = VK_RESOLVE_MODE_NONE,
+                .resolveImageView = VK_NULL_HANDLE,
+                .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .clearValue = VkClearValue{.color = {{0.0f, 0.0f, 0.0f, 1.0f}}},
         };
 
         VkRenderingInfo ri{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .pNext = nullptr,
-            .flags = 0,
-            .renderArea = { .offset = {0, 0}, .extent = rt.swapchain.extent() },
-            .layerCount = 1,
-            .viewMask = 0,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &color_attachment,
-            .pDepthAttachment = nullptr,
-            .pStencilAttachment = nullptr,
+                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .renderArea = {.offset = {0, 0}, .extent = rt.swapchain.extent()},
+                .layerCount = 1,
+                .viewMask = 0,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &color_attachment,
+                .pDepthAttachment = nullptr,
+                .pStencilAttachment = nullptr,
         };
 
         vkCmdBeginRendering(cmd, &ri);
@@ -551,36 +550,37 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
 
         // Transition to PRESENT
         VkImageMemoryBarrier2 to_present{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .pNext = nullptr,
-            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .dstAccessMask = VK_ACCESS_2_NONE,
-            .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = img,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .pNext = nullptr,
+                .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+                .dstAccessMask = VK_ACCESS_2_NONE,
+                .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = img,
+                .subresourceRange =
+                        {
+                                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                .baseMipLevel = 0,
+                                .levelCount = 1,
+                                .baseArrayLayer = 0,
+                                .layerCount = 1,
+                        },
         };
 
         VkDependencyInfo dep_to_present{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .pNext = nullptr,
-            .dependencyFlags = 0,
-            .memoryBarrierCount = 0,
-            .pMemoryBarriers = nullptr,
-            .bufferMemoryBarrierCount = 0,
-            .pBufferMemoryBarriers = nullptr,
-            .imageMemoryBarrierCount = 1,
-            .pImageMemoryBarriers = &to_present,
+                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                .pNext = nullptr,
+                .dependencyFlags = 0,
+                .memoryBarrierCount = 0,
+                .pMemoryBarriers = nullptr,
+                .bufferMemoryBarrierCount = 0,
+                .pBufferMemoryBarriers = nullptr,
+                .imageMemoryBarrierCount = 1,
+                .pImageMemoryBarriers = &to_present,
         };
         vkCmdPipelineBarrier2(cmd, &dep_to_present);
 
@@ -593,15 +593,15 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
         VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
         VkSubmitInfo si{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &wait_sem,
-            .pWaitDstStageMask = &wait_stage,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &cmd,
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &signal_sem,
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .pNext = nullptr,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = &wait_sem,
+                .pWaitDstStageMask = &wait_stage,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &cmd,
+                .signalSemaphoreCount = 1,
+                .pSignalSemaphores = &signal_sem,
         };
 
         vk_check(vkQueueSubmit(ctx.queues.graphics.queue, 1, &si, fence));

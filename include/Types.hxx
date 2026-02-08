@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <mutex>
@@ -10,13 +11,11 @@
 #include <source_location>
 #include <string_view>
 #include <volk.h>
-#include <filesystem>
 
 #include "Error.hxx"
 #include "Numeric.hxx"
 
 #include <vk_mem_alloc.h>
-
 
 
 inline constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle

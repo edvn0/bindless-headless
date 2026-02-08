@@ -3,9 +3,9 @@
 #include "Mesh.hxx"
 
 auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndirectWriter &w,
-                                AlignedRingBuffer<VkDrawIndexedIndirectCommand> &cmd_ring,
-                                AlignedRingBuffer<u32> &material_id_ring, const MeshData &mesh, u32 instance_count,
-                                u32 first_instance) -> DrawRanges {
+                         AlignedRingBuffer<VkDrawIndexedIndirectCommand> &cmd_ring,
+                         AlignedRingBuffer<u32> &material_id_ring, const MeshData &mesh, u32 instance_count,
+                         u32 first_instance) -> DrawRanges {
     const u32 total_submeshes = static_cast<u32>(mesh.submeshes.size());
     const u32 opaque_base = w.allocate(total_submeshes);
 

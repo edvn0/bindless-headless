@@ -64,7 +64,6 @@ public:
         write_elements(ctx, slot_index, 0, values);
     }
 
-    // Write same data to all slots (useful for initialization)
     auto write_all_slots(RenderContext &ctx, std::span<T const> values) -> void {
         if (values.size() != element_count) {
             error("AlignedRingBuffer: expected {} elements, got {}", element_count, values.size());
@@ -77,6 +76,19 @@ public:
         }
         for (const auto slot_idx: std::views::iota(0uL, slot_count)) {
             buf->write_slice(ctx.allocator, values, static_cast<std::size_t>(slot_offset_bytes(slot_idx)));
+        }
+    }
+
+    auto write_all_slots(RenderContext &ctx, const T &value) -> void {
+        auto *buf = ctx.buffers.get(buffer);
+        if (!buf) {
+            error("AlignedRingBuffer: invalid buffer handle");
+            return;
+        }
+
+        auto result = buf->memset(ctx.allocator, value);
+        if (!result) {
+            error("AlignedRingBuffer: failed to memset buffer: {}", result.error().message);
         }
     }
 
@@ -112,8 +124,7 @@ public:
         return create(ctx, 1, extra_usage, name);
     }
 
-    static auto create(RenderContext &ctx, std::string_view name)
-            -> tl::expected<AlignedRingBuffer, Error> {
+    static auto create(RenderContext &ctx, std::string_view name) -> tl::expected<AlignedRingBuffer, Error> {
         return create(ctx, 1, VkBufferUsageFlags{0}, name);
     }
 };

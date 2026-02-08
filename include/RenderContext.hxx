@@ -6,7 +6,6 @@
 #include "Types.hxx"
 
 
-
 namespace EngineShaderIndices {
     inline constexpr u32 fullscreen_vertex_shader = 0;
 }
@@ -59,7 +58,6 @@ struct RenderContext {
     [[nodiscard]] auto get_device() const -> VkDevice;
     [[nodiscard]] auto get_physical_device() const -> VkPhysicalDevice;
     [[nodiscard]] auto get_instance() const -> VkInstance;
-
 };
 
 auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value = UINT64_MAX) -> void;

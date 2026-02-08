@@ -45,29 +45,27 @@ struct CharInputEvent : Event {
 
 class EventDispatcher {
 public:
-    EventDispatcher(Event& event) : ev(event) {}
+    EventDispatcher(Event &event) : ev(event) {}
 
     template<typename T, typename F>
-    void dispatch(F&& func) {
+    void dispatch(F &&func) {
         if (ev.handled)
             return;
 
-        if (auto* e = dynamic_cast<T*>(&ev)) {
+        if (auto *e = dynamic_cast<T *>(&ev)) {
             ev.handled = func(*e);
         }
     }
 
 private:
-    Event& ev;
+    Event &ev;
 };
 
 class EventSystem {
 public:
-    using EventCallback = std::function<void(Event&)>;
+    using EventCallback = std::function<void(Event &)>;
 
-    auto set_event_callback(EventCallback cb) {
-        callback = std::move(cb);
-    }
+    auto set_event_callback(EventCallback cb) { callback = std::move(cb); }
 
     auto push_event(std::unique_ptr<Event> event) {
         if (callback) {

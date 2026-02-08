@@ -144,9 +144,9 @@ struct DeferredLightingPushConstants {
 };
 
 struct PresentPushConstants {
-    u32 image_index;     // tonemapped UNORM texture index
-    u32 sampler_index;   // sampler index
-    u32 dst_is_srgb;     // 1 if swapchain is *_SRGB, else 0
+    u32 image_index; // tonemapped UNORM texture index
+    u32 sampler_index; // sampler index
+    u32 dst_is_srgb; // 1 if swapchain is *_SRGB, else 0
 };
 
 struct CompiledPipeline {
@@ -203,11 +203,11 @@ auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, c
 
 struct FullscreenPipelineInfo {
     VkDevice device;
-    PipelineCache& cache;
+    PipelineCache &cache;
     VkDescriptorSetLayout bindless_layout;
 
     VkShaderModule fullscreen_vs;
-    static constexpr std::string_view vs_entry {"main"};
+    static constexpr std::string_view vs_entry{"main"};
 
     std::span<const u32> frag_code;
     std::string_view fs_entry;
@@ -219,6 +219,5 @@ struct FullscreenPipelineInfo {
 
     bool enable_blend = false;
 };
-auto create_fullscreen_pipeline(const FullscreenPipelineInfo& ) -> CompiledPipeline;
- [[nodiscard]] auto get_or_create_fullscreen_vs(
-    RenderContext&) -> u32;
+auto create_fullscreen_pipeline(const FullscreenPipelineInfo &) -> CompiledPipeline;
+[[nodiscard]] auto get_or_create_fullscreen_vs(RenderContext &) -> u32;
