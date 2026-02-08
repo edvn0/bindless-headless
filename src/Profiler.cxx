@@ -22,8 +22,6 @@ auto TracyGpuContext::init_calibrated(VkInstance instance, VkPhysicalDevice phys
     TracyVkContextName(ctx, name.data(), static_cast<u16>(name.size()));
 #else
     (void) name;
-    (void) queue_family_index;
-    (void) queue;
     (void) dev;
     (void) physdev;
     (void) instance;

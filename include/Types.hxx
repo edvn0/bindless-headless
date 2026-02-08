@@ -10,20 +10,24 @@
 #include <source_location>
 #include <string_view>
 #include <volk.h>
+#include <filesystem>
 
+#include "Error.hxx"
+#include "Numeric.hxx"
 
 #include <vk_mem_alloc.h>
 
-using u16 = std::uint16_t;
-using u32 = std::uint32_t;
-using u64 = std::uint64_t;
-using i32 = std::int32_t;
-using u8 = std::uint8_t;
-using i8 = std::int8_t;
-using f32 = float;
+
 
 inline constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle
 inline constexpr u32 max_in_flight = 2; // GPU submit throttle depth
+
+struct Deleter {
+    template<typename T>
+    auto operator()(T *t) noexcept -> void {
+        delete t;
+    }
+};
 
 struct string_hash {
     using is_transparent = void;
@@ -51,6 +55,8 @@ struct TypedDeviceAddress {
 };
 
 auto vk_check(VkResult result) -> void;
+
+auto pipeline_cache_path() -> std::optional<std::filesystem::path>;
 
 struct OffscreenTarget {
     VkImage image{};
@@ -208,39 +214,6 @@ auto first_non_empty(const Ts &...strs) -> std::string {
     }
     return {};
 }
-
-struct Error {
-    enum class Type : u32 {
-        MeshLoadError,
-        TextureLoadError,
-        ShaderCompileError,
-        ShaderLinkError,
-        RenderError,
-        InvalidArgument,
-        DeviceSelectionError,
-        CouldNotMapMemory,
-        CouldNotCreateBuffer,
-        FileNotFoundError,
-        InvalidSize,
-        UnknownError
-    };
-    Type type;
-    std::string message;
-    std::source_location location{std::source_location::current()};
-
-    template<typename... Ts>
-        requires(sizeof...(Ts) > 0)
-    static auto make_error(Type type, std::format_string<Ts...> fmt, Ts &&...args) {
-        return make_error_impl(type, std::format(fmt, std::forward<Ts>(args)...));
-    }
-
-    static auto make_error(Type type, const std::string_view data) { return make_error_impl(type, std::string{data}); }
-
-private:
-    static auto make_error_impl(Type type, std::string message) -> Error {
-        return Error{.type = type, .message = std::move(message)};
-    }
-};
 
 #define TRY_UNWRAP_TO(var_name, expected_expr, msg)                                                                    \
     auto var_name##_tmp = (expected_expr);                                                                             \

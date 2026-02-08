@@ -1,5 +1,7 @@
 #pragma once
+
 #include <ranges>
+
 #include "Logger.hxx"
 #include "RenderContext.hxx"
 
@@ -62,17 +64,6 @@ public:
         write_elements(ctx, slot_index, 0, values);
     }
 
-    // Convenience overload for single-element slots (backwards compatibility)
-    auto write_slot(RenderContext &ctx, u64 slot_index, T const &value) -> void
-        requires(std::is_same_v<T, T>) // Always true, just for SFINAE
-    {
-        if (element_count != 1) {
-            error("AlignedRingBuffer: write_slot(single) called on multi-element buffer");
-            return;
-        }
-        write_element(ctx, slot_index, 0, value);
-    }
-
     // Write same data to all slots (useful for initialization)
     auto write_all_slots(RenderContext &ctx, std::span<T const> values) -> void {
         if (values.size() != element_count) {
@@ -86,23 +77,6 @@ public:
         }
         for (const auto slot_idx: std::views::iota(0uL, slot_count)) {
             buf->write_slice(ctx.allocator, values, static_cast<std::size_t>(slot_offset_bytes(slot_idx)));
-        }
-    }
-
-    // Backwards compatibility for single-element slots
-    auto write_all_slots(RenderContext &ctx, T const &value) -> void {
-        if (element_count != 1) {
-            error("AlignedRingBuffer: write_all_slots(single) called on multi-element buffer");
-            return;
-        }
-        auto *buf = ctx.buffers.get(buffer);
-        if (!buf) {
-            error("AlignedRingBuffer: invalid buffer handle");
-            return;
-        }
-        for (const auto slot_idx: std::views::iota(0uL, slot_count)) {
-            buf->write_slice(ctx.allocator, std::span{&value, 1},
-                             static_cast<std::size_t>(slot_offset_bytes(slot_idx)));
         }
     }
 
@@ -121,7 +95,7 @@ public:
         }
         const u64 base = slot_offset_bytes(slot_index) + element_index * sizeof(T);
         const u64 off = base + field_offset_bytes;
-        buf->write_slice(ctx.allocator, std::span{&value, 1}, static_cast<std::size_t>(off));
+        buf->write_slice(ctx.allocator, std::span{&value, 1}, off);
     }
 
     template<typename FieldT>

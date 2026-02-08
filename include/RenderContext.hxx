@@ -2,33 +2,32 @@
 
 #include "Buffer.hxx"
 #include "PipelineCache.hxx"
-#include "Pipelines.hxx"
 #include "Pool.hxx"
 #include "Types.hxx"
 
 
-struct QueryPoolState {
-    VkQueryPool pool = VK_NULL_HANDLE;
-    u32 query_count = 0;
-    double timestamp_period_ns = 1.0; // from VkPhysicalDeviceLimits::timestampPeriod
+
+namespace EngineShaderIndices {
+    inline constexpr u32 fullscreen_vertex_shader = 0;
+}
+
+struct QueueInfo {
+    VkQueue queue;
+    u32 family_index;
 };
 
-using TextureHandle = Handle<struct TextureTag>;
-using TexturePool = Pool<TextureTag, OffscreenTarget>;
-using SamplerHandle = Handle<struct SamplerTag>;
-using SamplerPool = Pool<SamplerTag, VkSampler>;
-using BufferHandle = Handle<struct BufferTag>;
-using BufferPool = Pool<BufferTag, Buffer>;
-using QueryPoolHandle = Handle<struct QueryPoolTag>;
-using QueryPoolPool = Pool<QueryPoolTag, QueryPoolState>;
-using PipelineHandle = Handle<struct PipelineTag>;
-using PipelinePool = Pool<PipelineTag, CompiledPipeline>;
+struct AllQueues {
+    QueueInfo graphics;
+    QueueInfo compute;
+    QueueInfo transfer;
+};
 
 struct RenderContext {
-    VmaAllocator &allocator;
+    VmaAllocator allocator;
     DeferredDestroyQueue destroy_queue{};
     BindlessSet *bindless_set{nullptr};
     std::unique_ptr<PipelineCache> pipeline_cache;
+    AllQueues queues{};
 
     TexturePool textures{};
     auto create_texture(OffscreenTarget &&) -> TextureHandle;
@@ -36,8 +35,8 @@ struct RenderContext {
     SamplerPool samplers{};
     auto create_sampler(VkSampler &&) -> SamplerHandle;
     auto create_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
-
     BufferPool buffers{};
+
     auto create_buffer(Buffer &&) -> BufferHandle;
 
     QueryPoolPool query_pools{};
@@ -45,6 +44,9 @@ struct RenderContext {
 
     PipelinePool pipeline_pool{};
     auto create_pipeline(CompiledPipeline &&) -> PipelineHandle;
+
+    ShaderPool shaders{};
+    auto create_shader(VkShaderModule &&) -> ShaderHandle;
 
     auto device_address(BufferHandle) -> DeviceAddress;
     auto flush_mapped_memory(BufferHandle, std::size_t offset, std::size_t size) const -> void;
@@ -55,6 +57,9 @@ struct RenderContext {
     auto clear_all() -> void;
 
     [[nodiscard]] auto get_device() const -> VkDevice;
+    [[nodiscard]] auto get_physical_device() const -> VkPhysicalDevice;
+    [[nodiscard]] auto get_instance() const -> VkInstance;
+
 };
 
 auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value = UINT64_MAX) -> void;
@@ -62,3 +67,4 @@ auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value = UINT64
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value = UINT64_MAX) -> void;
+auto destroy(RenderContext &ctx, ShaderHandle handle, u64 retire_value = UINT64_MAX) -> void;

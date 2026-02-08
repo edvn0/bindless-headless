@@ -240,25 +240,6 @@ namespace {
 } // namespace
 
 
-auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
-#if defined(_MSC_VER)
-    // MSVC: use _dupenv_s
-    char *buf{};
-    size_t sz{};
-    if (const auto ok = _dupenv_s(&buf, &sz, "BH_PIPE_CACHE_PATH") == 0 && buf; !ok)
-        return std::nullopt;
-    auto p = std::filesystem::path{buf};
-    free(buf);
-    return p;
-#else
-    // MinGW, GCC, Clang: use std::getenv
-    const char *env_val = std::getenv("BH_PIPE_CACHE_PATH");
-    if (!env_val)
-        return std::nullopt;
-    return std::filesystem::path{env_val};
-#endif
-}
-
 auto create_transfer_timeline(VkDevice device, VkQueue queue, u32 family_index) -> TransferTimeline {
     return create_timeline<TransferTimeline>(device, queue, family_index, "transfer");
 }

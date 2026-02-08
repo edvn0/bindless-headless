@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Buffer.hxx"
 #include "Forward.hxx"
+#include "Pipelines.hxx"
 #include "Types.hxx"
 
 #include <cassert>
@@ -205,13 +207,17 @@ public:
         return &entries[index].object;
     }
 
-    [[nodiscard]] auto get_handle(std::uint32_t index) const -> Handle<ObjectType> {
-        assert(index < entries.size());
+    [[nodiscard]] auto maybe_get_handle(std::uint32_t index) const -> Handle<ObjectType> {
         if (index >= entries.size()) {
             return Handle<ObjectType>{};
         }
         return Handle<ObjectType>(index, entries[index].generation);
     }
+    [[nodiscard]] auto get_handle(std::uint32_t index) const -> Handle<ObjectType> {
+        assert(index < entries.size());
+        return maybe_get_handle(index);
+    }
+
 
     template<typename Fn>
     auto for_each_live(Fn &&fn) -> void {
@@ -248,3 +254,23 @@ private:
         return false;
     }
 };
+
+
+struct QueryPoolState {
+    VkQueryPool pool = VK_NULL_HANDLE;
+    u32 query_count = 0;
+    double timestamp_period_ns = 1.0; // from VkPhysicalDeviceLimits::timestampPeriod
+};
+
+using TextureHandle = Handle<struct TextureTag>;
+using TexturePool = Pool<TextureTag, OffscreenTarget>;
+using SamplerHandle = Handle<struct SamplerTag>;
+using SamplerPool = Pool<SamplerTag, VkSampler>;
+using BufferHandle = Handle<struct BufferTag>;
+using BufferPool = Pool<BufferTag, Buffer>;
+using QueryPoolHandle = Handle<struct QueryPoolTag>;
+using QueryPoolPool = Pool<QueryPoolTag, QueryPoolState>;
+using PipelineHandle = Handle<struct PipelineTag>;
+using PipelinePool = Pool<PipelineTag, CompiledPipeline>;
+using ShaderHandle = Handle<struct ShaderTag>;
+using ShaderPool = Pool<ShaderTag, VkShaderModule>;

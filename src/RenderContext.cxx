@@ -11,6 +11,18 @@ auto RenderContext::get_device() const -> VkDevice {
     return info.device;
 }
 
+auto RenderContext::get_physical_device() const -> VkPhysicalDevice {
+    VmaAllocatorInfo info{};
+    vmaGetAllocatorInfo(allocator, &info);
+    return info.physicalDevice;
+}
+
+auto RenderContext::get_instance() const -> VkInstance {
+    VmaAllocatorInfo info{};
+    vmaGetAllocatorInfo(allocator, &info);
+    return info.instance;
+}
+
 auto RenderContext::create_texture(OffscreenTarget &&target) -> TextureHandle {
     bindless_set->need_repopulate = true;
     return textures.create(std::move(target));
@@ -40,6 +52,10 @@ auto RenderContext::create_query_pool(QueryPoolState &&state) -> QueryPoolHandle
 
 auto RenderContext::create_pipeline(CompiledPipeline &&state) -> PipelineHandle {
     return pipeline_pool.create(std::move(state));
+}
+
+auto RenderContext::create_shader(VkShaderModule &&module) -> ShaderHandle {
+    return shaders.create(std::move(module));
 }
 
 auto RenderContext::device_address(BufferHandle handle) -> DeviceAddress {
@@ -80,6 +96,7 @@ auto RenderContext::clear_all() -> void {
     buffers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     query_pools.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     pipeline_pool.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
+    shaders.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     pipeline_cache.reset();
 }
 
@@ -198,4 +215,20 @@ auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value) -> voi
         destruction::pipeline(context->get_device(), std::tuple{pipeline, layout});
     });
     ctx.pipeline_pool.destroy(handle);
+}
+
+auto destroy(RenderContext &ctx, ShaderHandle handle, u64 retire_value) -> void {
+    auto impl = ctx.shaders.get(handle);
+    if (!impl) {
+        return;
+    }
+
+    VkShaderModule shader_module = *impl;
+
+    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, shader_module]() {
+        VmaAllocatorInfo info{};
+        vmaGetAllocatorInfo(alloc, &info);
+        vkDestroyShaderModule(info.device, shader_module, nullptr);
+    });
+    ctx.shaders.destroy(handle);
 }

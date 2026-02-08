@@ -1,10 +1,9 @@
-// performance_graph.h
 #pragma once
 #include <array>
 #include <implot.h>
 #include <string_view>
 
-#include <tracy/Tracy.hpp>
+#include "Profiler.hxx"
 
 #include <implot_internal.h>
 #include "Types.hxx"

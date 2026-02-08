@@ -3,8 +3,6 @@
 #include "Forward.hxx"
 #include "GlobalCommandContext.hxx"
 #include "Logger.hxx"
-#include "Pool.hxx"
-#include "Reflection.hxx"
 #include "Types.hxx"
 
 #include <bitset>
@@ -141,7 +139,6 @@ auto create_transfer_timeline(VkDevice, VkQueue, u32) -> TransferTimeline;
 
 auto create_sampler(VmaAllocator &alloc, VkSamplerCreateInfo ci, std::string_view name) -> VkSampler;
 
-auto pipeline_cache_path() -> std::optional<std::filesystem::path>;
 
 inline auto pick_msaa_samples(VkPhysicalDevice physical_device) -> VkSampleCountFlagBits {
     VkPhysicalDeviceProperties props{};

@@ -5,32 +5,616 @@
 #include "GlobalCommandContext.hxx"
 #include "Pool.hxx"
 #include "RenderContext.hxx"
+#include "Swapchain.hxx"
 #include "Types.hxx"
 
+#include <backends/imgui_impl_glfw.h>
 #include <imgui.h>
 #include <implot.h>
 #include <volk.h>
 
+#include <unordered_map>
 
-ImGuiRenderer::ImGuiRenderer(u32 image_count, RenderContext &c, GlobalCommandContext &cc, Compiler &comp,
-                             FontChoice font) : ctx(c), command_ctx(cc), compiler(comp), drawables(image_count) {
+namespace {
+
+struct ImGuiViewportRenderTarget {
+    GLFWwindow* window{nullptr};
+    VkSurfaceKHR surface{VK_NULL_HANDLE};
+    Swapchain swapchain{};
+
+    VkCommandPool command_pool{VK_NULL_HANDLE};
+    std::vector<VkCommandBuffer> command_buffers{};
+    std::vector<VkFence> fences{};
+
+    // local frame index for this viewport's command buffers/fences
+    u32 frame_index{0};
+};
+
+static std::unordered_map<GLFWwindow*, ImGuiViewportRenderTarget> viewport_targets{};
+
+static auto destroy_viewport_target(RenderContext& ctx, ImGuiViewportRenderTarget& rt) -> void {
+    VkDevice device = ctx.get_device();
+
+    if (rt.command_pool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(device, rt.command_pool, nullptr);
+        rt.command_pool = VK_NULL_HANDLE;
+    }
+
+    for (auto f : rt.fences) {
+        if (f != VK_NULL_HANDLE) {
+            vkDestroyFence(device, f, nullptr);
+        }
+    }
+    rt.fences.clear();
+    rt.command_buffers.clear();
+
+    rt.swapchain.destroy();
+
+    if (rt.surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(ctx.get_instance(), rt.surface, nullptr);
+        rt.surface = VK_NULL_HANDLE;
+    }
+
+    rt.window = nullptr;
+    rt.frame_index = 0;
+}
+
+static auto ensure_viewport_command_resources(RenderContext& ctx, ImGuiViewportRenderTarget& rt, u32 cmd_count) -> void {
+    VkDevice device = ctx.get_device();
+
+    if (rt.command_pool == VK_NULL_HANDLE) {
+        VkCommandPoolCreateInfo cpci{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = ctx.queues.graphics.family_index,
+        };
+        vk_check(vkCreateCommandPool(device, &cpci, nullptr, &rt.command_pool));
+        set_debug_name(device, VK_OBJECT_TYPE_COMMAND_POOL, rt.command_pool, "imgui_viewport_cmd_pool");
+    }
+
+    if (rt.command_buffers.size() != cmd_count) {
+        rt.command_buffers.assign(cmd_count, VK_NULL_HANDLE);
+
+        VkCommandBufferAllocateInfo cbai{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = nullptr,
+            .commandPool = rt.command_pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = cmd_count,
+        };
+        vk_check(vkAllocateCommandBuffers(device, &cbai, rt.command_buffers.data()));
+
+        for (u32 i = 0; i < cmd_count; ++i) {
+            set_debug_name(device, VK_OBJECT_TYPE_COMMAND_BUFFER, rt.command_buffers[i],
+                           std::format("imgui_viewport_cmd_{}", i));
+        }
+    }
+
+    if (rt.fences.size() != cmd_count) {
+        for (auto f : rt.fences) {
+            if (f != VK_NULL_HANDLE) {
+                vkDestroyFence(device, f, nullptr);
+            }
+        }
+        rt.fences.assign(cmd_count, VK_NULL_HANDLE);
+
+        VkFenceCreateInfo fci{
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = VK_FENCE_CREATE_SIGNALED_BIT, // start signaled so first frame doesn't wait
+        };
+        for (u32 i = 0; i < cmd_count; ++i) {
+            vk_check(vkCreateFence(device, &fci, nullptr, &rt.fences[i]));
+            set_debug_name(device, VK_OBJECT_TYPE_FENCE, rt.fences[i],
+                           std::format("imgui_viewport_fence_{}", i));
+        }
+    }
+}
+
+static auto get_or_create_viewport_target(RenderContext& ctx, GLFWwindow* w) -> ImGuiViewportRenderTarget& {
+    auto it = viewport_targets.find(w);
+    if (it != viewport_targets.end()) {
+        return it->second;
+    }
+
+    ImGuiViewportRenderTarget rt{};
+    rt.window = w;
+
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    vk_check(glfwCreateWindowSurface(ctx.get_instance(), w, nullptr, &surface));
+    rt.surface = surface;
+
+    // Create swapchain
+    int fb_w = 0, fb_h = 0;
+    glfwGetFramebufferSize(w, &fb_w, &fb_h);
+
+    SwapchainCreateInfo sci{
+        .physical_device = ctx.get_physical_device(),
+        .device = ctx.get_device(),
+        .surface = rt.surface,
+        .graphics_family = ctx.queues.graphics.family_index,
+        .extent = VkExtent2D{ .width = static_cast<u32>(std::max(fb_w, 1)), .height = static_cast<u32>(std::max(fb_h, 1)) },
+        .vsync = true,
+        .preferred_format = VK_FORMAT_B8G8R8A8_SRGB,
+        .preferred_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR,
+    };
+
+    auto sc = Swapchain::create(sci);
+    if (!sc) {
+        // If swapchain creation fails, keep target but with empty swapchain.
+        // Caller will just skip rendering.
+        rt.swapchain = Swapchain{};
+    } else {
+        rt.swapchain = std::move(*sc);
+    }
+
+    ensure_viewport_command_resources(ctx, rt, static_cast<u32>(rt.swapchain.image_count()));
+
+    auto [ins_it, _] = viewport_targets.emplace(w, std::move(rt));
+    return ins_it->second;
+}
+
+} // namespace
+
+ImGuiRenderer::ImGuiRenderer(GLFWwindow* w, u32 initial_slot_count, RenderContext& c, GlobalCommandContext& cc, Compiler& comp,
+                             FontChoice font)
+    : ctx(c)
+    , command_ctx(cc)
+    , compiler(comp) {
+
     std::ignore = ImGui::CreateContext();
     std::ignore = ImPlot::CreateContext();
-    ImGuiIO &io = ImGui::GetIO();
-    io.BackendRendererName = "imgui-bindless-headless";
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.BackendRendererName = "imgui-custom-vulkan";
+    io.BackendPlatformName = "imgui_impl_glfw";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
 
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        io.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasViewports;
+
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+
     update_font(std::move(font));
+
+    // Platform backend only. We do NOT use ImGui_ImplVulkan.
+    ImGui_ImplGlfw_InitForVulkan(w, false);
+
+    // Slot ring setup:
+    // We budget some slots per frame so main + several viewports won't stomp buffers.
+    // Start with at least 1 (main). Use initial_slot_count as "slots per frame".
+    slots_per_frame = std::max(1u, initial_slot_count);
+
+    // Total slots = frames_in_flight * slots_per_frame
+    drawables.resize(frames_in_flight * slots_per_frame);
 }
 
 ImGuiRenderer::~ImGuiRenderer() {
-    ImGuiIO &io = ImGui::GetIO();
+    ImGuiIO& io = ImGui::GetIO();
     io.Fonts->TexID = nullptr;
+
+    // Destroy viewport render targets
+    for (auto& [win, rt] : viewport_targets) {
+        destroy_viewport_target(ctx, rt);
+    }
+    viewport_targets.clear();
+
+    ImGui_ImplGlfw_Shutdown();
+
+    // This destroys secondary platform windows created by ImGui (safe after shutdown)
+    ImGui::DestroyPlatformWindows();
+
     ImPlot::DestroyContext();
     ImGui::DestroyContext();
 }
 
-auto ImGuiRenderer::create_pipeline(ImGuiFramebuffer fb) -> tl::expected<CompiledPipeline, Error> {
+auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
+    const auto& dim = std::get<VkExtent2D>(fb);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(dim.width / display_scale, dim.height / display_scale);
+    io.DisplayFramebufferScale = ImVec2(display_scale, display_scale);
+    io.IniFilename = nullptr;
+
+    if (force_recompile || main_pipeline.empty()) {
+        auto created = create_pipeline(std::get<1>(fb)).value();
+        main_pipeline = Holder{ctx, ctx.create_pipeline(std::move(created))};
+        force_recompile = false;
+    }
+
+    if (force_recompile || offscreen_target_pipeline.empty()) {
+        auto created = create_pipeline(std::get<2>(fb)).value();
+        offscreen_target_pipeline = Holder{ctx, ctx.create_pipeline(std::move(created))};
+        force_recompile = false;
+    }
+
+    // Reset slot allocation for this frame.
+    slot_cursor = 0;
+
+    // Advance frame cursor (this is CPU frame index; you should call begin_frame once per rendered frame)
+    frame_cursor = (frame_cursor + 1) % frames_in_flight;
+
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+}
+
+auto ImGuiRenderer::acquire_draw_slot() -> DrawableData& {
+    // Ensure we have enough slots for the number of viewports we end up rendering this frame.
+    if (slot_cursor >= slots_per_frame) {
+        // Grow per-frame budget (double) and resize ring.
+        u32 new_slots_per_frame = std::max(slots_per_frame * 2u, slot_cursor + 1u);
+        std::vector<DrawableData> new_drawables(frames_in_flight * new_slots_per_frame);
+
+        // Move existing slots preserving [frame][slot] layout
+        for (u32 f = 0; f < frames_in_flight; ++f) {
+            for (u32 s = 0; s < slots_per_frame; ++s) {
+                new_drawables[f * new_slots_per_frame + s] = std::move(drawables[f * slots_per_frame + s]);
+            }
+        }
+
+        drawables = std::move(new_drawables);
+        slots_per_frame = new_slots_per_frame;
+    }
+
+    DrawableData& out = drawables[frame_cursor * slots_per_frame + slot_cursor];
+    slot_cursor++;
+    return out;
+}
+
+auto ImGuiRenderer::end_frame(VkCommandBuffer cmd) -> void {
+    // Build draw data
+    ImGui::EndFrame();
+    ImGui::Render();
+
+    // Record main viewport draw into currently active dynamic rendering pass (owned by caller)
+    render_draw_data(cmd, ImGui::GetDrawData(), main_pipeline);
+
+    // Then do platform windows: we need UpdatePlatformWindows before using vp->DrawData
+    if (auto& io = ImGui::GetIO(); io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        ImGui::UpdatePlatformWindows();
+        render_additional_viewports();
+    }
+}
+
+auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData* dd, PipelineHandle pipeline) -> void {
+    if (!dd || dd->TotalIdxCount == 0) {
+        return;
+    }
+
+    const float fb_width  = dd->DisplaySize.x * dd->FramebufferScale.x;
+    const float fb_height = dd->DisplaySize.y * dd->FramebufferScale.y;
+
+    auto&& [vp, sc] = viewport_scissors({
+        static_cast<u32>(fb_width),
+        static_cast<u32>(fb_height),
+    });
+
+    vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_ALWAYS);
+    vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
+    vkCmdSetDepthTestEnable(cmd, VK_FALSE);
+    vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
+
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+
+    const float L = dd->DisplayPos.x;
+    const float R = dd->DisplayPos.x + dd->DisplaySize.x;
+    const float T = dd->DisplayPos.y;
+    const float B = dd->DisplayPos.y + dd->DisplaySize.y;
+    const ImVec2 clip_offset = dd->DisplayPos;
+    const ImVec2 clip_scale  = dd->FramebufferScale;
+
+    DrawableData& drawable = acquire_draw_slot();
+
+    if (static_cast<i32>(drawable.index_count) < dd->TotalIdxCount) {
+        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                     dd->TotalIdxCount * sizeof(ImDrawIdx), "imgui_index");
+        drawable.index = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
+        drawable.index_count = static_cast<u32>(dd->TotalIdxCount);
+    }
+
+    if (static_cast<i32>(drawable.vertex_count) < dd->TotalVtxCount) {
+        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                     dd->TotalVtxCount * sizeof(ImDrawVert), "imgui_vertex");
+        drawable.vertex = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
+        drawable.vertex_count = static_cast<u32>(dd->TotalVtxCount);
+    }
+
+    {
+        static std::vector<ImDrawVert> all_vtx;
+        static std::vector<ImDrawIdx>  all_itx;
+
+        all_vtx.clear();
+        all_itx.clear();
+
+        all_vtx.reserve(static_cast<size_t>(dd->TotalVtxCount));
+        all_itx.reserve(static_cast<size_t>(dd->TotalIdxCount));
+
+        for (int n = 0; n < dd->CmdListsCount; n++) {
+            const auto* imgui_cmd = dd->CmdLists[n];
+            all_vtx.insert(all_vtx.end(), imgui_cmd->VtxBuffer.Data,
+                           imgui_cmd->VtxBuffer.Data + imgui_cmd->VtxBuffer.Size);
+            all_itx.insert(all_itx.end(), imgui_cmd->IdxBuffer.Data,
+                           imgui_cmd->IdxBuffer.Data + imgui_cmd->IdxBuffer.Size);
+        }
+
+        ctx.buffers.get(drawable.vertex)->write_slice(ctx.allocator, std::span{all_vtx}, 0);
+        ctx.buffers.get(drawable.index)->write_slice(ctx.allocator, std::span{all_itx}, 0);
+    }
+
+    auto&& [itx, vtx] = ctx.buffers.get_multiple(drawable.index, drawable.vertex);
+    auto* pipe = ctx.pipeline_pool.get(pipeline);
+
+    vkCmdBindIndexBuffer(cmd, itx->buffer(), 0, VK_INDEX_TYPE_UINT16);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->layout, 0, 1, &ctx.bindless_set->set, 0, nullptr);
+
+    u32 index_offset  = 0;
+    u32 vertex_offset = 0;
+
+    for (int n = 0; n < dd->CmdListsCount; n++) {
+        const auto* command_list = dd->CmdLists[n];
+
+        for (int cmd_i = 0; cmd_i < command_list->CmdBuffer.Size; cmd_i++) {
+            const auto& imgui_cmd = command_list->CmdBuffer[cmd_i];
+
+            ImVec2 clipMin((imgui_cmd.ClipRect.x - clip_offset.x) * clip_scale.x,
+                           (imgui_cmd.ClipRect.y - clip_offset.y) * clip_scale.y);
+            ImVec2 clipMax((imgui_cmd.ClipRect.z - clip_offset.x) * clip_scale.x,
+                           (imgui_cmd.ClipRect.w - clip_offset.y) * clip_scale.y);
+
+            clipMin.x = std::max(clipMin.x, 0.0f);
+            clipMin.y = std::max(clipMin.y, 0.0f);
+            clipMax.x = std::min(clipMax.x, fb_width);
+            clipMax.y = std::min(clipMax.y, fb_height);
+
+            if (clipMax.x <= clipMin.x || clipMax.y <= clipMin.y) {
+                continue;
+            }
+
+            struct VulkanImguiBindData {
+                std::array<float, 4> LRTB{};
+                const DeviceAddress vb;
+                u32 texture_id{0};
+                u32 sampler_id{0};
+            } bindData{
+                .LRTB = {L, R, T, B},
+                .vb = ctx.device_address(drawable.vertex),
+                .texture_id = static_cast<u32>(imgui_cmd.GetTexID()),
+                .sampler_id = sampler.index(),
+            };
+
+            vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(VulkanImguiBindData), &bindData);
+
+            VkRect2D scissor{
+                .offset = {static_cast<i32>(clipMin.x), static_cast<i32>(clipMin.y)},
+                .extent = {static_cast<u32>(clipMax.x - clipMin.x), static_cast<u32>(clipMax.y - clipMin.y)},
+            };
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            vkCmdDrawIndexed(cmd, imgui_cmd.ElemCount, 1,
+                             index_offset + imgui_cmd.IdxOffset,
+                             vertex_offset + imgui_cmd.VtxOffset,
+                             0);
+        }
+
+        index_offset  += command_list->IdxBuffer.Size;
+        vertex_offset += command_list->VtxBuffer.Size;
+    }
+}
+
+auto ImGuiRenderer::render_additional_viewports() -> void {
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+
+    for (int i = 0; i < pio.Viewports.Size; ++i) {
+        ImGuiViewport* vp = pio.Viewports[i];
+
+        if (!(vp->Flags & ImGuiViewportFlags_IsPlatformWindow)) {
+            continue;
+        }
+        if (vp == ImGui::GetMainViewport()) {
+            continue;
+        }
+
+        auto* glfw_win = static_cast<GLFWwindow*>(vp->PlatformHandle);
+        if (!glfw_win || !vp->DrawData) {
+            continue;
+        }
+
+        // If the viewport is minimized/zero-size, skip
+        VkExtent2D want_extent{
+            .width  = static_cast<u32>(std::max(0.0f, vp->Size.x)),
+            .height = static_cast<u32>(std::max(0.0f, vp->Size.y)),
+        };
+        if (want_extent.width == 0 || want_extent.height == 0) {
+            continue;
+        }
+
+        auto& rt = get_or_create_viewport_target(ctx, glfw_win);
+        if (rt.swapchain.image_count() == 0) {
+            continue;
+        }
+
+        // Resize swapchain if needed
+        if (rt.swapchain.extent().width != want_extent.width || rt.swapchain.extent().height != want_extent.height) {
+            auto rec = rt.swapchain.recreate(want_extent);
+            if (!rec) {
+                continue;
+            }
+            ensure_viewport_command_resources(ctx, rt, static_cast<u32>(rt.swapchain.image_count()));
+        }
+
+        // Acquire image
+        const u32 local_frame = rt.frame_index % frames_in_flight;
+        auto acq = rt.swapchain.acquire_next_image(local_frame);
+        if (!acq) {
+            // out-of-date etc. -> next frame recreate handled by caller
+            continue;
+        }
+
+        const u32 image_index = acq->image_index;
+
+        // Wait for the per-image fence (so we don't reuse its command buffer too early)
+        VkFence fence = rt.fences[image_index];
+        vk_check(vkWaitForFences(ctx.get_device(), 1, &fence, VK_TRUE, UINT64_MAX));
+        vk_check(vkResetFences(ctx.get_device(), 1, &fence));
+
+        VkCommandBuffer cmd = rt.command_buffers[image_index];
+        vk_check(vkResetCommandBuffer(cmd, 0));
+
+        VkCommandBufferBeginInfo cbbi{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = nullptr,
+        };
+        vk_check(vkBeginCommandBuffer(cmd, &cbbi));
+
+        // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL
+        // (Your engine likely has an image wrapper; here we do raw barrier for swapchain image.)
+        VkImage img = rt.swapchain.image(image_index);
+
+        VkImageMemoryBarrier2 to_color{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .srcAccessMask = VK_ACCESS_2_NONE,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, // NOTE: swapchain images are effectively undefined each acquire; OK.
+            .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = img,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        VkDependencyInfo dep_to_color{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &to_color,
+        };
+        vkCmdPipelineBarrier2(cmd, &dep_to_color);
+
+        VkRenderingAttachmentInfo color_attachment{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext = nullptr,
+            .imageView = rt.swapchain.image_view(image_index),
+            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .resolveMode = VK_RESOLVE_MODE_NONE,
+            .resolveImageView = VK_NULL_HANDLE,
+            .resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue = VkClearValue{ .color = {{0.0f, 0.0f, 0.0f, 1.0f}} },
+        };
+
+        VkRenderingInfo ri{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .renderArea = { .offset = {0, 0}, .extent = rt.swapchain.extent() },
+            .layerCount = 1,
+            .viewMask = 0,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color_attachment,
+            .pDepthAttachment = nullptr,
+            .pStencilAttachment = nullptr,
+        };
+
+        vkCmdBeginRendering(cmd, &ri);
+
+        // Record ImGui draw lists into this pass
+        render_draw_data(cmd, vp->DrawData, offscreen_target_pipeline);
+
+        vkCmdEndRendering(cmd);
+
+        // Transition to PRESENT
+        VkImageMemoryBarrier2 to_present{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .dstAccessMask = VK_ACCESS_2_NONE,
+            .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = img,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        VkDependencyInfo dep_to_present{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .pNext = nullptr,
+            .dependencyFlags = 0,
+            .memoryBarrierCount = 0,
+            .pMemoryBarriers = nullptr,
+            .bufferMemoryBarrierCount = 0,
+            .pBufferMemoryBarriers = nullptr,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &to_present,
+        };
+        vkCmdPipelineBarrier2(cmd, &dep_to_present);
+
+        vk_check(vkEndCommandBuffer(cmd));
+
+        // Submit
+        VkSemaphore wait_sem = acq->sync.image_available;
+        VkSemaphore signal_sem = acq->sync.render_finished;
+
+        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+        VkSubmitInfo si{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = nullptr,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &wait_sem,
+            .pWaitDstStageMask = &wait_stage,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &signal_sem,
+        };
+
+        vk_check(vkQueueSubmit(ctx.queues.graphics.queue, 1, &si, fence));
+
+        // Present
+        rt.swapchain.present(ctx.queues.graphics.queue, image_index, signal_sem);
+
+        rt.frame_index++;
+    }
+}
+
+
+auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipeline, Error> {
 
     constexpr std::array<const std::string_view, 2> entry_points{"vs_main", "fs_main"};
     std::array<ReflectionData, entry_points.size()> reflection{};
@@ -159,7 +743,7 @@ auto ImGuiRenderer::create_pipeline(ImGuiFramebuffer fb) -> tl::expected<Compile
     dynamic_state.pDynamicStates = dynamic_states.data();
 
     // Dynamic rendering info
-    VkFormat color_format = std::get<VkFormat>(fb);
+    VkFormat color_format = fb;
     auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
     rendering_info.colorAttachmentCount = 1;
     rendering_info.pColorAttachmentFormats = &color_format;
@@ -234,155 +818,6 @@ auto ImGuiRenderer::update_font(FontChoice f) -> void {
 
     sampler = Holder{ctx, ctx.create_sampler(ci, "imgui_linear_clamp")};
 }
-
-auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
-
-    const auto &dim = std::get<VkExtent2D>(fb);
-    ImGuiIO &io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(dim.width / display_scale, dim.height / display_scale);
-    io.DisplayFramebufferScale = ImVec2(display_scale, display_scale);
-    io.IniFilename = nullptr;
-
-    if (force_recompile) {
-        auto created = create_pipeline(fb).value();
-        pipeline = Holder{ctx, ctx.create_pipeline(std::move(created))};
-        force_recompile = false;
-    }
-
-    if (pipeline.empty()) {
-        auto created = create_pipeline(fb).value();
-        pipeline = Holder{ctx, ctx.create_pipeline(std::move(created))};
-    }
-
-    ImGui::NewFrame();
-}
-
-auto ImGuiRenderer::end_frame(VkCommandBuffer cmd) -> void {
-    ImGui::EndFrame();
-    ImGui::Render();
-
-    ImDrawData *dd = ImGui::GetDrawData();
-    if (dd->TotalIdxCount == 0)
-        return;
-
-    const float fb_width = dd->DisplaySize.x * dd->FramebufferScale.x;
-    const float fb_height = dd->DisplaySize.y * dd->FramebufferScale.y;
-
-    auto &&[vp, sc] = viewport_scissors({
-            static_cast<u32>(fb_width),
-            static_cast<u32>(fb_height),
-    });
-
-    vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_ALWAYS);
-    vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
-    vkCmdSetDepthTestEnable(cmd, VK_FALSE);
-    vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
-
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-
-    const float L = dd->DisplayPos.x;
-    const float R = dd->DisplayPos.x + dd->DisplaySize.x;
-    const float T = dd->DisplayPos.y;
-    const float B = dd->DisplayPos.y + dd->DisplaySize.y;
-    const ImVec2 clip_offset = dd->DisplayPos;
-    const ImVec2 clip_scale = dd->FramebufferScale;
-
-    auto &drawable = drawables.at(frame_index);
-    frame_index = (frame_index + 1) % drawables.size();
-
-    if (static_cast<i32>(drawable.index_count) < dd->TotalIdxCount) {
-        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                     dd->TotalIdxCount * sizeof(ImDrawIdx), "imgui_index");
-        drawable.index = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
-        drawable.index_count = static_cast<u32>(dd->TotalIdxCount);
-    }
-
-    if (static_cast<i32>(drawable.vertex_count) < dd->TotalVtxCount) {
-        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                     dd->TotalVtxCount * sizeof(ImDrawVert), "imgui_vertex");
-        drawable.vertex = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
-        drawable.vertex_count = static_cast<u32>(dd->TotalVtxCount);
-    }
-
-    {
-        static std::vector<ImDrawVert> all_vtx;
-        static std::vector<ImDrawIdx> all_itx;
-
-        all_vtx.clear();
-        all_itx.clear();
-
-        if (all_vtx.capacity() < static_cast<size_t>(dd->TotalVtxCount)) {
-            all_vtx.reserve(dd->TotalVtxCount);
-        }
-        if (all_itx.capacity() < static_cast<size_t>(dd->TotalIdxCount)) {
-            all_itx.reserve(dd->TotalIdxCount);
-        }
-
-        for (int n = 0; n < dd->CmdListsCount; n++) {
-            const auto *imgui_cmd = dd->CmdLists[n];
-            all_vtx.insert(all_vtx.end(), imgui_cmd->VtxBuffer.Data,
-                           imgui_cmd->VtxBuffer.Data + imgui_cmd->VtxBuffer.Size);
-            all_itx.insert(all_itx.end(), imgui_cmd->IdxBuffer.Data,
-                           imgui_cmd->IdxBuffer.Data + imgui_cmd->IdxBuffer.Size);
-        }
-
-        ctx.buffers.get(drawable.vertex)->write_slice(ctx.allocator, std::span{all_vtx}, 0);
-        ctx.buffers.get(drawable.index)->write_slice(ctx.allocator, std::span{all_itx}, 0);
-    }
-    auto &&[itx, vtx] = ctx.buffers.get_multiple(drawable.index, drawable.vertex);
-    auto *pipe = ctx.pipeline_pool.get(pipeline);
-
-    vkCmdBindIndexBuffer(cmd, itx->buffer(), 0, VK_INDEX_TYPE_UINT16);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->layout, 0, 1, &ctx.bindless_set->set, 0,
-                            nullptr);
-
-    u32 index_offset = 0;
-    u32 vertex_offset = 0;
-    for (int n = 0; n < dd->CmdListsCount; n++) {
-        const auto *command_list = dd->CmdLists[n];
-        for (int cmd_i = 0; cmd_i < command_list->CmdBuffer.Size; cmd_i++) {
-            const auto &imgui_cmd = command_list->CmdBuffer[cmd_i];
-            ImVec2 clipMin((imgui_cmd.ClipRect.x - clip_offset.x) * clip_scale.x,
-                           (imgui_cmd.ClipRect.y - clip_offset.y) * clip_scale.y);
-            ImVec2 clipMax((imgui_cmd.ClipRect.z - clip_offset.x) * clip_scale.x,
-                           (imgui_cmd.ClipRect.w - clip_offset.y) * clip_scale.y);
-            if (clipMin.x < 0.0f)
-                clipMin.x = 0.0f;
-            if (clipMin.y < 0.0f)
-                clipMin.y = 0.0f;
-            if (clipMax.x > fb_width)
-                clipMax.x = fb_width;
-            if (clipMax.y > fb_height)
-                clipMax.y = fb_height;
-            if (clipMax.x <= clipMin.x || clipMax.y <= clipMin.y)
-                continue;
-            struct VulkanImguiBindData {
-                std::array<float, 4> LRTB{};
-                const DeviceAddress vb;
-                u32 texture_id = 0;
-                u32 sampler_id = 0;
-            } bindData = {
-                    .LRTB = {L, R, T, B},
-                    .vb = ctx.device_address(drawable.vertex),
-                    .texture_id = static_cast<u32>(imgui_cmd.GetTexID()),
-                    .sampler_id = sampler.index(),
-            };
-            vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                               sizeof(VulkanImguiBindData), &bindData);
-            VkRect2D scissor{
-                    .offset = {static_cast<i32>(clipMin.x), static_cast<i32>(clipMin.y)},
-                    .extent = {static_cast<u32>(clipMax.x - clipMin.x), static_cast<u32>(clipMax.y - clipMin.y)},
-            };
-            vkCmdSetScissor(cmd, 0, 1, &scissor);
-            vkCmdDrawIndexed(cmd, imgui_cmd.ElemCount, 1, index_offset + imgui_cmd.IdxOffset,
-                             vertex_offset + imgui_cmd.VtxOffset, 0);
-        }
-        index_offset += command_list->IdxBuffer.Size;
-        vertex_offset += command_list->VtxBuffer.Size;
-    }
-}
-
 auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey {
     switch (key) {
         case GLFW_KEY_TAB:

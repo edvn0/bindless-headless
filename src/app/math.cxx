@@ -1,0 +1,79 @@
+#include "app/math.hxx"
+#include <random>
+
+#include "AABB.hxx"
+
+#include "3PP/PerlinNoise.hpp"
+
+auto generate_perlin(u32 w, u32 h) -> std::vector<std::uint8_t, default_allocator<u8>> {
+    std::vector<std::uint8_t, default_allocator<u8>> data;
+    data.resize(w * h);
+    const auto seed = static_cast<u32>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    const siv::PerlinNoise pn{seed};
+
+    auto z_offset = 0.0;
+    for (u32 y = 0; y < h; ++y) {
+        const auto row_z = z_offset + static_cast<double>(y) * 0.01;
+        for (u32 x = 0; x < w; ++x) {
+            const auto nx = static_cast<double>(x) / static_cast<double>(w);
+            auto ny = static_cast<double>(y) / static_cast<double>(h);
+            auto value = pn.noise3D(nx * 8.0, ny * 8.0, row_z);
+            value = (value + 1.0) / 2.0;
+            data[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)] =
+                    static_cast<std::uint8_t>(value * 255.0);
+        }
+        z_offset += 0.0001;
+    }
+
+    return data;
+}
+
+
+auto spawn_lights_in_aabb(AABB const &aabb, std::span<PointLight> lights) -> void {
+    thread_local auto rng = std::default_random_engine{};
+
+    auto x_distrib = std::uniform_real_distribution{aabb.min.x, aabb.max.x};
+    auto y_distrib = std::uniform_real_distribution{aabb.min.y, aabb.max.y};
+    auto z_distrib = std::uniform_real_distribution{aabb.min.z, aabb.max.z};
+    auto radius_distrib = std::uniform_real_distribution{30.0F, 60.0F};
+    auto intensity_distrib = std::uniform_real_distribution{100.0F, 500.0F};
+
+    auto color_distribution = std::uniform_real_distribution{0.0F, 1.0F};
+
+    for (auto &&[position_radius, colour_intensity]: lights) {
+        auto const intensity = intensity_distrib(rng);
+        auto const radius = radius_distrib(rng);
+
+        position_radius = {x_distrib(rng), y_distrib(rng), z_distrib(rng), radius};
+
+        colour_intensity = {color_distribution(rng), color_distribution(rng), color_distribution(rng), intensity};
+    }
+};
+glm::mat4 PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear) {
+    const float f = 1.0f / glm::tan(fovYRadians * 0.5f);
+
+    glm::mat4 m{0.0f};
+
+    m[0][0] = f / aspect;
+    m[1][1] = f;
+    m[2][3] = -1.0f;
+    m[3][2] = zNear;
+
+    m[2][2] = 0.0f;
+
+    return m;
+}
+auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) ->ClusterConfig {
+    u32 cluster_count = tiles_x * tiles_y * tiles_z;
+    float log_z_scale = static_cast<float>(tiles_z) / std::log2f(z_far / z_near);
+
+    return ClusterConfig{
+            .tiles_x = tiles_x,
+            .tiles_y = tiles_y,
+            .tiles_z = tiles_z,
+            .cluster_count = cluster_count,
+            .z_near = z_near,
+            .z_far = z_far,
+            .log_z_scale = log_z_scale,
+    };
+}

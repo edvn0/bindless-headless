@@ -143,6 +143,12 @@ struct DeferredLightingPushConstants {
     u32 debug_mode;
 };
 
+struct PresentPushConstants {
+    u32 image_index;     // tonemapped UNORM texture index
+    u32 sampler_index;   // sampler index
+    u32 dst_is_srgb;     // 1 if swapchain is *_SRGB, else 0
+};
+
 struct CompiledPipeline {
     VkPipeline pipeline{VK_NULL_HANDLE};
     VkPipelineLayout layout{VK_NULL_HANDLE};
@@ -194,3 +200,25 @@ auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, 
 auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,
                              const std::vector<u32> &, const std::string_view, const std::string_view, VkFormat)
         -> CompiledPipeline;
+
+struct FullscreenPipelineInfo {
+    VkDevice device;
+    PipelineCache& cache;
+    VkDescriptorSetLayout bindless_layout;
+
+    VkShaderModule fullscreen_vs;
+    static constexpr std::string_view vs_entry {"main"};
+
+    std::span<const u32> frag_code;
+    std::string_view fs_entry;
+
+    VkFormat color_format;
+
+    u32 push_constant_size;
+    VkShaderStageFlags push_constant_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    bool enable_blend = false;
+};
+auto create_fullscreen_pipeline(const FullscreenPipelineInfo& ) -> CompiledPipeline;
+ [[nodiscard]] auto get_or_create_fullscreen_vs(
+    RenderContext&) -> u32;

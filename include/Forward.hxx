@@ -2,13 +2,18 @@
 
 struct BindlessSet;
 struct OffscreenTarget;
-struct BindlessSet;
 struct ReflectionData;
 struct RenderContext;
 struct PipelineCache;
 struct GlobalCommandContext;
 struct MeshData;
+struct ResizeGraph;
 struct AABB;
 
 class Compiler;
 class Swapchain;
+
+extern "C" {
+struct GLFWwindow;
+struct ImDrawData;
+}

@@ -211,12 +211,7 @@ auto Swapchain::create_swapchain_resources(VkExtent2D requested_extent, bool use
             .image = new_images[i],
             .viewType = VK_IMAGE_VIEW_TYPE_2D,
             .format = surface_format.format,
-            .components = VkComponentMapping{
-                .r = VK_COMPONENT_SWIZZLE_B,
-                .g = VK_COMPONENT_SWIZZLE_G,
-                .b = VK_COMPONENT_SWIZZLE_R,
-                .a = VK_COMPONENT_SWIZZLE_A,
-            },
+            .components = VkComponentMapping{},
             .subresourceRange = VkImageSubresourceRange{
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .baseMipLevel = 0,
