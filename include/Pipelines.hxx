@@ -22,7 +22,25 @@ struct PointLightCullingPushConstants {
     const DeviceAddress culled_light_count; // OUTPUT
     const u32 light_count;
 };
+/**struct PushConstants
+{
+    UBO*        frame_ubo;
+    PointLight* lights; // Compacted frustum culled
+    uint*        light_count; // Compacted frustum culled count
 
+    float z_near;
+    float z_far;
+    float log_z_scale;
+
+    uint tiles_x;
+    uint tiles_y;
+    uint tiles_z;
+    uint cluster_count;
+
+    Cluster*    clusters;               // [cluster_count] - offset and count
+    uint*       cluster_light_indices;  // [total_lights_across_clusters]
+};
+ */
 struct ClusteredLightCullingPushConstants {
     const DeviceAddress frame_ubo;
     const DeviceAddress culled_lights;
@@ -37,12 +55,8 @@ struct ClusteredLightCullingPushConstants {
     u32 tiles_z;
     u32 cluster_count;
 
-    const DeviceAddress visibility;
-    const DeviceAddress cluster_counts;
     const DeviceAddress clusters;
-    const DeviceAddress cluster_counters;
     const DeviceAddress cluster_light_indices;
-    const DeviceAddress global_index_count;
 };
 
 struct PredepthPushConstants {

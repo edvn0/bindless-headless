@@ -12,31 +12,99 @@ static constexpr auto widget = [](const std::string_view name, auto &&func) {
     ImGui::End();
 };
 
-auto draw_ui(PerformanceGraph<8, 120> &gpu_frame_graph, const RenderContext &ctx,
-             std::span<QueryPoolHandle, frames_in_flight> compute_query_pool,
-             std::span<QueryPoolHandle, frames_in_flight> compute_stats_pool,
-             std::span<QueryPoolHandle, frames_in_flight> graphics_query_pool,
-             std::span<QueryPoolHandle, frames_in_flight> graphics_stats_pool, uint32_t frame_index) -> void {
+auto draw_ui(AppContext &ctx, u32 frame_index, VkExtent2D &output_extent) -> void {
+    ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
 
-    auto compute_res = read_timestamp_pairs_ms(ctx, compute_query_pool[frame_index]);
-    auto c_stats = read_compute_stats(ctx, compute_stats_pool[frame_index]);
-    auto graphics_res = read_timestamp_pairs_ms(ctx, graphics_query_pool[frame_index]);
-    auto g_stats = read_graphics_stats(ctx, graphics_stats_pool[frame_index]);
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
+    window_flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+
+    ImGui::Begin("DockSpaceWindow", nullptr, window_flags);
+    ImGui::PopStyleVar(3);
+
+    ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("View")) {
+            ImGui::MenuItem("Performance Graphs");
+            ImGui::MenuItem("Frame Profile");
+            ImGui::MenuItem("Viewport");
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
+
+    ImGui::End();
+
+    ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    {
+        using namespace std::string_view_literals;
+        struct TargetView {
+            const std::string_view name;
+            const TextureHandle handle;
+        };
+
+        std::array targets = {
+                TargetView{.name = "GBuffer0 (Albedo/AO)"sv, .handle = ctx.res.gbuffer0},
+                TargetView{.name = "GBuffer1 (Normal/RM)"sv, .handle = ctx.res.gbuffer1},
+                TargetView{.name = "GBuffer2 (Emissive)"sv, .handle = ctx.res.gbuffer2},
+                TargetView{.name = "Depth"sv, .handle = ctx.res.depth},
+                TargetView{.name = "Culling Debug"sv, .handle = ctx.res.debug_culling},
+                TargetView{.name = "Lit HDR"sv, .handle = ctx.res.lit_hdr},
+                TargetView{.name = "Tonemapped"sv, .handle = ctx.res.tonemapped},
+        };
+
+        static int selected_target = 6; // Default to tonemapped
+
+        ImGui::SetNextItemWidth(200.0f);
+        if (ImGui::BeginCombo("##TargetSelect", targets[selected_target].name.data())) {
+            for (auto &&[idx, target]: targets | std::views::enumerate) {
+                const bool is_selected = (selected_target == static_cast<int>(idx));
+                if (ImGui::Selectable(target.name.data(), is_selected)) {
+                    selected_target = static_cast<int>(idx);
+                }
+                if (is_selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        ImVec2 available_size = ImGui::GetContentRegionAvail();
+        ImGui::Image(ImTextureRef{ImTextureID{targets[selected_target].handle.index()}}, available_size);
+        output_extent.width = static_cast<u32>(available_size.x);
+        output_extent.height = static_cast<u32>(available_size.y);
+    }
+    ImGui::End();
+
+    auto compute_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.compute_query_pool[frame_index]);
+    auto c_stats = read_compute_stats(ctx.gpu.ctx, ctx.pipes.compute_stats_pool[frame_index]);
+    auto graphics_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.graphics_query_pool[frame_index]);
+    auto g_stats = read_graphics_stats(ctx.gpu.ctx, ctx.pipes.graphics_stats_pool[frame_index]);
 
     if (compute_res.has_value()) {
         const auto &c_times = *compute_res;
-        gpu_frame_graph.push_sample(0, c_times[static_cast<u32>(ComputeIndex::Rotate)]);
-        gpu_frame_graph.push_sample(1, c_times[static_cast<u32>(ComputeIndex::Cull)]);
-        gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::Clustering)]);
+        ctx.ui.gpu_frame_graph.push_sample(0, c_times[static_cast<u32>(ComputeIndex::Rotate)]);
+        ctx.ui.gpu_frame_graph.push_sample(1, c_times[static_cast<u32>(ComputeIndex::Cull)]);
+        ctx.ui.gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::Clustering)]);
     }
 
     if (graphics_res.has_value()) {
         const auto &g_times = *graphics_res;
-        gpu_frame_graph.push_sample(3, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
-        gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
-        gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
-        gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
-        gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Present)]);
+        ctx.ui.gpu_frame_graph.push_sample(3, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
+        ctx.ui.gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
+        ctx.ui.gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
+        ctx.ui.gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
+        ctx.ui.gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Present)]);
     }
 
     widget("Performance Graphs", [&] {
@@ -55,9 +123,9 @@ auto draw_ui(PerformanceGraph<8, 120> &gpu_frame_graph, const RenderContext &ctx
         ImGui::Separator();
 
         if (view_mode == 0) {
-            gpu_frame_graph.render("GPU Frame Times", ImVec2(0, 200));
+            ctx.ui.gpu_frame_graph.render("GPU Frame Times", ImVec2(0, 200));
         } else {
-            gpu_frame_graph.render_split("GPU", ImVec2(-1, 80), shared_scale);
+            ctx.ui.gpu_frame_graph.render_split("GPU", ImVec2(-1, 80), shared_scale);
         }
     });
 
@@ -65,7 +133,6 @@ auto draw_ui(PerformanceGraph<8, 120> &gpu_frame_graph, const RenderContext &ctx
     widget("Frame Profile", [&] {
         ImGui::Text("Frame Profile [#%llu]", total_frame_counter++);
         ImGui::Separator();
-
 
         if (compute_res.has_value()) {
             if (ImGui::CollapsingHeader("Compute Phases", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -110,7 +177,6 @@ auto draw_ui(PerformanceGraph<8, 120> &gpu_frame_graph, const RenderContext &ctx
                 }
             }
         }
-
 
         if (graphics_res.has_value()) {
             ImGui::Separator();
@@ -177,37 +243,6 @@ auto draw_ui(PerformanceGraph<8, 120> &gpu_frame_graph, const RenderContext &ctx
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Clustering is %.1f%% of GPU frame time",
                                clustering_pct);
-        }
-    });
-
-    widget("Targets", [&] {
-        using namespace std::string_view_literals;
-        struct TargetView {
-            const std::string_view name;
-            const TextureHandle handle;
-        };
-
-        static std::array targets = {
-                TargetView{.name = "GBuffer0 (Albedo/AO)"sv, .handle = gbuffer0_handle},
-                TargetView{.name = "GBuffer1 (Normal/RM)"sv, .handle = gbuffer1_handle},
-                TargetView{.name = "GBuffer2 (Emissive)"sv, .handle = gbuffer2_handle},
-                TargetView{.name = "Depth"sv, .handle = depth_handle},
-                TargetView{.name = "Culling Debug"sv, .handle = debug_culling_handle},
-                TargetView{.name = "Lit HDR"sv, .handle = lit_hdr_handle},
-                TargetView{.name = "Tonemapped"sv, .handle = tonemapped_target_handle},
-        };
-
-        if (ImGui::BeginTabBar("##TargetTabs", ImGuiTabBarFlags_None)) {
-            for (auto &&[idx, target]: targets | std::views::enumerate) {
-                ImGui::PushID(static_cast<i32>(idx));
-                if (ImGui::BeginTabItem(target.name.data())) {
-                    ImVec2 size = ImGui::GetContentRegionAvail();
-                    ImGui::Image(ImTextureRef{ImTextureID{target.handle.index()}}, size);
-                    ImGui::EndTabItem();
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndTabBar();
         }
     });
 #endif

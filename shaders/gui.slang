@@ -9,6 +9,7 @@ struct Vertex {
 struct PC {
     float4 LRTB;
     Vertex* vertices;
+    uint base_vertex;
     uint texture_id;
     uint sampler_id;
 }
@@ -32,7 +33,7 @@ VertexOutput vs_main(uniform PC pc, uint vert_id: SV_VertexID) {
     0.0,              2.0 / (T-B),  0.0,  0.0,
     0.0,                      0.0, -1.0,  0.0,
     (R+L) / (L-R),  (T+B) / (B-T),  0.0,  1.0));
-      Vertex v = pc.vertices[vert_id];
+      Vertex v = pc.vertices[pc.base_vertex + vert_id];
   var out_color = unpackUnorm4x8ToFloat(v.rgba);
    var out_uv = float2(v.uv.x, v.uv.y);
   var out_position = mul(proj, float4(v.xy.x, v.xy.y, 0, 1));

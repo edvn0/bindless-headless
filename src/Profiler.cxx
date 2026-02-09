@@ -2,7 +2,7 @@
 #include "Logger.hxx"
 
 auto TracyGpuContext::init_calibrated(VkInstance instance, VkPhysicalDevice physdev, VkDevice dev,
-                                      const std::string_view name) -> void {
+                                      const VolkInstanceTable &, const std::string_view name) -> void {
 #if defined(TRACY_ENABLE)
     device = dev;
 

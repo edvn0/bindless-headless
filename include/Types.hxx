@@ -45,6 +45,8 @@ struct string_eq {
 enum class DeviceAddress : std::uint64_t {
     Invalid = 0,
 };
+template<std::size_t N>
+using DeviceAddresses = std::array<const DeviceAddress, N>;
 
 template<typename T>
 struct TypedDeviceAddress {

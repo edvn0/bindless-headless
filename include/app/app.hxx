@@ -2,11 +2,195 @@
 
 #include <tl/expected.hpp>
 #include "ArgumentParse.hxx"
-#include "Error.hxx"
+
+#include "BindlessHeadless.hxx"
+#include "BindlessSet.hxx"
+#include "Compiler.hxx"
+#include "Constants.hxx"
+#include "EventSystem.hxx"
+#include "FrameQuery.hxx"
+#include "GlobalCommandContext.hxx"
+#include "ImGuiRenderer.hxx"
+#include "Mesh.hxx"
+#include "Profiler.hxx"
+#include "ResizeableGraph.hxx"
+#include "Swapchain.hxx"
+
+#include "app/frame.hxx"
+#include "app/listeners.hxx"
+#include "app/math.hxx"
+#include "app/render.hxx"
+#include "ui/PerformanceGraph.hxx"
 
 struct InstanceWithDebug;
 
+struct AppGpuState {
+    CLIOptions *opts{nullptr};
+    InstanceWithDebug *instance{nullptr};
+
+    VkPhysicalDevice physical_device{VK_NULL_HANDLE};
+    u32 graphics_index{0};
+    u32 compute_index{0};
+    u32 transfer_index{0};
+
+    VkDevice device{VK_NULL_HANDLE};
+    VkQueue graphics_queue{VK_NULL_HANDLE};
+    VkQueue compute_queue{VK_NULL_HANDLE};
+    VkQueue transfer_queue{VK_NULL_HANDLE};
+
+    EnabledFeatureSet enabled_features{};
+
+    TracyGpuContext tracy_graphics{};
+    TracyGpuContext tracy_compute{};
+
+    GLFWwindow *window{nullptr};
+    VkSurfaceKHR surface{VK_NULL_HANDLE};
+
+    Swapchain swapchain{};
+    GlobalCommandContext command_context{};
+
+    VmaAllocator allocator{VK_NULL_HANDLE};
+
+    ComputeTimeline tl_compute{};
+    GraphicsTimeline tl_graphics{};
+    TransferTimeline tl_transfer{};
+
+    BindlessSet bindless{};
+
+    RenderContext ctx{};
+
+    std::unique_ptr<Compiler> compiler{};
+
+    VkSampleCountFlagBits msaa_samples{VK_SAMPLE_COUNT_1_BIT};
+};
+
+struct AppPipelines {
+    ShaderHandle fullscreen_vs{};
+
+    PipelineHandle flags_pipeline{};
+    PipelineHandle compact_pipeline{};
+    PipelineHandle cube_rotation_pipeline{};
+    PipelineHandle gbuffer_pipeline_mrt{};
+    PipelineHandle gbuffer_pipeline_lighting{};
+    PipelineHandle predepth_pipeline{};
+    PipelineHandle predepth_alpha_pipeline{};
+    PipelineHandle tonemap_pipeline{};
+    PipelineHandle cluster_build_groups_pipeline{};
+    PipelineHandle present_pipeline{};
+
+    std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
+    std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
+    std::array<QueryPoolHandle, frames_in_flight> graphics_stats_pool{};
+    std::array<QueryPoolHandle, frames_in_flight> compute_stats_pool{};
+
+    SamplerHandle linear_repeat{};
+    SamplerHandle linear_clamp{};
+    SamplerHandle noise_sampler{};
+};
+
+struct AppResources {
+    std::array<FrameState, frames_in_flight> frames{};
+
+    LoadedObj mesh{};
+
+    std::vector<PointLight> all_point_lights{};
+    std::vector<PointLight> all_point_lights_zero{};
+    u32 light_count{0};
+
+    BufferHandle point_lights_base{};
+    AlignedRingBuffer<PointLight> point_lights_ring{};
+    BufferHandle culled_light_count{};
+
+    static constexpr u32 mesh_count = 1;
+    AlignedRingBuffer<glm::mat4x3> transforms_ring{};
+    u32 instance_count{0};
+
+    BufferHandle flags{};
+    BufferHandle prefix{};
+    BufferHandle compact_lights{};
+
+    ClusterConfig clustering_config{};
+    u32 max_light_indices{0};
+
+    BufferHandle cluster_counts{};
+    BufferHandle visibility{};
+    BufferHandle clusters{};
+    BufferHandle cluster_counters{};
+    BufferHandle cluster_light_indices{};
+    BufferHandle global_index_count{};
+
+    AlignedRingBuffer<FrameUBO> frame_ubo_ring{};
+
+    TextureHandle gbuffer0{};
+    TextureHandle gbuffer1{};
+    TextureHandle gbuffer2{};
+    TextureHandle debug_culling{};
+    TextureHandle lit_hdr{};
+    TextureHandle depth{};
+    TextureHandle tonemapped{};
+
+    TextureHandle perlin_noise{};
+
+    static constexpr u32 max_draws_per_frame = 100000U;
+    AlignedRingBuffer<VkDrawIndexedIndirectCommand> indirect_ring{};
+    AlignedRingBuffer<u32> draw_material_id_ring{};
+
+    struct FrameDrawStream {
+        FrameIndirectWriter writer{};
+        auto begin_frame() -> void { writer.cursor = 0; }
+    } draw_stream{};
+};
+
+struct AppState {
+    bool resized{false};
+
+    glm::vec2 last_mouse{0.0f, 0.0f};
+    bool mouse_inited{false};
+    EventSystem event_system{};
+
+    CameraInput cam_in{};
+    EditorCamera cam{};
+};
+
+struct AppUI {
+    AppState app_state{};
+    std::unique_ptr<ImGuiRenderer> gui{};
+    std::unique_ptr<efsw::FileWatcher, Deleter> watcher{};
+    std::unordered_map<std::string, std::unique_ptr<efsw::FileWatchListener, Deleter>> listeners{};
+
+    u64 frame_index{};
+    std::chrono::high_resolution_clock::time_point last_frame_time{};
+    VkExtent2D last_viewport_extent = {0, 0};
+    double dt{0.0};
+    double total_time{0.0};
+
+    enum class ClusterDebugMode : u32 {
+        None = 0,
+        ClusterGrid = 1,
+        LightCount = 2,
+        LightDensity = 3,
+        ClusterIndex = 4,
+        DepthSlices = 5,
+        LightHeatmap = 6,
+        FirstLight = 7,
+        ClusterOccupancy = 8,
+    };
+
+    ClusterDebugMode debug_mode{ClusterDebugMode::None};
+
+    // graphs
+    PerformanceGraph<8, 120> gpu_frame_graph{};
+    bool graphs_initialized{false};
+};
+
+struct AppContext {
+    AppGpuState &gpu;
+    AppPipelines &pipes;
+    AppResources &res;
+    AppUI &ui;
+};
+
 class BindlessApp {
 public:
-    auto run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int, Error>;
+    auto run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<i32, Error>;
 };

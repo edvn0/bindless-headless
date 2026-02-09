@@ -50,14 +50,13 @@ auto main(int argc, char **argv) -> int {
     const char **extensions_raw = glfwGetRequiredInstanceExtensions(&count);
     std::vector<std::string_view> extensions(extensions_raw, extensions_raw + count);
 
-    bool enable_validation = opts.validation_layers.value_or(!static_cast<bool>(IS_RELEASE));
+    bool enable_validation =
+            opts.validation_layers.value_or(!static_cast<bool>(IS_RELEASE)); // NOLINT(modernize-use-bool-literals)
 
     InstanceWithDebug instance;
     if (enable_validation) {
-        // With validation layers
         instance = create_instance_with_debug(debug_callback, extensions);
     } else {
-        // No validation
         auto raw_instance = create_instance(extensions);
         instance.instance = raw_instance;
         instance.messenger = VK_NULL_HANDLE;

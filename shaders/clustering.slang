@@ -1,6 +1,7 @@
 import common;
 
-static const uint MAX_CLUSTERS_PER_LIGHT = 64u;
+static const uint MAX_LIGHTS_PER_CLUSTER = 128;
+static const uint CLUSTER_BUILD_THREADS = 64;
 
 [[vk::constant_id(0)]]
 const int MAX_WAVES_PER_GROUP = 4;
@@ -28,12 +29,8 @@ struct PushConstants
     uint tiles_z;
     uint cluster_count;
 
-    LightVisibility* visibility;
-    uint*       cluster_counts;         // [cluster_count] - counts per cluster
     Cluster*    clusters;               // [cluster_count] - offset and count
-    uint*       cluster_counters;       // [cluster_count] - write counters, reset to 0
     uint*       cluster_light_indices;  // [total_lights_across_clusters]
-    uint*       global_index_count;     // [1] - total light indices written
 };
 
 
@@ -129,134 +126,7 @@ uint cluster_index(uint x, uint y, uint z, uint tiles_x, uint tiles_y)
     return x + y * tiles_x + z * tiles_x * tiles_y;
 }
 
-[numthreads(THREADS_PER_GROUP, 1, 1)]
-[shader("compute")]
-void LightVisibilityCS(uint3 dtid : SV_DispatchThreadID, uniform PushConstants pc)
-{
-    uint light_idx = dtid.x;
-    if (light_idx >= *pc.light_count) return;
 
-    PointLight l = pc.lights[light_idx];
-    uint x0, x1, y0, y1, z0, z1;
-    
-    compute_light_cluster_range(l, pc.frame_ubo, pc.z_near, pc.log_z_scale, 
-                                pc.tiles_x, pc.tiles_y, pc.tiles_z, 
-                                x0, x1, y0, y1, z0, z1);
-
-    LightVisibility vis;
-    vis.x0 = x0; vis.x1 = x1;
-    vis.y0 = y0; vis.y1 = y1;
-    vis.z0 = z0; vis.z1 = z1;
-    vis.is_visible = (x0 <= x1 && y0 <= y1 && z0 <= z1) ? 1u : 0u;
-
-    pc.visibility[light_idx] = vis;
-    }
-
-[numthreads(THREADS_PER_GROUP, 1, 1)]
-[shader("compute")]
-void LightClusterCountCS(uint3 dtid : SV_DispatchThreadID, uniform PushConstants pc)
-{
-    uint light_idx = dtid.x;
-    if (light_idx >= *pc.light_count) return;
-
-    LightVisibility vis = pc.visibility[light_idx];
-    if (vis.is_visible == 0) return;
-
-    for (uint z = vis.z0; z <= vis.z1; ++z)
-    for (uint y = vis.y0; y <= vis.y1; ++y)
-    for (uint x = vis.x0; x <= vis.x1; ++x)
-    {
-        uint c = cluster_index(x, y, z, pc.tiles_x, pc.tiles_y);
-        
-        bool match = WaveActiveAllTrue(c == WaveReadLaneFirst(c));
-        uint count_matching = match ? WaveActiveCountBits(true) : 0;
-        
-        if (WaveIsFirstLane()) 
-        {
-            InterlockedAdd(pc.cluster_counts[c], count_matching);
-        }
-    } 
-}
-
-groupshared uint g_wave_sums[MAX_WAVES_PER_GROUP];
-groupshared uint g_group_base;
-
-[numthreads(THREADS_PER_GROUP, 1, 1)]
-[shader("compute")]
-void ClusterPrefixSumCS(
-    uint3 dtid : SV_DispatchThreadID,
-    uint gidx : SV_GroupIndex,
-    uniform PushConstants pc)
-{
-    uint idx = dtid.x;
-    uint v = (idx < pc.cluster_count) ? pc.cluster_counts[idx] : 0u;
-
-    uint wave_prefix = WavePrefixSum(v);
-    uint wave_sum    = WaveActiveSum(v);
-    uint wave_id     = gidx / WaveGetLaneCount();
-
-    if (WaveGetLaneIndex() == 0) 
-        g_wave_sums[wave_id] = wave_sum;
-
-    GroupMemoryBarrierWithGroupSync();
-
-    if (gidx < MAX_WAVES_PER_GROUP)
-    {
-        uint wave_total = g_wave_sums[gidx];
-        g_wave_sums[gidx] = WavePrefixSum(wave_total);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    uint exclusive_offset = wave_prefix + g_wave_sums[wave_id];
-
-    if (gidx == 0)
-    {
-        uint last_wave = (THREADS_PER_GROUP / WaveGetLaneCount()) - 1;
-        uint total_group_sum = g_wave_sums[last_wave] + WaveActiveSum((wave_id == last_wave) ? wave_sum : 0);
-        
-        InterlockedAdd(pc.global_index_count[0], total_group_sum, g_group_base);
-    }
-
-    GroupMemoryBarrierWithGroupSync();
-
-    if (idx < pc.cluster_count)
-    {
-        pc.clusters[idx].light_offset = exclusive_offset + g_group_base;
-        pc.clusters[idx].light_count  = v;
-    }
-}
-
-
-[numthreads(THREADS_PER_GROUP, 1, 1)]
-[shader("compute")]
-void LightClusterWriteCS(uint3 dtid : SV_DispatchThreadID, uniform PushConstants pc)
-{
-    uint light_idx = dtid.x;
-    if (light_idx >= *pc.light_count) return;
-
-    LightVisibility vis = pc.visibility[light_idx];
-    if (vis.is_visible == 0) return;
-
-    for (uint z = vis.z0; z <= vis.z1; ++z)
-    for (uint y = vis.y0; y <= vis.y1; ++y)
-    for (uint x = vis.x0; x <= vis.x1; ++x)
-    {
-        uint c = cluster_index(x, y, z, pc.tiles_x, pc.tiles_y);
-        uint write_pos;
-        InterlockedAdd(pc.cluster_counters[c], 1u, write_pos);
-
-        if (write_pos < pc.clusters[c].light_count) {
-            uint dst = pc.clusters[c].light_offset + write_pos;
-            pc.cluster_light_indices[dst] = light_idx;
-        }
-    }
-}
-
-import common;
-
-static const uint MAX_LIGHTS_PER_CLUSTER = 128;
-static const uint CLUSTER_BUILD_THREADS = 64;
 
 groupshared uint g_light_count;
 groupshared uint g_light_indices[MAX_LIGHTS_PER_CLUSTER];

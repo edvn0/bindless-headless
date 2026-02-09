@@ -9,7 +9,6 @@ include(CheckCCompilerFlag)
 # ------------------------------------------------------------
 # Core libs you already have
 # ------------------------------------------------------------
-
 add_library(BindlessHeadlessAllocator STATIC "src/allocator.cpp")
 add_library(ThirdPartySTB STATIC "3PP/stb.c")
 
@@ -30,7 +29,6 @@ target_compile_definitions(BindlessHeadlessAllocator PUBLIC VK_NO_PROTOTYPES)
 # ------------------------------------------------------------
 # Optional ImageOperations stays as-is (just no longer tied to exe)
 # ------------------------------------------------------------
-
 if(HAS_IMAGE_WRITERS)
   find_package(OpenMP)
 
@@ -72,7 +70,6 @@ endif()
 # ------------------------------------------------------------
 # Engine library: reusable stuff (no main)
 # ------------------------------------------------------------
-
 add_library(BindlessEngine STATIC
   "src/BindlessHeadless.cxx"
   "src/RenderContext.cxx"
@@ -156,13 +153,13 @@ endif()
 # ------------------------------------------------------------
 # App library: your app layer (depends on engine)
 # ------------------------------------------------------------
-
 add_library(BindlessApp STATIC
   "src/app/listeners.cxx"
   "src/app/math.cxx"
   "src/app/frame.cxx"
   "src/app/ui.cxx"
   "src/app/render.cxx"
+  "src/app/render_passes.cxx"
   "src/app/app.cxx"
 )
 
@@ -182,7 +179,6 @@ DEFAULT_COMPILE_OPTIONS(BindlessApp)
 # ------------------------------------------------------------
 # Executable: only entrypoint + CLI parsing
 # ------------------------------------------------------------
-
 add_executable(BindlessHeadless
   "src/main.cpp"
   "src/ArgumentParse.cxx"
@@ -216,7 +212,6 @@ endif()
 # ------------------------------------------------------------
 # ASAN check block unchanged (pure configure-time)
 # ------------------------------------------------------------
-
 cmake_push_check_state()
 set(ASAN_FLAG "-fsanitize=address")
 set(CMAKE_REQUIRED_FLAGS ${ASAN_FLAG})

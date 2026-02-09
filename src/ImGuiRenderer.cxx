@@ -143,8 +143,6 @@ namespace {
 
         auto sc = Swapchain::create(sci);
         if (!sc) {
-            // If swapchain creation fails, keep target but with empty swapchain.
-            // Caller will just skip rendering.
             rt.swapchain = Swapchain{};
         } else {
             rt.swapchain = std::move(*sc);
@@ -166,11 +164,10 @@ ImGuiRenderer::ImGuiRenderer(GLFWwindow *w, u32 initial_slot_count, RenderContex
 
     ImGuiIO &io = ImGui::GetIO();
     io.BackendRendererName = "imgui-custom-vulkan";
-    io.BackendPlatformName = "imgui_impl_glfw";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
 
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         io.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports;
@@ -183,15 +180,10 @@ ImGuiRenderer::ImGuiRenderer(GLFWwindow *w, u32 initial_slot_count, RenderContex
 
     update_font(std::move(font));
 
-    // Platform backend only. We do NOT use ImGui_ImplVulkan.
-    ImGui_ImplGlfw_InitForVulkan(w, false);
+    ImGui_ImplGlfw_InitForVulkan(w, true);
 
-    // Slot ring setup:
-    // We budget some slots per frame so main + several viewports won't stomp buffers.
-    // Start with at least 1 (main). Use initial_slot_count as "slots per frame".
     slots_per_frame = std::max(1u, initial_slot_count);
 
-    // Total slots = frames_in_flight * slots_per_frame
     drawables.resize(frames_in_flight * slots_per_frame);
 }
 
@@ -199,7 +191,6 @@ ImGuiRenderer::~ImGuiRenderer() {
     ImGuiIO &io = ImGui::GetIO();
     io.Fonts->TexID = nullptr;
 
-    // Destroy viewport render targets
     for (auto &[win, rt]: viewport_targets) {
         destroy_viewport_target(ctx, rt);
     }
@@ -207,7 +198,6 @@ ImGuiRenderer::~ImGuiRenderer() {
 
     ImGui_ImplGlfw_Shutdown();
 
-    // This destroys secondary platform windows created by ImGui (safe after shutdown)
     ImGui::DestroyPlatformWindows();
 
     ImPlot::DestroyContext();
@@ -234,10 +224,8 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
         force_recompile = false;
     }
 
-    // Reset slot allocation for this frame.
     slot_cursor = 0;
 
-    // Advance frame cursor (this is CPU frame index; you should call begin_frame once per rendered frame)
     frame_cursor = (frame_cursor + 1) % frames_in_flight;
 
     ImGui_ImplGlfw_NewFrame();
@@ -245,13 +233,10 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
 }
 
 auto ImGuiRenderer::acquire_draw_slot() -> DrawableData & {
-    // Ensure we have enough slots for the number of viewports we end up rendering this frame.
     if (slot_cursor >= slots_per_frame) {
-        // Grow per-frame budget (double) and resize ring.
         u32 new_slots_per_frame = std::max(slots_per_frame * 2u, slot_cursor + 1u);
         std::vector<DrawableData> new_drawables(frames_in_flight * new_slots_per_frame);
 
-        // Move existing slots preserving [frame][slot] layout
         for (u32 f = 0; f < frames_in_flight; ++f) {
             for (u32 s = 0; s < slots_per_frame; ++s) {
                 new_drawables[f * new_slots_per_frame + s] = std::move(drawables[f * slots_per_frame + s]);
@@ -268,14 +253,11 @@ auto ImGuiRenderer::acquire_draw_slot() -> DrawableData & {
 }
 
 auto ImGuiRenderer::end_frame(VkCommandBuffer cmd) -> void {
-    // Build draw data
     ImGui::EndFrame();
     ImGui::Render();
 
-    // Record main viewport draw into currently active dynamic rendering pass (owned by caller)
     render_draw_data(cmd, ImGui::GetDrawData(), main_pipeline);
 
-    // Then do platform windows: we need UpdatePlatformWindows before using vp->DrawData
     if (auto &io = ImGui::GetIO(); io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         ImGui::UpdatePlatformWindows();
         render_additional_viewports();
@@ -326,14 +308,11 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
     }
 
     {
-        static std::vector<ImDrawVert> all_vtx;
-        static std::vector<ImDrawIdx> all_itx;
+        std::vector<ImDrawVert> all_vtx;
+        std::vector<ImDrawIdx> all_itx;
 
-        all_vtx.clear();
-        all_itx.clear();
-
-        all_vtx.reserve(static_cast<size_t>(dd->TotalVtxCount));
-        all_itx.reserve(static_cast<size_t>(dd->TotalIdxCount));
+        all_vtx.reserve(static_cast<std::size_t>(dd->TotalVtxCount));
+        all_itx.reserve(static_cast<std::size_t>(dd->TotalIdxCount));
 
         for (int n = 0; n < dd->CmdListsCount; n++) {
             const auto *imgui_cmd = dd->CmdLists[n];
@@ -381,11 +360,13 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
             struct VulkanImguiBindData {
                 std::array<float, 4> LRTB{};
                 const DeviceAddress vb;
+                u32 base_vertex;
                 u32 texture_id{0};
                 u32 sampler_id{0};
             } bindData{
                     .LRTB = {L, R, T, B},
                     .vb = ctx.device_address(drawable.vertex),
+                    .base_vertex = vertex_offset + imgui_cmd.VtxOffset,
                     .texture_id = static_cast<u32>(imgui_cmd.GetTexID()),
                     .sampler_id = sampler.index(),
             };
@@ -417,6 +398,7 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
         if (!(vp->Flags & ImGuiViewportFlags_IsPlatformWindow)) {
             continue;
         }
+
         if (vp == ImGui::GetMainViewport()) {
             continue;
         }
@@ -426,7 +408,16 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
             continue;
         }
 
-        // If the viewport is minimized/zero-size, skip
+        if (vp->PlatformRequestClose) {
+            auto it = viewport_targets.find(glfw_win);
+            if (it != viewport_targets.end()) {
+                vkDeviceWaitIdle(ctx.get_device());
+                destroy_viewport_target(ctx, it->second);
+                viewport_targets.erase(it);
+            }
+            continue;
+        }
+
         VkExtent2D want_extent{
                 .width = static_cast<u32>(std::max(0.0f, vp->Size.x)),
                 .height = static_cast<u32>(std::max(0.0f, vp->Size.y)),
@@ -440,7 +431,6 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
             continue;
         }
 
-        // Resize swapchain if needed
         if (rt.swapchain.extent().width != want_extent.width || rt.swapchain.extent().height != want_extent.height) {
             auto rec = rt.swapchain.recreate(want_extent);
             if (!rec) {
@@ -449,22 +439,20 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
             ensure_viewport_command_resources(ctx, rt, static_cast<u32>(rt.swapchain.image_count()));
         }
 
-        // Acquire image
-        const u32 local_frame = rt.frame_index % frames_in_flight;
-        auto acq = rt.swapchain.acquire_next_image(local_frame);
-        if (!acq) {
-            // out-of-date etc. -> next frame recreate handled by caller
-            continue;
-        }
+        const u32 image_index = (rt.frame_index - 1) % rt.swapchain.image_count();
 
-        const u32 image_index = acq->image_index;
-
-        // Wait for the per-image fence (so we don't reuse its command buffer too early)
         VkFence fence = rt.fences[image_index];
         vk_check(vkWaitForFences(ctx.get_device(), 1, &fence, VK_TRUE, UINT64_MAX));
         vk_check(vkResetFences(ctx.get_device(), 1, &fence));
 
-        VkCommandBuffer cmd = rt.command_buffers[image_index];
+        auto acq = rt.swapchain.acquire_next_image(rt.frame_index);
+        if (!acq) {
+            continue;
+        }
+
+        const u32 acquired_image_index = acq->image_index;
+
+        VkCommandBuffer cmd = rt.command_buffers[acquired_image_index];
         vk_check(vkResetCommandBuffer(cmd, 0));
 
         VkCommandBufferBeginInfo cbbi{
@@ -475,9 +463,7 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
         };
         vk_check(vkBeginCommandBuffer(cmd, &cbbi));
 
-        // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL
-        // (Your engine likely has an image wrapper; here we do raw barrier for swapchain image.)
-        VkImage img = rt.swapchain.image(image_index);
+        VkImage img = rt.swapchain.image(acquired_image_index);
 
         VkImageMemoryBarrier2 to_color{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -486,8 +472,7 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
                 .srcAccessMask = VK_ACCESS_2_NONE,
                 .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                 .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                .oldLayout =
-                        VK_IMAGE_LAYOUT_UNDEFINED, // NOTE: swapchain images are effectively undefined each acquire; OK.
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                 .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -518,7 +503,7 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
         VkRenderingAttachmentInfo color_attachment{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                 .pNext = nullptr,
-                .imageView = rt.swapchain.image_view(image_index),
+                .imageView = rt.swapchain.image_view(acquired_image_index),
                 .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 .resolveMode = VK_RESOLVE_MODE_NONE,
                 .resolveImageView = VK_NULL_HANDLE,
@@ -543,12 +528,10 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
 
         vkCmdBeginRendering(cmd, &ri);
 
-        // Record ImGui draw lists into this pass
         render_draw_data(cmd, vp->DrawData, offscreen_target_pipeline);
 
         vkCmdEndRendering(cmd);
 
-        // Transition to PRESENT
         VkImageMemoryBarrier2 to_present{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                 .pNext = nullptr,
@@ -586,7 +569,6 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
 
         vk_check(vkEndCommandBuffer(cmd));
 
-        // Submit
         VkSemaphore wait_sem = acq->sync.image_available;
         VkSemaphore signal_sem = acq->sync.render_finished;
 
@@ -606,13 +588,11 @@ auto ImGuiRenderer::render_additional_viewports() -> void {
 
         vk_check(vkQueueSubmit(ctx.queues.graphics.queue, 1, &si, fence));
 
-        // Present
-        rt.swapchain.present(ctx.queues.graphics.queue, image_index, signal_sem);
+        rt.swapchain.present(ctx.queues.graphics.queue, acquired_image_index, signal_sem);
 
         rt.frame_index++;
     }
 }
-
 
 auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipeline, Error> {
 
@@ -780,7 +760,6 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
     };
 }
 
-
 auto ImGuiRenderer::update_font(FontChoice f) -> void {
     ImGuiIO &io = ImGui::GetIO();
     ImFontConfig cfg = ImFontConfig();
@@ -818,6 +797,7 @@ auto ImGuiRenderer::update_font(FontChoice f) -> void {
 
     sampler = Holder{ctx, ctx.create_sampler(ci, "imgui_linear_clamp")};
 }
+
 auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey {
     switch (key) {
         case GLFW_KEY_TAB:
