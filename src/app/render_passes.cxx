@@ -1,4 +1,5 @@
 #include "app/render_passes.hxx"
+#include "vulkan/vulkan_core.h"
 
 
 namespace {
@@ -121,7 +122,7 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent, const DrawRange
                 VkRenderingAttachmentInfo depth_attachment{};
                 depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                 depth_attachment.imageView = depth->attachment_view;
-                depth_attachment.imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+                depth_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                 depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
                 depth_attachment.clearValue = {.depthStencil = {0.0f, 0}};
@@ -353,7 +354,7 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
                 auto init_color = [&](VkRenderingAttachmentInfo &a, VkImageView view) {
                     a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                     a.imageView = view;
-                    a.imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+                    a.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                     a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                     a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
                     a.clearValue = {.color = {.float32 = {0, 0, 0, 0}}};
@@ -365,7 +366,7 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
                 VkRenderingAttachmentInfo depth_att{};
                 depth_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                 depth_att.imageView = depth->attachment_view;
-                depth_att.imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+                depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // keep predepth
                 depth_att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // no need to store
                 depth_att.clearValue = {.depthStencil = {0.0f, 0}};
@@ -572,7 +573,7 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                 VkRenderingAttachmentInfo lit_att{};
                 lit_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                 lit_att.imageView = lit->attachment_view;
-                lit_att.imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+                lit_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 lit_att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                 lit_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
                 lit_att.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
@@ -653,44 +654,63 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
 auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 bounded_frame_index,
                       const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
+
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
                 TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "Tonemapping");
 
-                auto &&ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
+                auto *ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::TonemapBegin);
+
                 auto *pool = begin_query_for_index(ctx.gpu.ctx, cmd, GraphicsIndex::Tonemap,
                                                    pipes.graphics_stats_pool[bounded_frame_index]);
 
-
                 auto *tonemap = gpu.ctx.pipeline_pool.get(pipes.tonemap_pipeline);
 
-                auto &&hdr = gpu.ctx.textures.get(res.lit_hdr);
-                auto &&ldr = gpu.ctx.textures.get(res.tonemapped);
+                auto *hdr = gpu.ctx.textures.get(res.lit_hdr);
+                auto *ldr = gpu.ctx.textures.get(res.tonemapped);
 
-                hdr->transition(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                // GENERAL everywhere: make sure resources are at least initialised to GENERAL (UNDEFINED -> GENERAL
+                // once)
+                hdr->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
+                                                   {VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                                                    VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
 
-                ldr->transition(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                ldr->transition_if_not_initialised(
+                        cmd, VK_IMAGE_LAYOUT_GENERAL,
+                        {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
 
+                // Order: previous HDR writes -> fragment sampling in tonemap
+                // (layout stays GENERAL; this is purely an execution+access barrier)
+                auto hdr_to_sample = create_info<VkImageMemoryBarrier2>();
+                hdr_to_sample.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                hdr_to_sample.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                hdr_to_sample.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                hdr_to_sample.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                hdr_to_sample.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                hdr_to_sample.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                hdr_to_sample.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                hdr_to_sample.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                hdr_to_sample.image = hdr->image;
+                hdr_to_sample.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-                VkRenderingAttachmentInfo color_attachment{};
-                color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                color_attachment.imageView = ldr->sampled_view;
-                color_attachment.imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+                auto dep_hdr = create_info<VkDependencyInfo>();
+                dep_hdr.imageMemoryBarrierCount = 1;
+                dep_hdr.pImageMemoryBarriers = &hdr_to_sample;
+                vkCmdPipelineBarrier2(cmd, &dep_hdr);
+
+                // Dynamic rendering with GENERAL layout
+                auto color_attachment = create_info<VkRenderingAttachmentInfo>();
+                color_attachment.imageView =
+                        ldr->attachment_view; // must match pipeline rendering format (R8G8B8A8_UNORM)
+                color_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                 color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
                 color_attachment.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 
-                VkRenderingInfo ri{};
-                ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                ri.renderArea = {.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
+                auto ri = create_info<VkRenderingInfo>();
+                ri.renderArea = {.offset = {0, 0}, .extent = frame_extent};
                 ri.layerCount = 1;
                 ri.colorAttachmentCount = 1;
                 ri.pColorAttachments = &color_attachment;
@@ -698,17 +718,14 @@ auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 
                 vkCmdBeginRendering(cmd, &ri);
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemap->pipeline);
-
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemap->layout, 0, 1, &gpu.bindless.set,
                                         0, nullptr);
 
-                float exposure = 1.0f;
                 TonemapPushConstants pc{
-                        .exposure = exposure,
+                        .exposure = 1.0f,
                         .image_index = res.lit_hdr.index(),
                         .sampler_index = pipes.linear_clamp.index(),
                 };
-
 
                 auto &&[vp, sc] = viewport_scissors(frame_extent);
                 vkCmdSetViewport(cmd, 0, 1, &vp);
@@ -727,115 +744,76 @@ auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 
             sync);
 }
 
-auto run_imgui_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
-    return submit_stage(
-            gpu.tl_graphics, gpu.device,
-            [&](VkCommandBuffer cmd) {
-                TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "ImGui");
-
-                auto &&ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::UIBegin);
-                auto *pool = begin_query_for_index(ctx.gpu.ctx, cmd, GraphicsIndex::UI,
-                                                   pipes.graphics_stats_pool[bounded_frame_index]);
-
-                auto &&ldr = gpu.ctx.textures.get(res.tonemapped);
-
-                ldr->transition(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-
-                VkRenderingAttachmentInfo color_attachment{};
-                color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                color_attachment.imageView = ldr->sampled_view;
-                color_attachment.imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
-                color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-                VkRenderingInfo ri{};
-                ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                ri.renderArea.offset = {.x = 0, .y = 0};
-                ri.renderArea.extent = {
-                        .width = gpu.swapchain.extent().width,
-                        .height = gpu.swapchain.extent().height,
-                };
-                ri.layerCount = 1;
-                ri.colorAttachmentCount = 1;
-                ri.pColorAttachments = &color_attachment;
-
-                vkCmdBeginRendering(cmd, &ri);
-
-                ui.gui->end_frame(cmd);
-
-                vkCmdEndRendering(cmd);
-
-                ldr->transition(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                VK_IMAGE_LAYOUT_GENERAL, // or PRESENT_SRC_KHR if final
-                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, VK_ACCESS_2_NONE);
-
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::UIEnd);
-                end_query_for_index(cmd, GraphicsIndex::UI, pool);
-            },
-            sync);
-}
-
 auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 bounded_frame_index,
                         const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
+
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
-                TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "PresentFullscreen");
+                TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "Present+ImGui");
+
+                auto *ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::PresentBegin);
 
                 auto *pool = begin_query_for_index(ctx.gpu.ctx, cmd, GraphicsIndex::Present,
                                                    pipes.graphics_stats_pool[bounded_frame_index]);
 
-                auto &&tonemapped = gpu.ctx.textures.get(res.tonemapped);
+                auto *tonemapped = gpu.ctx.textures.get(res.tonemapped);
                 auto *present = gpu.ctx.pipeline_pool.get(pipes.present_pipeline);
 
                 VkImage dst_image = gpu.swapchain.image(swap_image_index);
-                VkImageView dst_view = gpu.swapchain.image_view(swap_image_index); // MUST be identity swizzle
+                VkImageView dst_view = gpu.swapchain.image_view(swap_image_index); // identity swizzle
 
-                auto ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::PresentBegin);
+                // Ensure tonemapped is initialised to GENERAL if it was recreated (UNDEFINED -> GENERAL once)
+                tonemapped->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
+                                                          {VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                                                           VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
 
-                tonemapped->transition(cmd, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                       VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+                // Order: tonemap writes -> fragment sampling in present shader (layout stays GENERAL)
+                auto tonemap_to_sample = create_info<VkImageMemoryBarrier2>();
+                tonemap_to_sample.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                tonemap_to_sample.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                tonemap_to_sample.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                tonemap_to_sample.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                tonemap_to_sample.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                tonemap_to_sample.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                tonemap_to_sample.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                tonemap_to_sample.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                tonemap_to_sample.image = tonemapped->image;
+                tonemap_to_sample.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-                auto to_color = create_info<VkImageMemoryBarrier2>();
-                to_color.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                to_color.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
-                to_color.srcAccessMask = VK_ACCESS_2_NONE;
-                to_color.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                to_color.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-                to_color.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                to_color.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                to_color.image = dst_image;
-                to_color.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                             .baseMipLevel = 0,
-                                             .levelCount = 1,
-                                             .baseArrayLayer = 0,
-                                             .layerCount = 1};
+                auto dep_tm = create_info<VkDependencyInfo>();
+                dep_tm.imageMemoryBarrierCount = 1;
+                dep_tm.pImageMemoryBarriers = &tonemap_to_sample;
+                vkCmdPipelineBarrier2(cmd, &dep_tm);
 
-                auto dep_to_color = create_info<VkDependencyInfo>();
-                dep_to_color.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep_to_color.imageMemoryBarrierCount = 1;
-                dep_to_color.pImageMemoryBarriers = &to_color;
-                vkCmdPipelineBarrier2(cmd, &dep_to_color);
+                // Swapchain image: transition to GENERAL for rendering
+                auto to_general = create_info<VkImageMemoryBarrier2>();
+                to_general.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                to_general.srcAccessMask = VK_ACCESS_2_NONE;
+                to_general.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                to_general.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                to_general.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; // ok if you don't track; otherwise PRESENT_SRC_KHR
+                to_general.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                to_general.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                to_general.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                to_general.image = dst_image;
+                to_general.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+                auto dep_to_general = create_info<VkDependencyInfo>();
+                dep_to_general.imageMemoryBarrierCount = 1;
+                dep_to_general.pImageMemoryBarriers = &to_general;
+                vkCmdPipelineBarrier2(cmd, &dep_to_general);
 
                 auto color_attachment = create_info<VkRenderingAttachmentInfo>();
-                color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                 color_attachment.imageView = dst_view;
-                color_attachment.imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
-                color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                color_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                 color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                color_attachment.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
 
                 auto ri = create_info<VkRenderingInfo>();
-                ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
                 ri.renderArea = {.offset = {0, 0}, .extent = gpu.swapchain.extent()};
                 ri.layerCount = 1;
                 ri.colorAttachmentCount = 1;
@@ -843,6 +821,7 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
 
                 vkCmdBeginRendering(cmd, &ri);
 
+                // 1) Present fullscreen pass (samples tonemapped)
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->pipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->layout, 0, 1, &gpu.bindless.set,
                                         0, nullptr);
@@ -850,6 +829,7 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                 auto &&[vp, sc] = viewport_scissors(gpu.swapchain.extent());
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &sc);
+
                 const bool swap_is_srgb = gpu.swapchain.format() == VK_FORMAT_B8G8R8A8_SRGB ||
                                           gpu.swapchain.format() == VK_FORMAT_R8G8B8A8_SRGB;
 
@@ -864,23 +844,22 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
 
                 vkCmdDraw(cmd, 3, 1, 0, 0);
 
+                ui.gui->render(cmd);
 
                 vkCmdEndRendering(cmd);
 
-                VkImageMemoryBarrier2 to_present{
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                        .pNext = nullptr,
-                        .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-                        .dstAccessMask = VK_ACCESS_2_NONE,
-                        .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                        .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = dst_image,
-                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-                };
+                auto to_present = create_info<VkImageMemoryBarrier2>();
+                to_present.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                to_present.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                to_present.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+                to_present.dstAccessMask = VK_ACCESS_2_NONE;
+                to_present.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                to_present.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                to_present.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                to_present.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                to_present.image = dst_image;
+                to_present.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
                 auto dep_to_present = create_info<VkDependencyInfo>();
                 dep_to_present.imageMemoryBarrierCount = 1;
                 dep_to_present.pImageMemoryBarriers = &to_present;

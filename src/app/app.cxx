@@ -24,6 +24,12 @@
 
 extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 
+// app/app.hxx (or wherever your callbacks live)
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <imgui.h>
+
+
 namespace {
     static GLFWkeyfun imgui_key_callback = nullptr;
     static GLFWcharfun imgui_char_callback = nullptr;
@@ -31,9 +37,39 @@ namespace {
     static GLFWcursorposfun imgui_cursor_pos_callback = nullptr;
     static GLFWscrollfun imgui_scroll_callback = nullptr;
 
+    static auto update_mouse_delta(AppState &app, glm::vec2 pos) -> glm::vec2 {
+        glm::vec2 delta{0.0f};
+
+        if (!app.mouse_inited) {
+            app.last_mouse = pos;
+            app.mouse_inited = true;
+            return delta;
+        }
+
+        delta = pos - app.last_mouse;
+        app.last_mouse = pos;
+        return delta;
+    }
+
+    auto vi(const AppState &app) -> const auto & { return app.viewport_input; }
+
+    static auto route_keyboard_to_app(AppState const &app) -> bool {
+        return vi(app).focused && !vi(app).imgui_blocks_keyboard;
+    }
+
+    static auto route_text_to_app(AppState const &app) -> bool {
+        return vi(app).focused && !vi(app).imgui_blocks_keyboard;
+    }
+
+    static auto route_mouse_to_app(AppState const &app) -> bool {
+        return vi(app).hovered && !vi(app).imgui_blocks_mouse;
+    }
+
     auto set_window_callbacks(GLFWwindow *window, AppUI &ui) -> void {
         glfwSetWindowUserPointer(window, &ui.app_state);
 
+        // Detach any existing callbacks (ImGui backend may have installed them),
+        // store them so we can forward into them.
         imgui_key_callback = glfwSetKeyCallback(window, nullptr);
         imgui_char_callback = glfwSetCharCallback(window, nullptr);
         imgui_mouse_button_callback = glfwSetMouseButtonCallback(window, nullptr);
@@ -46,27 +82,28 @@ namespace {
             }
 
             auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-            auto &io = ImGui::GetIO();
 
             if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
                 glfwSetWindowShouldClose(w, GLFW_TRUE);
                 return;
             }
 
-            if (!io.WantCaptureKeyboard) {
-                if (action == GLFW_PRESS) {
-                    auto event = std::make_unique<KeyPressedEvent>();
-                    event->key = key;
-                    event->scancode = scancode;
-                    event->mods = mods;
-                    app.event_system.push_event(std::move(event));
-                } else if (action == GLFW_RELEASE) {
-                    auto event = std::make_unique<KeyReleasedEvent>();
-                    event->key = key;
-                    event->scancode = scancode;
-                    event->mods = mods;
-                    app.event_system.push_event(std::move(event));
-                }
+            if (!route_keyboard_to_app(app)) {
+                return;
+            }
+
+            if (action == GLFW_PRESS) {
+                auto event = std::make_unique<KeyPressedEvent>();
+                event->key = key;
+                event->scancode = scancode;
+                event->mods = mods;
+                app.event_system.push_event(std::move(event));
+            } else if (action == GLFW_RELEASE) {
+                auto event = std::make_unique<KeyReleasedEvent>();
+                event->key = key;
+                event->scancode = scancode;
+                event->mods = mods;
+                app.event_system.push_event(std::move(event));
             }
         });
 
@@ -76,13 +113,14 @@ namespace {
             }
 
             auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-            auto &io = ImGui::GetIO();
 
-            if (!io.WantCaptureKeyboard) {
-                auto event = std::make_unique<CharInputEvent>();
-                event->codepoint = c;
-                app.event_system.push_event(std::move(event));
+            if (!route_text_to_app(app)) {
+                return;
             }
+
+            auto event = std::make_unique<CharInputEvent>();
+            event->codepoint = c;
+            app.event_system.push_event(std::move(event));
         });
 
         glfwSetMouseButtonCallback(window, [](GLFWwindow *w, int button, int action, int mods) {
@@ -91,20 +129,51 @@ namespace {
             }
 
             auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-            auto &io = ImGui::GetIO();
 
-            if (!io.WantCaptureMouse) {
-                if (action == GLFW_PRESS) {
-                    auto event = std::make_unique<MouseButtonPressedEvent>();
-                    event->button = button;
-                    event->mods = mods;
-                    app.event_system.push_event(std::move(event));
-                } else if (action == GLFW_RELEASE) {
-                    auto event = std::make_unique<MouseButtonReleasedEvent>();
-                    event->button = button;
-                    event->mods = mods;
-                    app.event_system.push_event(std::move(event));
+            const bool alt_down =
+                    glfwGetKey(w, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+
+            // --- RMB fly look (unchanged) ---
+            if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+                if (action == GLFW_PRESS && app.viewport_input.hovered) {
+                    app.cam_in.rmb = true;
+                    begin_cursor_capture(w, app);
+                } else if (action == GLFW_RELEASE && app.cam_in.rmb) {
+                    app.cam_in.rmb = false;
+                    end_cursor_capture(w, app);
                 }
+                return;
+            }
+
+            // --- Alt + LMB orbit capture ---
+            if (button == GLFW_MOUSE_BUTTON_LEFT && alt_down) {
+                if (action == GLFW_PRESS && app.viewport_input.hovered) {
+                    app.cam_in.lmb = true;
+                    app.cam_in.orbit_capture = true;
+                    begin_cursor_capture(w, app);
+                } else if (action == GLFW_RELEASE && app.cam_in.orbit_capture) {
+                    app.cam_in.lmb = false;
+                    app.cam_in.orbit_capture = false;
+                    end_cursor_capture(w, app);
+                }
+                return;
+            }
+            const bool camera_capturing = app.cam_in.rmb || app.cam_in.orbit_capture;
+            // --- normal mouse routing ---
+            if (!camera_capturing && !route_mouse_to_app(app)) {
+                return;
+            }
+
+            if (action == GLFW_PRESS) {
+                auto e = std::make_unique<MouseButtonPressedEvent>();
+                e->button = button;
+                e->mods = mods;
+                app.event_system.push_event(std::move(e));
+            } else if (action == GLFW_RELEASE) {
+                auto e = std::make_unique<MouseButtonReleasedEvent>();
+                e->button = button;
+                e->mods = mods;
+                app.event_system.push_event(std::move(e));
             }
         });
 
@@ -114,26 +183,47 @@ namespace {
             }
 
             auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-            auto &io = ImGui::GetIO();
+
+            // ignore the synthetic event produced by glfwSetCursorPos()
+            if (app.warp_in_progress) {
+                app.warp_in_progress = false;
+                app.last_mouse = app.warp_center;
+                app.mouse_inited = true;
+                return;
+            }
 
             const glm::vec2 pos{static_cast<float>(x), static_cast<float>(y)};
-            glm::vec2 delta{0.0f};
+            const glm::vec2 delta = update_mouse_delta(app, pos);
 
-            if (!app.mouse_inited) {
-                app.last_mouse = pos;
-                app.mouse_inited = true;
-            } else {
-                delta = pos - app.last_mouse;
-                app.last_mouse = pos;
+            const bool capturing = app.cam_in.rmb || app.cam_in.orbit_capture;
+
+            if (capturing) {
+                // always feed camera deltas while captured (ignore hover/focus/imgui)
+                if (delta.x != 0.0f || delta.y != 0.0f) {
+                    auto e = std::make_unique<CursorMovedEvent>();
+                    e->position = pos;
+                    e->delta = delta;
+                    app.event_system.push_event(std::move(e));
+                }
+
+                // warp-to-center to prevent edge clamp
+                app.warp_center = window_center(w);
+                app.warp_in_progress = true;
+                glfwSetCursorPos(w, app.warp_center.x, app.warp_center.y);
+                return;
             }
 
-            if (!io.WantCaptureMouse) {
-                auto event = std::make_unique<CursorMovedEvent>();
-                event->position = pos;
-                event->delta = delta;
-                app.event_system.push_event(std::move(event));
+            // not capturing => normal gating
+            if (!route_mouse_to_app(app)) {
+                return;
             }
+
+            auto e = std::make_unique<CursorMovedEvent>();
+            e->position = pos;
+            e->delta = delta;
+            app.event_system.push_event(std::move(e));
         });
+
 
         glfwSetScrollCallback(window, [](GLFWwindow *w, double xoff, double yoff) {
             if (imgui_scroll_callback) {
@@ -141,28 +231,35 @@ namespace {
             }
 
             auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-            auto &io = ImGui::GetIO();
+            const bool capturing = app.cam_in.rmb || app.cam_in.orbit_capture;
 
-            if (!io.WantCaptureMouse) {
-                auto event = std::make_unique<ScrollEvent>();
-                event->x_offset = static_cast<float>(xoff);
-                event->y_offset = static_cast<float>(yoff);
-                app.event_system.push_event(std::move(event));
+            if (!capturing && !route_mouse_to_app(app)) {
+                return;
             }
+
+            auto e = std::make_unique<ScrollEvent>();
+            e->x_offset = static_cast<float>(xoff);
+            e->y_offset = static_cast<float>(yoff);
+            app.event_system.push_event(std::move(e));
         });
 
-        glfwSetWindowSizeCallback(window, [](auto w, auto, auto) {
+        glfwSetWindowSizeCallback(window, [](GLFWwindow *w, int, int) {
             auto &data = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
             data.resized = true;
         });
 
-        glfwSetFramebufferSizeCallback(window, [](auto w, auto, auto) {
+        glfwSetFramebufferSizeCallback(window, [](GLFWwindow *w, int, int) {
             auto &data = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
             data.resized = true;
         });
     }
 
-    auto wire_event_dispatch(GLFWwindow *window, AppUI &ui) -> void {
+} // namespace
+
+
+namespace {
+
+    auto wire_event_dispatch(AppUI &ui) -> void {
         ui.app_state.event_system.set_event_callback([&](Event &e) {
             EventDispatcher dispatcher(e);
 
@@ -205,7 +302,6 @@ namespace {
                     return true;
                 } else if (event.button == GLFW_MOUSE_BUTTON_RIGHT) {
                     ui.app_state.cam_in.rmb = true;
-                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                     return true;
                 }
                 return false;
@@ -220,7 +316,6 @@ namespace {
                     return true;
                 } else if (event.button == GLFW_MOUSE_BUTTON_RIGHT) {
                     ui.app_state.cam_in.rmb = false;
-                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
                     return true;
                 }
                 return false;
@@ -238,7 +333,10 @@ namespace {
         });
     }
 
+
 } // namespace
+
+
 auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int, Error> {
 
     AppGpuState gpu{};
@@ -644,73 +742,22 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                               .value());
 
     set_window_callbacks(gpu.window, ui);
-    wire_event_dispatch(gpu.window, ui);
+    wire_event_dispatch(ui);
 
     glfwShowWindow(gpu.window);
     glfwFocusWindow(gpu.window);
 
-    VkExtent2D last_extent = current_extent(gpu.window);
-    ResizeGraph resize_graph{};
+    ResizeGraph window_resize_graph{};
+    ResizeGraph scene_resize_graph{};
     u32 pipelines_node{};
-
     {
-        const auto swapchain_node =
-                resize_graph.add_node("swapchain", [&](VkExtent2D new_extent, const ResizeContext &) {
-                    if (auto r = gpu.swapchain.recreate(new_extent); !r) {
-                        vk_check(r.error());
-                    }
-                });
-
-        const auto tonemapped_node =
-                resize_graph.add_node("tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
-                    const auto old_tonemap = res.tonemapped;
-
-                    res.tonemapped = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "tonemapped"));
-                    destroy(gpu.ctx, old_tonemap, resize_context.retire_value);
-                });
-
-        const auto offscreen_node = resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
-                                                                                   const ResizeContext &rc) {
-            const auto old_g0 = res.gbuffer0;
-            const auto old_g1 = res.gbuffer1;
-            const auto old_g2 = res.gbuffer2;
-            const auto old_culling = res.debug_culling;
-            const auto old_hdr = res.lit_hdr;
-            const auto old_depth = res.depth;
-
-            res.gbuffer0 = gpu.ctx.create_texture(create_offscreen_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "gbuffer0_albedo_ao"));
-
-            res.gbuffer1 = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
-                                                                          VK_FORMAT_R16G16B16A16_SFLOAT, {},
-                                                                          "gbuffer1_normal_rough_metal"));
-
-            res.gbuffer2 = gpu.ctx.create_texture(create_offscreen_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
-
-            res.debug_culling = gpu.ctx.create_texture(create_offscreen_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
-
-            res.depth = gpu.ctx.create_texture(create_depth_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, false, "depth"));
-
-            res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
-                                                                         VK_FORMAT_R16G16B16A16_SFLOAT, {}, "lit_hdr"));
-
-            destroy(gpu.ctx, old_g0, rc.retire_value);
-            destroy(gpu.ctx, old_g1, rc.retire_value);
-            destroy(gpu.ctx, old_g2, rc.retire_value);
-            destroy(gpu.ctx, old_hdr, rc.retire_value);
-            destroy(gpu.ctx, old_depth, rc.retire_value);
-            destroy(gpu.ctx, old_culling, rc.retire_value);
+        window_resize_graph.add_node("swapchain", [&](VkExtent2D new_extent, const ResizeContext &) {
+            if (auto r = gpu.swapchain.recreate(new_extent); !r) {
+                vk_check(r.error());
+            }
         });
 
-        const auto uniforms_node = resize_graph.add_node("frame_ubo_camera", [&](VkExtent2D, const ResizeContext &) {
-            // no-op for now
-        });
-
-        pipelines_node = resize_graph.add_node(
+        pipelines_node = window_resize_graph.add_node(
                 "pipelines",
                 [&](VkExtent2D, const ResizeContext &rc) {
                     const auto old_gbuffer_pipeline_lighting = pipes.gbuffer_pipeline_lighting;
@@ -857,27 +904,79 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     destroy(gpu.ctx, old_present_pipeline, rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
-
-        resize_graph.add_dependency(tonemapped_node, offscreen_node);
-        resize_graph.add_dependency(offscreen_node, swapchain_node);
-        resize_graph.add_dependency(pipelines_node, offscreen_node);
-        resize_graph.add_dependency(uniforms_node, swapchain_node);
     }
 
-    resize_graph.rebuild(last_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0});
+    {
+        const auto offscreen_node = scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
+                                                                                         const ResizeContext &rc) {
+            const auto old_g0 = res.gbuffer0;
+            const auto old_g1 = res.gbuffer1;
+            const auto old_g2 = res.gbuffer2;
+            const auto old_culling = res.debug_culling;
+            const auto old_hdr = res.lit_hdr;
+            const auto old_depth = res.depth;
 
-    // --- ImGui renderer + shader watcher ---
+            res.gbuffer0 = gpu.ctx.create_texture(create_offscreen_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "gbuffer0_albedo_ao"));
+
+            res.gbuffer1 = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
+                                                                          VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                                                          "gbuffer1_normal_rough_metal"));
+
+            res.gbuffer2 = gpu.ctx.create_texture(create_offscreen_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
+
+            res.debug_culling = gpu.ctx.create_texture(create_offscreen_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
+
+            res.depth = gpu.ctx.create_texture(create_depth_target(
+                    gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, false, "depth"));
+
+            res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
+                                                                         VK_FORMAT_R16G16B16A16_SFLOAT, {}, "lit_hdr"));
+
+            destroy(gpu.ctx, old_g0, rc.retire_value);
+            destroy(gpu.ctx, old_g1, rc.retire_value);
+            destroy(gpu.ctx, old_g2, rc.retire_value);
+            destroy(gpu.ctx, old_hdr, rc.retire_value);
+            destroy(gpu.ctx, old_depth, rc.retire_value);
+            destroy(gpu.ctx, old_culling, rc.retire_value);
+        });
+
+        const auto tonemapped_node =
+                scene_resize_graph.add_node("tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
+                    const auto old_tonemap = res.tonemapped;
+
+                    res.tonemapped = gpu.ctx.create_texture(create_offscreen_target(
+                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "tonemapped"));
+                    destroy(gpu.ctx, old_tonemap, resize_context.retire_value);
+                });
+
+        scene_resize_graph.add_dependency(tonemapped_node, offscreen_node);
+    }
+
+    VkExtent2D last_window_extent =
+            sanitize_window_extent(current_extent(gpu.window), gpu.physical_device, gpu.surface);
+    VkExtent2D last_scene_extent = VkExtent2D{opts.width, opts.height};
+
+    window_resize_graph.rebuild(last_window_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
+                                ResizeTrigger::Extent);
+    scene_resize_graph.rebuild(last_scene_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
+                               ResizeTrigger::Extent);
+
+    ui.last_viewport_extent = last_scene_extent;
+
     ui.gui = std::make_unique<ImGuiRenderer>(gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx,
                                              gpu.command_context, *gpu.compiler);
 
-    auto gui_pipeline_node = resize_graph.add_node(
+    auto gui_pipeline_node = window_resize_graph.add_node(
             "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },
             ResizeTrigger::Shaders);
-    resize_graph.add_dependency(gui_pipeline_node, pipelines_node);
+    window_resize_graph.add_dependency(gui_pipeline_node, pipelines_node);
 
     ui.watcher = std::unique_ptr<efsw::FileWatcher, Deleter>(new efsw::FileWatcher(false), Deleter{});
     ui.listeners["update"] = std::unique_ptr<efsw::FileWatchListener, Deleter>(
-            new ShaderSourceCodeChangeListener(&resize_graph), Deleter{});
+            new ShaderSourceCodeChangeListener(&window_resize_graph), Deleter{});
     std::ignore = ui.watcher->addWatch("shaders", ui.listeners["update"].get(), true,
                                        {efsw::WatcherOption(efsw::Option::WinBufferSize, 128 * 1024)});
     ui.watcher->watch();
@@ -901,69 +1000,24 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     while (!glfwWindowShouldClose(gpu.window)) {
         glfwPollEvents();
+        handle_bindless_repopulation(app_context, window_resize_graph);
 
-        const u64 completed_now = std::min(gpu.tl_compute.completed, gpu.tl_graphics.completed);
-        glfwPollEvents();
+        update_frame_timing(ui);
+        const auto [bounded_frame_index, last_frame_index] = frame_indices(ui);
 
-        auto current_frame_time = std::chrono::high_resolution_clock::now();
-        ui.dt = std::chrono::duration<double>(current_frame_time - ui.last_frame_time).count();
-        ui.last_frame_time = current_frame_time;
-
-        const auto frame_extent = gpu.swapchain.extent();
-        auto start_time = std::chrono::high_resolution_clock::now();
-
-        const auto bounded_frame_index = static_cast<u32>(ui.frame_index % frames_in_flight);
-        const auto last_frame_index = static_cast<u32>((ui.frame_index + frames_in_flight - 1u) % frames_in_flight);
-
-        const auto window_extent = current_extent(gpu.window);
-
-        ui.gui->begin_frame(ImGuiFramebuffer(window_extent, gpu.ctx.texture_format(res.tonemapped),
-                                             gpu.swapchain.format(), gpu.swapchain.color_space()));
-
-        VkExtent2D viewport_extent{};
-        draw_ui(app_context, bounded_frame_index, viewport_extent);
-
-        if (viewport_extent.width > 4096 || viewport_extent.height > 4096) {
-            viewport_extent = gpu.swapchain.extent();
+        auto ui_frame = run_ui_frame(app_context);
+        if (ui_frame.minimized) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            continue;
         }
 
-        if (viewport_extent.width == 0 || viewport_extent.height == 0) {
-            viewport_extent.width = 1280;
-            viewport_extent.height = 720;
-        }
+        VkExtent2D render_scene_extent = choose_render_scene_extent(ui, ui_frame.desired_scene_extent);
 
-        ResizeTrigger manual_trigger = resize_graph.get_and_clear_triggers();
-        const bool window_resized =
-                (window_extent.width != last_extent.width || window_extent.height != last_extent.height);
-        const bool viewport_resized = (viewport_extent.width != ui.last_viewport_extent.width ||
-                                       viewport_extent.height != ui.last_viewport_extent.height);
-        if (window_resized || manual_trigger != ResizeTrigger::None) {
-            if ((window_extent.width == 0 || window_extent.height == 0) ||
-                (viewport_extent.width == 0 || viewport_extent.height == 0)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                continue;
-            }
+        update_pending_resize(ui, ui_frame.desired_scene_extent);
 
-            last_extent = window_extent;
-
-            res.clustering_config = cluster_config(16, 9, 16, 0.1F, 1000.0F);
-
-
-            last_extent = window_extent;
-            ui.last_viewport_extent = viewport_extent;
-
-            ResizeTrigger final_trigger = manual_trigger;
-            if (window_resized || viewport_resized) {
-                final_trigger = final_trigger | ResizeTrigger::Extent;
-            }
-
-            info("Resize trigger to rebuild: {}", to_string(final_trigger));
-            resize_graph.rebuild(viewport_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = completed_now},
-                                 final_trigger);
-
-            if (window_resized) {
-                continue;
-            }
+        if (commit_resizes(app_context, window_resize_graph, scene_resize_graph, ui_frame.window_extent,
+                           last_window_extent, render_scene_extent)) {
+            continue;
         }
 
 
@@ -974,8 +1028,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         constexpr float fov_y = glm::radians(70.0f);
         constexpr float z_near = 0.1f;
 
-        write_camera_to_frame_ubo(gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam, frame_extent,
-                                  fov_y, z_near);
+        write_camera_to_frame_ubo(gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam,
+                                  render_scene_extent, fov_y, z_near);
 
         ui.total_time += ui.dt;
         {
@@ -992,15 +1046,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         const auto ranges = write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,
                                                 res.draw_material_id_ring, res.mesh.mesh, res.instance_count, 0u);
 
-        if (gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers)) {
-            resize_graph.rebuild(current_extent(gpu.window),
-                                 ResizeContext{.ctx = gpu.ctx, .retire_value = completed_now}, ResizeTrigger::Shaders);
-            info("Bindless set was repopulated, resizing pipelines.");
-            continue;
-        }
 
         auto &fs = res.frames[bounded_frame_index];
-
 
         if (fs.frame_done_value > 0) {
             VkSemaphoreWaitInfo wi{
@@ -1058,7 +1105,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             }};
 
             fs.timeline_values[stage_index(Stage::Predepth)] =
-                    run_predepth_pass(app_context, viewport_extent, ranges, bounded_frame_index,
+                    run_predepth_pass(app_context, render_scene_extent, ranges, bounded_frame_index,
                                       SubmitSynchronisation{.timeline_waits = cube_rotate_waits});
         }
 
@@ -1101,7 +1148,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     },
             };
             fs.timeline_values[stage_index(Stage::GBuffer)] =
-                    run_gbuffer_pass(app_context, viewport_extent, ranges, bounded_frame_index,
+                    run_gbuffer_pass(app_context, render_scene_extent, ranges, bounded_frame_index,
                                      SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         }
 
@@ -1119,7 +1166,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     },
             };
             fs.timeline_values[stage_index(Stage::DeferredLighting)] = run_deferred_lighting_pass(
-                    app_context, viewport_extent, {compact_addr, cluster_light_indices_addr}, bounded_frame_index,
+                    app_context, render_scene_extent, {compact_addr, cluster_light_indices_addr}, bounded_frame_index,
                     SubmitSynchronisation{.timeline_waits = deferred_waits});
         }
 
@@ -1132,25 +1179,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     },
             };
             fs.timeline_values[stage_index(Stage::Tonemapping)] =
-                    run_tonemap_pass(app_context, viewport_extent, bounded_frame_index,
+                    run_tonemap_pass(app_context, render_scene_extent, bounded_frame_index,
                                      SubmitSynchronisation{.timeline_waits = tonemap_waits});
-        }
-
-        {
-            const std::array imgui_waits{
-                    TimelineWait{
-                            .value = fs.timeline_values[stage_index(Stage::Tonemapping)],
-                            .semaphore = gpu.tl_graphics.timeline,
-                    },
-            };
-            fs.timeline_values[stage_index(Stage::UI)] = run_imgui_pass(
-                    app_context, bounded_frame_index, SubmitSynchronisation{.timeline_waits = imgui_waits});
         }
 
         {
             const std::array present_timeline_waits = {
                     TimelineWait{
-                            .value = fs.timeline_values[stage_index(Stage::UI)],
+                            .value = fs.timeline_values[stage_index(Stage::Tonemapping)],
                             .semaphore = gpu.tl_graphics.timeline,
                     },
             };
@@ -1172,7 +1208,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         gpu.ctx.destroy_queue.retire(completed);
 
         auto frame_end = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(frame_end - start_time).count();
+        auto ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(ui.last_frame_time - frame_end)
+                          .count();
         stats.add_sample(ms);
 
         const VkResult present_res =

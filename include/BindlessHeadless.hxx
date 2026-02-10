@@ -91,7 +91,6 @@ enum class Stage : u32 {
     CubeRotation = 4,
     DeferredLighting = 5,
     LightClustering = 6,
-    UI = 7,
     Count,
 };
 
@@ -360,11 +359,9 @@ enum class GraphicsStamp : u32 {
     TonemapEnd,
     PresentBegin,
     PresentEnd,
-    UIBegin,
-    UIEnd,
     Count
 };
-enum class GraphicsIndex : u32 { PreDepth = 0, GBuffer = 1, Deferred = 2, Tonemap = 3, Present = 4, UI = 5, Count };
+enum class GraphicsIndex : u32 { PreDepth = 0, GBuffer = 1, Deferred = 2, Tonemap = 3, Present = 4, Count };
 
 inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
 inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);

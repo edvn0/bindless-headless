@@ -21,6 +21,7 @@
 #include "app/math.hxx"
 #include "app/render.hxx"
 #include "ui/PerformanceGraph.hxx"
+#include "vulkan/vulkan_core.h"
 
 struct InstanceWithDebug;
 
@@ -141,15 +142,49 @@ struct AppResources {
     } draw_stream{};
 };
 
+
+struct ViewportInput {
+    ImVec2 min{};
+    ImVec2 max{};
+
+    bool hovered{false};
+    bool focused{false};
+
+    ImGuiID viewport_item_id{0};
+    ImGuiID hovered_id{0};
+    ImGuiID active_id{0};
+
+    bool imgui_blocks_mouse{false};
+    bool imgui_blocks_keyboard{false};
+
+    auto extent() const -> VkExtent2D {
+        return VkExtent2D{static_cast<u32>(std::max(1.0f, max.x - min.x)),
+                          static_cast<u32>(std::max(1.0f, max.y - min.y))};
+    }
+};
+
 struct AppState {
     bool resized{false};
 
     glm::vec2 last_mouse{0.0f, 0.0f};
     bool mouse_inited{false};
     EventSystem event_system{};
+    ViewportInput viewport_input{};
+    bool warp_in_progress{false};
+    glm::vec2 warp_center{0.0f, 0.0f};
+
+    bool cursor_captured{false}; // optional, but makes logic simpler
 
     CameraInput cam_in{};
     EditorCamera cam{};
+};
+
+struct PendingResize {
+    VkExtent2D desired{0, 0};
+    bool has{false};
+
+    bool was_down{false};
+    double last_change_time_s{0.0};
 };
 
 struct AppUI {
@@ -160,9 +195,11 @@ struct AppUI {
 
     u64 frame_index{};
     std::chrono::high_resolution_clock::time_point last_frame_time{};
-    VkExtent2D last_viewport_extent = {0, 0};
     double dt{0.0};
     double total_time{0.0};
+
+    VkExtent2D last_viewport_extent = {0, 0};
+    PendingResize pending_resize{};
 
     enum class ClusterDebugMode : u32 {
         None = 0,

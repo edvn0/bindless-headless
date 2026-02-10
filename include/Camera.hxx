@@ -13,6 +13,8 @@ struct CameraInput {
     bool shift{false};
     bool ctrl{false};
 
+    bool orbit_capture{false}; // NEW
+
     glm::vec2 mouse_delta{0.0f, 0.0f}; // pixels
     float scroll_delta{0.0f}; // y scroll units
 };

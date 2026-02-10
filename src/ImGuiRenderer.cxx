@@ -9,6 +9,7 @@
 #include "Types.hxx"
 
 #include <backends/imgui_impl_glfw.h>
+#include <filesystem>
 #include <imgui.h>
 #include <implot.h>
 #include <volk.h>
@@ -210,18 +211,22 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2(dim.width / display_scale, dim.height / display_scale);
     io.DisplayFramebufferScale = ImVec2(display_scale, display_scale);
-    io.IniFilename = nullptr;
+    if (std::filesystem::create_directory("assets/editor")) {
+        // ensure the ini file exists so ImGui doesn't error when trying to write to it later
+        std::ofstream ini_file("assets/editor/imgui.ini");
+    }
+    io.IniFilename = "assets/editor/imgui.ini";
 
-    if (force_recompile || main_pipeline.empty()) {
+    if (force_recompile_primary || main_pipeline.empty()) {
         auto created = create_pipeline(std::get<1>(fb)).value();
         main_pipeline = Holder{ctx, ctx.create_pipeline(std::move(created))};
-        force_recompile = false;
+        force_recompile_primary = false;
     }
 
-    if (force_recompile || offscreen_target_pipeline.empty()) {
+    if (force_recompile_offscreen || offscreen_target_pipeline.empty()) {
         auto created = create_pipeline(std::get<2>(fb)).value();
         offscreen_target_pipeline = Holder{ctx, ctx.create_pipeline(std::move(created))};
-        force_recompile = false;
+        force_recompile_offscreen = false;
     }
 
     slot_cursor = 0;
@@ -252,14 +257,28 @@ auto ImGuiRenderer::acquire_draw_slot() -> DrawableData & {
     return out;
 }
 
-auto ImGuiRenderer::end_frame(VkCommandBuffer cmd) -> void {
+auto ImGuiRenderer::end_frame() -> void {
     ImGui::EndFrame();
     ImGui::Render();
+
+    if (auto &io = ImGui::GetIO(); io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+        ImGui::UpdatePlatformWindows();
+    }
+
+#ifdef NDEBUG
+    frame_was_ended = true;
+#endif
+}
+
+auto ImGuiRenderer::render(VkCommandBuffer cmd) -> void {
+#ifdef NDEBUG
+    assert(frame_was_ended && "Must call end_frame before render");
+    frame_was_ended = false;
+#endif
 
     render_draw_data(cmd, ImGui::GetDrawData(), main_pipeline);
 
     if (auto &io = ImGui::GetIO(); io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-        ImGui::UpdatePlatformWindows();
         render_additional_viewports();
     }
 }
@@ -634,10 +653,19 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
         vk_check(vkCreateShaderModule(ctx.get_device(), &ci, nullptr, &frag_shader));
     }
 
+    struct PC {
+        glm::vec4 LRTB;
+        const DeviceAddress vertices;
+        u32 base_vertex;
+        u32 texture_id;
+        u32 sampler_id;
+    };
+
+
     VkPushConstantRange push_constant_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = sizeof(float) * 4 + sizeof(DeviceAddress) + sizeof(u32) * 2, // LRTB[4] + vb + textureId + samplerId
+            .size = sizeof(PC),
     };
 
     VkPipelineLayout pipeline_layout{};

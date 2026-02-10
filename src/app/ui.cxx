@@ -1,91 +1,107 @@
+// app/ui.hxx
 #include "app/ui.hxx"
 
+#include "app/app.hxx"
+
 #include "BindlessHeadless.hxx"
+#include "FrameQuery.hxx"
 #include "Pool.hxx"
 #include "RenderContext.hxx"
+#include "imgui.h"
 
-#include "FrameQuery.hxx"
+#include <algorithm>
+#include <array>
+#include <ranges>
+#include <string_view>
 
 static constexpr auto widget = [](const std::string_view name, auto &&func) {
-    ImGui::Begin(name.data());
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
+    ImGui::Begin(name.data(), nullptr, flags);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 2));
+
     func();
+
+    ImGui::PopStyleVar(3);
     ImGui::End();
 };
 
-auto draw_ui(AppContext &ctx, u32 frame_index, VkExtent2D &output_extent) -> void {
-    ImGuiViewport *viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-    ImGui::SetNextWindowViewport(viewport->ID);
+auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
+    // ---- Dockspace root ----
+    ImGuiViewport *main_vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(main_vp->WorkPos);
+    ImGui::SetNextWindowSize(main_vp->WorkSize);
+    ImGui::SetNextWindowViewport(main_vp->ID);
 
-    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
-    window_flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    ImGuiWindowFlags dock_flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+                                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                                  ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
-    ImGui::Begin("DockSpaceWindow", nullptr, window_flags);
-    ImGui::PopStyleVar(3);
+    ImGui::Begin("DockSpaceWindow", nullptr, dock_flags);
+    ImGui::PopStyleVar(5);
 
     ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
-    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("View")) {
-            ImGui::MenuItem("Performance Graphs");
-            ImGui::MenuItem("Frame Profile");
-            ImGui::MenuItem("Viewport");
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenuBar();
-    }
-
+    ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_NoWindowMenuButton | ImGuiDockNodeFlags_NoCloseButton;
+    ImGui::DockSpace(dockspace_id, ImVec2(0, 0), dockspace_flags);
     ImGui::End();
 
-    ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    constexpr ImGuiWindowFlags viewport_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::Begin("Viewport", nullptr, viewport_flags);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
+
     {
-        using namespace std::string_view_literals;
-        struct TargetView {
-            const std::string_view name;
-            const TextureHandle handle;
-        };
+        output.viewport_input = {};
 
-        std::array targets = {
-                TargetView{.name = "GBuffer0 (Albedo/AO)"sv, .handle = ctx.res.gbuffer0},
-                TargetView{.name = "GBuffer1 (Normal/RM)"sv, .handle = ctx.res.gbuffer1},
-                TargetView{.name = "GBuffer2 (Emissive)"sv, .handle = ctx.res.gbuffer2},
-                TargetView{.name = "Depth"sv, .handle = ctx.res.depth},
-                TargetView{.name = "Culling Debug"sv, .handle = ctx.res.debug_culling},
-                TargetView{.name = "Lit HDR"sv, .handle = ctx.res.lit_hdr},
-                TargetView{.name = "Tonemapped"sv, .handle = ctx.res.tonemapped},
-        };
+        ImVec2 avail = ImGui::GetContentRegionAvail();
+        if (avail.x >= 1.0f && avail.y >= 1.0f) {
+            ImGui::InvisibleButton("##scene_viewport_hitbox", avail,
+                                   ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
+                                           ImGuiButtonFlags_MouseButtonMiddle);
 
-        static int selected_target = 6; // Default to tonemapped
+            const ImGuiID viewport_id = ImGui::GetItemID();
+            const ImGuiID hovered_id = ImGui::GetHoveredID();
+            const ImGuiID active_id = ImGui::GetActiveID();
 
-        ImGui::SetNextItemWidth(200.0f);
-        if (ImGui::BeginCombo("##TargetSelect", targets[selected_target].name.data())) {
-            for (auto &&[idx, target]: targets | std::views::enumerate) {
-                const bool is_selected = (selected_target == static_cast<int>(idx));
-                if (ImGui::Selectable(target.name.data(), is_selected)) {
-                    selected_target = static_cast<int>(idx);
-                }
-                if (is_selected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
+            const ImVec2 p0 = ImGui::GetItemRectMin();
+            const ImVec2 p1 = ImGui::GetItemRectMax();
+
+            ImGui::GetWindowDrawList()->AddImage(ImTextureID{ctx.res.tonemapped.index()}, p0, p1);
+
+            output.viewport_input.min = p0;
+            output.viewport_input.max = p1;
+
+            output.viewport_input.hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+            output.viewport_input.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
+            output.viewport_input.viewport_item_id = viewport_id;
+            output.viewport_input.hovered_id = hovered_id;
+            output.viewport_input.active_id = active_id;
+
+            const bool other_hovered = (hovered_id != 0 && hovered_id != viewport_id);
+            const bool other_active = (active_id != 0 && active_id != viewport_id);
+
+            output.viewport_input.imgui_blocks_mouse = other_hovered || other_active;
+
+            output.viewport_input.imgui_blocks_keyboard = other_active;
         }
-
-        ImVec2 available_size = ImGui::GetContentRegionAvail();
-        ImGui::Image(ImTextureRef{ImTextureID{targets[selected_target].handle.index()}}, available_size);
-        output_extent.width = static_cast<u32>(available_size.x);
-        output_extent.height = static_cast<u32>(available_size.y);
     }
+
+    ImGui::PopStyleVar(4);
     ImGui::End();
 
+    // ---- Queries / stats collection ----
     auto compute_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.compute_query_pool[frame_index]);
     auto c_stats = read_compute_stats(ctx.gpu.ctx, ctx.pipes.compute_stats_pool[frame_index]);
     auto graphics_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.graphics_query_pool[frame_index]);
@@ -129,7 +145,8 @@ auto draw_ui(AppContext &ctx, u32 frame_index, VkExtent2D &output_extent) -> voi
         }
     });
 
-#ifdef ENABLED
+    static u64 total_frame_counter = 0;
+
     widget("Frame Profile", [&] {
         ImGui::Text("Frame Profile [#%llu]", total_frame_counter++);
         ImGui::Separator();
@@ -147,8 +164,9 @@ auto draw_ui(AppContext &ctx, u32 frame_index, VkExtent2D &output_extent) -> voi
 
                     auto row_c = [&](const char *name, ComputeIndex idx) {
                         u32 i = static_cast<u32>(idx);
-                        if (i >= t.size())
+                        if (i >= t.size()) {
                             return;
+                        }
 
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
@@ -193,8 +211,9 @@ auto draw_ui(AppContext &ctx, u32 frame_index, VkExtent2D &output_extent) -> voi
 
                     auto row_g = [&](const char *name, GraphicsIndex idx) {
                         u32 i = static_cast<u32>(idx);
-                        if (i >= t.size())
+                        if (i >= t.size()) {
                             return;
+                        }
 
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
@@ -213,7 +232,6 @@ auto draw_ui(AppContext &ctx, u32 frame_index, VkExtent2D &output_extent) -> voi
                     ImGui::EndTable();
                 }
 
-                // Geometry totals
                 if (g_stats.has_value()) {
                     ImGui::Separator();
                     ImGui::Text("Geometry Totals");
@@ -238,12 +256,73 @@ auto draw_ui(AppContext &ctx, u32 frame_index, VkExtent2D &output_extent) -> voi
                 total_ms += m;
 
             double clustering_ms = c_times[static_cast<u32>(ComputeIndex::Clustering)];
-            double clustering_pct = (clustering_ms / total_ms) * 100.0;
+            double clustering_pct = (total_ms > 0.0) ? (clustering_ms / total_ms) * 100.0 : 0.0;
 
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.3f, 1.0f), "Clustering is %.1f%% of GPU frame time",
                                clustering_pct);
         }
     });
-#endif
+}
+
+auto run_ui_frame(AppContext &ctx) -> UiFrameResult {
+    UiFrameResult out{};
+
+    const VkExtent2D raw_window_extent = current_extent(ctx.gpu.window);
+    out.window_extent = sanitize_window_extent(raw_window_extent, ctx.gpu.physical_device, ctx.gpu.surface);
+
+    if (out.window_extent.width == 0 || out.window_extent.height == 0) {
+        out.minimized = true;
+        return out;
+    }
+
+    ctx.ui.gui->begin_frame(ImGuiFramebuffer(out.window_extent, ctx.gpu.swapchain.format(),
+                                             ctx.gpu.ctx.texture_format(ctx.res.tonemapped),
+                                             ctx.gpu.swapchain.color_space()));
+
+    draw_ui(ctx, static_cast<u32>(ctx.ui.frame_index % frames_in_flight), ctx.ui.app_state);
+
+    ctx.ui.gui->end_frame();
+
+    out.desired_scene_extent =
+            sanitize_scene_extent(ctx.ui.app_state.viewport_input.extent(),
+                                  (ctx.ui.last_viewport_extent.width == 0 || ctx.ui.last_viewport_extent.height == 0)
+                                          ? VkExtent2D{ctx.gpu.opts->width, ctx.gpu.opts->height}
+                                          : ctx.ui.last_viewport_extent,
+                                  ctx.gpu.physical_device, ExtentBounds{.min_dim = 1, .max_dim = 4096});
+
+    return out;
+}
+auto window_center(GLFWwindow *w) -> glm::vec2 {
+    int ww = 0, wh = 0;
+    glfwGetWindowSize(w, &ww, &wh);
+    return glm::vec2{ww * 0.5f, wh * 0.5f};
+}
+auto begin_cursor_capture(GLFWwindow *w, AppState &app) -> void {
+    if (glfwRawMouseMotionSupported()) {
+        glfwSetInputMode(w, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    }
+
+    glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+    app.cursor_captured = true;
+
+    app.warp_center = window_center(w);
+    app.warp_in_progress = true;
+    glfwSetCursorPos(w, app.warp_center.x, app.warp_center.y);
+
+    // Seed delta tracking at center
+    app.last_mouse = app.warp_center;
+    app.mouse_inited = true;
+}
+auto end_cursor_capture(GLFWwindow *w, AppState &app) -> void {
+    if (glfwRawMouseMotionSupported()) {
+        glfwSetInputMode(w, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+    }
+
+    glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
+    app.cursor_captured = false;
+    app.warp_in_progress = false;
+    app.mouse_inited = false; // force re-init when returning to normal mouse
 }

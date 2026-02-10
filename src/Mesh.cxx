@@ -339,7 +339,6 @@ namespace {
         std::filesystem::path original_path(tex_name);
         std::filesystem::path ktx2_name = original_path.stem().replace_extension(".ktx2");
 
-        // 1. Check for .ktx2 in the base directory
         if (std::filesystem::exists(base_path / ktx2_name)) {
             return base_path / ktx2_name;
         }
@@ -347,6 +346,14 @@ namespace {
         // 2. Check for .ktx2 in the 'textures/' subdirectory
         if (std::filesystem::exists(base_path / "textures" / ktx2_name)) {
             return base_path / "textures" / ktx2_name;
+        }
+
+        if (std::filesystem::exists(base_path / "textures" / "ktx_compressed" / ktx2_name)) {
+            return base_path / "textures" / "ktx_compressed" / ktx2_name;
+        }
+
+        if (std::filesystem::exists(base_path / "textures" / "ktx-compressed" / ktx2_name)) {
+            return base_path / "textures" / "ktx-compressed" / ktx2_name;
         }
 
         if (std::filesystem::exists(base_path / "textures" / "ktx" / ktx2_name)) {
@@ -357,19 +364,16 @@ namespace {
             return base_path / "textures" / "ktx2" / ktx2_name;
         }
 
-        // 3. Fallback: Check for the original filename in base directory
         std::filesystem::path primary = base_path / tex_name;
         if (std::filesystem::exists(primary)) {
             return primary;
         }
 
-        // 4. Fallback: Check for the original filename in 'textures/' subdirectory
         std::filesystem::path secondary = base_path / "textures" / tex_name;
         if (std::filesystem::exists(secondary)) {
             return secondary;
         }
 
-        // Final fallback for missing files (magenta texture logic)
         return primary;
     }
 

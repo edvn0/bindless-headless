@@ -28,9 +28,13 @@ public:
 
     auto begin_frame(ImGuiFramebuffer main_fb) -> void;
 
-    auto end_frame(VkCommandBuffer cmd) -> void;
+    auto render(VkCommandBuffer cmd) -> void;
+    auto end_frame() -> void;
 
-    auto set_should_recompile() -> void { force_recompile = true; }
+    auto set_should_recompile() -> void {
+        force_recompile_primary = true;
+        force_recompile_offscreen = true;
+    }
 
 private:
     struct DrawableData {
@@ -56,7 +60,12 @@ private:
     u32 slot_cursor{0}; // how many slots used THIS frame
     u32 frame_cursor{0}; // which frame-in-flight slot base we're on
 
-    bool force_recompile{false};
+    bool force_recompile_primary{false};
+    bool force_recompile_offscreen{false};
+
+#ifdef NDEBUG
+    bool frame_was_ended{true};
+#endif
 
 private:
     auto create_pipeline(VkFormat) -> tl::expected<CompiledPipeline, Error>;
