@@ -95,8 +95,8 @@ struct RotateCubesPushConstant {
     PointLight* previous_point_lights;
     PointLight* point_lights;
     PointLight* static_point_lights;
-};
- */
+    };
+    */
 struct RotateCubesPushConstant {
     u32 cube_count;
     f32 delta_time;
@@ -134,10 +134,11 @@ struct DeferredLightingPushConstants
     uint lit_hdr_uav_index;
 
     uint sampler_index;
-};*/
+    };*/
 struct DeferredLightingPushConstants {
     const DeviceAddress frame_ubo;
     const DeviceAddress point_lights; // All the lights
+    const glm::mat4 shadow_matrix;
 
     u32 tiles_x;
     u32 tiles_y;
@@ -154,13 +155,24 @@ struct DeferredLightingPushConstants {
     u32 lit_hdr_uav_index{0}; // For the compute version, just 0 always
     u32 debug_output_index;
     u32 sampler_index;
+    const u32 shadow_texture_index;
+    const u32 shadow_sampler_index;
     u32 debug_mode;
 };
 
 struct PresentPushConstants {
-    u32 image_index; // tonemapped UNORM texture index
-    u32 sampler_index; // sampler index
-    u32 dst_is_srgb; // 1 if swapchain is *_SRGB, else 0
+    u32 image_index;
+    u32 sampler_index;
+    u32 dst_is_srgb;
+};
+
+struct ShadowMapPushConstants {
+    glm::mat4 light_view_proj;
+    const DeviceAddress transforms;
+    const DeviceAddress draw_material_ids;
+    const DeviceAddress materials;
+    u32 base_draw_id;
+    const u32 sampler_index;
 };
 
 struct CompiledPipeline {
@@ -200,16 +212,25 @@ auto create_deferred_lighting_compute_pipeline(VkDevice device, PipelineCache &c
                                                std::string_view entry_name) -> CompiledPipeline;
 
 auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache &cache,
-                                                VkDescriptorSetLayout bindless_layout,
-                                                const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
-                                                std::string_view vert_entry, std::string_view frag_entry,
-                                                VkFormat color_format) -> CompiledPipeline;
+                                                VkDescriptorSetLayout bindless_layout, const std::vector<u32> &frag,
+                                                VkShaderModule, std::string_view frag_entry, VkFormat color_format)
+        -> CompiledPipeline;
 
 auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &, VkFormat,
                               VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
 auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &,
                               const std::vector<uint32_t> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)
         -> CompiledPipeline;
+
+auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache &cache,
+                                            VkDescriptorSetLayout bindless_layout,
+                                            const std::vector<uint32_t> &vert_code,
+                                            const std::vector<uint32_t> &frag_code, VkFormat depth_format,
+                                            VkSampleCountFlagBits samples) -> CompiledPipeline;
+auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache &cache,
+                                            VkDescriptorSetLayout bindless_layout,
+                                            const std::vector<uint32_t> &vert_code, VkFormat depth_format,
+                                            VkSampleCountFlagBits samples) -> CompiledPipeline;
 
 auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,
                              const std::vector<u32> &, const std::string_view, const std::string_view, VkFormat)

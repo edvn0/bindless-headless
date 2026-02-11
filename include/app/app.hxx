@@ -78,6 +78,8 @@ struct AppPipelines {
     PipelineHandle tonemap_pipeline{};
     PipelineHandle cluster_build_groups_pipeline{};
     PipelineHandle present_pipeline{};
+    PipelineHandle directional_shadow_map_pipeline{};
+    PipelineHandle directional_shadow_map_alpha_pipeline{};
 
     std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
@@ -87,7 +89,24 @@ struct AppPipelines {
     SamplerHandle linear_repeat{};
     SamplerHandle linear_clamp{};
     SamplerHandle noise_sampler{};
+    SamplerHandle depth_compare_filter{};
 };
+
+struct ShadowConfig {
+    glm::mat4 light_view_proj{1.0f};
+    glm::vec3 light_target{0.0f, 0.0f, 0.0f}; // Where shadow camera looks
+    float shadow_distance = 50.0f; // How far from target
+    float ortho_size = 30.0f; // Width/height of ortho frustum
+    float near_plane = 0.1f;
+    float far_plane = 100.0f;
+};
+
+struct SunConfig {
+    float elevation_degrees = 45.0f; // 0° = horizon, 90° = zenith
+    float azimuth_degrees = 135.0f; // 0° = north, 90° = east, 180° = south, 270° = west
+    float intensity = 1.5f;
+};
+
 
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
@@ -128,6 +147,7 @@ struct AppResources {
     TextureHandle debug_culling{};
     TextureHandle lit_hdr{};
     TextureHandle depth{};
+    TextureHandle directional_shadow_map_depth{};
     TextureHandle tonemapped{};
 
     TextureHandle perlin_noise{};
@@ -201,6 +221,9 @@ struct AppUI {
     VkExtent2D last_viewport_extent = {0, 0};
     PendingResize pending_resize{};
 
+    SunConfig sun_config{};
+    ShadowConfig shadow_config{};
+
     enum class ClusterDebugMode : u32 {
         None = 0,
         ClusterGrid = 1,
@@ -216,7 +239,7 @@ struct AppUI {
     ClusterDebugMode debug_mode{ClusterDebugMode::None};
 
     // graphs
-    PerformanceGraph<8, 120> gpu_frame_graph{};
+    PerformanceGraph<total_queries, 240> gpu_frame_graph{};
     bool graphs_initialized{false};
 };
 

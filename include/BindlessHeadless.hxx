@@ -91,6 +91,7 @@ enum class Stage : u32 {
     CubeRotation = 4,
     DeferredLighting = 5,
     LightClustering = 6,
+    DirectionalShadowMap = 7,
     Count,
 };
 
@@ -359,12 +360,17 @@ enum class GraphicsStamp : u32 {
     TonemapEnd,
     PresentBegin,
     PresentEnd,
+    DirectionalShadowMapBegin,
+    DirectionalShadowMapEnd,
     Count
 };
-enum class GraphicsIndex : u32 { PreDepth = 0, GBuffer = 1, Deferred = 2, Tonemap = 3, Present = 4, Count };
+enum class GraphicsIndex : u32 { PreDepth, GBuffer, Deferred, Tonemap, Present, ShadowMap, Count };
 
 inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
 inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);
+inline constexpr u32 total_queries = stats_compute_count + stats_graphics_count;
+
+static_assert(graphics_query_count == 2 * stats_graphics_count);
 
 using EnabledFeatureSet = std::unordered_set<std::string, string_hash, string_eq>;
 auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u32 transfer_index)

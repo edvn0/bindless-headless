@@ -80,8 +80,8 @@ void compute_light_cluster_range(
     float3 view_pos = mul(ubo->view, float4(world_pos, 1.0)).xyz;
 
     // behind camera → reject early
-    if (view_pos.z + radius <= 0.0)
-    {
+if (view_pos.z - radius >= 0.0)
+        {
         x0 = y0 = z0 = 1;
         x1 = y1 = z1 = 0;
         return;
@@ -149,8 +149,7 @@ bool light_intersects_cluster(
     
     float3 view_pos = mul(ubo->view, float4(world_pos, 1.0)).xyz;
     
-    if (view_pos.z + radius <= 0.0)
-        return false;
+if (view_pos.z - radius >= 0.0)        return false;
     
     float z_min = max(view_pos.z - radius, -z_near);
     float z_max = view_pos.z + radius;

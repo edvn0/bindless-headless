@@ -34,8 +34,12 @@ struct RenderContext {
     SamplerPool samplers{};
     auto create_sampler(VkSampler &&) -> SamplerHandle;
     auto create_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
-    BufferPool buffers{};
 
+    SamplerPool comparison_samplers{};
+    auto create_comparison_sampler(VkSampler &&) -> SamplerHandle;
+    auto create_comparison_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
+
+    BufferPool buffers{};
     auto create_buffer(Buffer &&) -> BufferHandle;
 
     QueryPoolPool query_pools{};

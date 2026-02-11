@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <cassert>
 #include <chrono>
+#include <csignal>
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <execution>
@@ -24,7 +25,9 @@
 
 extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 
-// app/app.hxx (or wherever your callbacks live)
+static volatile sig_atomic_t keep_running = 1;
+static void sig_handler(int) { keep_running = 0; }
+
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <imgui.h>
@@ -338,6 +341,7 @@ namespace {
 
 
 auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int, Error> {
+    signal(SIGINT, sig_handler);
 
     AppGpuState gpu{};
     AppPipelines pipes{};
@@ -424,7 +428,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     gpu.tl_graphics = create_graphics_timeline(gpu.device, gpu.graphics_queue, gpu.graphics_index);
     gpu.tl_transfer = create_transfer_timeline(gpu.device, gpu.transfer_queue, gpu.transfer_index);
 
-    gpu.bindless.init(gpu.device, query_bindless_caps(gpu.physical_device), 8u, 8u, 8u, 0u);
+    gpu.bindless.init(gpu.device, query_bindless_caps(gpu.physical_device), 8u, 8u, 8u, 8u, 0u);
     gpu.bindless.grow_if_needed(300u, 40u, 32u, 8u);
 
     {
@@ -610,17 +614,38 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             ci.maxAnisotropy = 16.0f;
             ci.anisotropyEnable = VK_TRUE;
 
-            gpu.ctx.create_sampler(create_sampler(gpu.allocator, ci, "noise_sampler"));
-            // If create_sampler returns a handle in your codebase, store it in pipes.noise_sampler.
+            gpu.ctx.create_sampler(ci, "noise_sampler");
+        }
+
+        {
+            VkSamplerCreateInfo sampler_info{};
+            sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sampler_info.magFilter = VK_FILTER_LINEAR;
+            sampler_info.minFilter = VK_FILTER_LINEAR;
+            sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+            sampler_info.compareEnable = VK_TRUE;
+            sampler_info.compareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+            sampler_info.minLod = 0.0f;
+            sampler_info.maxLod = 0.0f;
+            sampler_info.anisotropyEnable = VK_FALSE;
+            sampler_info.unnormalizedCoordinates = VK_FALSE;
+
+            pipes.depth_compare_filter = gpu.ctx.create_comparison_sampler(sampler_info, "depth_compare_filter");
         }
     }
 
-    gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers);
+    gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers, gpu.ctx.comparison_samplers);
 
     // --- Load meshes ---
-    TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, gpu.command_context, "assets/meshes/Sponza-master/sponza.obj"),
-                  "Failed to load cube mesh");
-    res.mesh = std::move(loaded_mesh);
+    {
+        TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, gpu.command_context, "assets/meshes/Sponza-master/sponza.obj"),
+                      "Failed to load cube mesh");
+        res.mesh = std::move(loaded_mesh);
+    }
 
     // --- Lights + buffers ---
     {
@@ -770,6 +795,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     const auto old_tonemap_pipeline = pipes.tonemap_pipeline;
                     const auto old_cluster_build_groups_pipeline = pipes.cluster_build_groups_pipeline;
                     const auto old_present_pipeline = pipes.present_pipeline;
+                    const auto old_directional_shadow_map_pipeline = pipes.directional_shadow_map_pipeline;
+                    const auto old_directional_shadow_map_alpha_pipeline = pipes.directional_shadow_map_alpha_pipeline;
 
                     std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
                     std::array<ReflectionData, names.size()> reflection_data = {};
@@ -795,6 +822,16 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(predepth_reflection)),
                                             "Failed to compile predepth shader");
 
+                    std::array<const std::string_view, 2> directional_shadow_map_names{"shadow_vs_mdi",
+                                                                                       "shadow_fs_main"};
+                    std::array<ReflectionData, directional_shadow_map_names.size()> directional_shadow_map_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(
+                            directional_shadow_map_code,
+                            gpu.compiler->compile_from_file("shaders/directional_shadow_map.slang",
+                                                            std::span(directional_shadow_map_names),
+                                                            std::span(directional_shadow_map_reflection)),
+                            "Failed to compile directional shadow map shader");
+
                     std::array<const std::string_view, 2> tonemap_names{"vs_main", "fs_main"};
                     std::array<ReflectionData, tonemap_names.size()> tonemap_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(tonemap_code,
@@ -811,8 +848,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(rotate_cubes_reflection)),
                                             "Failed to compile rotate cubes shader");
 
-                    std::array<const std::string_view, 4> gbuffer_entry_point_names = {
-                            "main_vs_mdi", "main_fs_mdi", "vs_fullscreen_main", "fs_fullscreen_main"};
+                    std::array<const std::string_view, 3> gbuffer_entry_point_names = {"main_vs_mdi", "main_fs_mdi",
+                                                                                       "fs_fullscreen_main"};
                     std::array<ReflectionData, gbuffer_entry_point_names.size()> gbuffer_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(gbuffer_mrt_and_lighting_code,
                                             gpu.compiler->compile_from_file("shaders/gbuffer.slang",
@@ -848,14 +885,21 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     auto gbuf_light = create_deferred_lighting_graphics_pipeline(
                             gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
-                            gbuffer_mrt_and_lighting_code.at(2), gbuffer_mrt_and_lighting_code.at(3),
-                            "vs_fullscreen_main", "fs_fullscreen_main", VK_FORMAT_R16G16B16A16_SFLOAT);
+                            gbuffer_mrt_and_lighting_code.at(2), *gpu.ctx.shaders.get(pipes.fullscreen_vs),
+                            "fs_fullscreen_main", VK_FORMAT_R16G16B16A16_SFLOAT);
 
                     auto pp = create_predepth_pipeline(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
                                                        predepth_code.at(0), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
                     auto pp_alpha = create_predepth_pipeline(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
                                                              predepth_code.at(0), predepth_code.at(1),
                                                              VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
+
+                    auto shadow_map_alpha = create_directional_shadow_map_pipeline(
+                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, directional_shadow_map_code.at(0),
+                            directional_shadow_map_code.at(1), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
+                    auto shadow_map = create_directional_shadow_map_pipeline(
+                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, directional_shadow_map_code.at(0),
+                            VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
                     auto tp = create_fullscreen_pipeline(FullscreenPipelineInfo{
                             .device = gpu.device,
@@ -891,6 +935,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     pipes.tonemap_pipeline = gpu.ctx.create_pipeline(std::move(tp));
                     pipes.cluster_build_groups_pipeline = gpu.ctx.create_pipeline(std::move(cl_groups));
                     pipes.present_pipeline = gpu.ctx.create_pipeline(std::move(present_pipe));
+                    pipes.directional_shadow_map_pipeline = gpu.ctx.create_pipeline(std::move(shadow_map));
+                    pipes.directional_shadow_map_alpha_pipeline = gpu.ctx.create_pipeline(std::move(shadow_map_alpha));
 
                     destroy(gpu.ctx, old_gbuffer_pipeline_lighting, rc.retire_value);
                     destroy(gpu.ctx, old_cube_rotation_pipeline, rc.retire_value);
@@ -902,6 +948,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     destroy(gpu.ctx, old_tonemap_pipeline, rc.retire_value);
                     destroy(gpu.ctx, old_cluster_build_groups_pipeline, rc.retire_value);
                     destroy(gpu.ctx, old_present_pipeline, rc.retire_value);
+                    destroy(gpu.ctx, old_directional_shadow_map_pipeline, rc.retire_value);
+                    destroy(gpu.ctx, old_directional_shadow_map_alpha_pipeline, rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
     }
@@ -932,6 +980,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             res.depth = gpu.ctx.create_texture(create_depth_target(
                     gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, false, "depth"));
 
+            if (res.directional_shadow_map_depth.empty()) {
+                res.directional_shadow_map_depth = gpu.ctx.create_texture(
+                        create_depth_target(gpu.allocator, 4096, 4096, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
+                                            true, "directional_shadow_map"));
+            }
+
             res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
                                                                          VK_FORMAT_R16G16B16A16_SFLOAT, {}, "lit_hdr"));
 
@@ -955,9 +1009,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         scene_resize_graph.add_dependency(tonemapped_node, offscreen_node);
     }
 
-    VkExtent2D last_window_extent =
-            sanitize_window_extent(current_extent(gpu.window), gpu.physical_device, gpu.surface);
-    VkExtent2D last_scene_extent = VkExtent2D{opts.width, opts.height};
+    auto last_window_extent = sanitize_window_extent(current_extent(gpu.window), gpu.physical_device, gpu.surface);
+    auto last_scene_extent = VkExtent2D{opts.width, opts.height};
 
     window_resize_graph.rebuild(last_window_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
                                 ResizeTrigger::Extent);
@@ -991,6 +1044,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         ui.gpu_frame_graph.add_line("Deferred");
         ui.gpu_frame_graph.add_line("Tonemap");
         ui.gpu_frame_graph.add_line("Present");
+        ui.gpu_frame_graph.add_line("Directional SM");
         ui.graphs_initialized = true;
     }
 
@@ -998,7 +1052,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     auto stats = FrameStats{};
 
-    while (!glfwWindowShouldClose(gpu.window)) {
+    while (!glfwWindowShouldClose(gpu.window) && keep_running) {
         glfwPollEvents();
         handle_bindless_repopulation(app_context, window_resize_graph);
 
@@ -1033,14 +1087,57 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         ui.total_time += ui.dt;
         {
-            constexpr auto rads_per_second = glm::radians(20.0f);
-            const auto angle = static_cast<float>(ui.total_time * rads_per_second);
+            const float elevation = glm::radians(ui.sun_config.elevation_degrees);
+            const float azimuth = glm::radians(ui.sun_config.azimuth_degrees);
 
-            const glm::vec3 sun_dir = glm::normalize(glm::vec3(std::cos(angle), std::sin(angle), -0.4f));
-            auto sun_direction_intensity = glm::vec4(sun_dir, 1.5f);
+            const auto sun_dir = glm::normalize(glm::vec3{
+                    std::sin(azimuth) * std::cos(elevation),
+                    std::sin(elevation),
+                    std::cos(azimuth) * std::cos(elevation),
+            });
 
+            auto sun_direction_intensity = glm::vec4(sun_dir, ui.sun_config.intensity);
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
             res.frame_ubo_ring.write_field(gpu.ctx, bounded_frame_index, sun_direction_intensity, offset);
+
+            /* {
+                 const glm::vec3 light_pos =
+                         ui.shadow_config.light_target - (sun_dir * ui.shadow_config.shadow_distance);
+                 const glm::mat4 light_view =
+                         glm::lookAt(light_pos, ui.shadow_config.light_target, glm::vec3(0.0f, 1.0f, 0.0f));
+                 const float half_size = ui.shadow_config.ortho_size * 0.5f;
+                 const glm::mat4 light_proj = OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size,
+                                                               ui.shadow_config.near_plane, ui.shadow_config.far_plane);
+                 ui.shadow_config.light_view_proj = light_proj * light_view;
+             }*/
+            {
+                glm::vec3 scene_center = res.mesh.mesh_aabb.center();
+                glm::vec3 scene_extents = (res.mesh.mesh_aabb.max - res.mesh.mesh_aabb.min) * 0.5f;
+                float scene_radius = glm::length(scene_extents);
+
+                // Position light far enough to see entire scene
+                float light_distance = scene_radius * 2.0f + 50.0f;
+                glm::vec3 light_pos = scene_center - sun_dir * light_distance;
+
+                glm::mat4 light_view = glm::lookAt(light_pos, scene_center, glm::vec3(0, 1, 0));
+
+                // Transform AABB to light space
+                auto [ls_min, ls_max] = res.mesh.mesh_aabb.transform(light_view);
+
+                // Calculate bounds with padding
+                const float padding = 20.0f;
+                float ortho_size = glm::max(ls_max.x - ls_min.x, ls_max.y - ls_min.y) + padding;
+                float half_size = ortho_size * 0.5f;
+
+                // Near/far planes
+                float near_plane = glm::max(-ls_max.z - padding, 0.1f);
+                float far_plane = -ls_min.z + padding;
+
+                const glm::mat4 light_proj =
+                        OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size, near_plane, far_plane);
+
+                ui.shadow_config.light_view_proj = light_proj * light_view;
+            }
         }
 
         const auto ranges = write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,
@@ -1110,6 +1207,18 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         }
 
         {
+            const std::array directional_shadow_map_waits{TimelineWait{
+                    .value = fs.timeline_values[stage_index(Stage::CubeRotation)],
+                    .semaphore = gpu.tl_compute.timeline,
+                    .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+            }};
+
+            fs.timeline_values[stage_index(Stage::DirectionalShadowMap)] = run_directional_shadow_map_pass(
+                    app_context, ranges, bounded_frame_index,
+                    SubmitSynchronisation{.timeline_waits = directional_shadow_map_waits});
+        }
+
+        {
             const std::array culling_waits{
                     TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
                                  .semaphore = gpu.tl_graphics.timeline,
@@ -1146,6 +1255,11 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             .semaphore = gpu.tl_graphics.timeline,
                             .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
                     },
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::DirectionalShadowMap)],
+                            .semaphore = gpu.tl_graphics.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                    },
             };
             fs.timeline_values[stage_index(Stage::GBuffer)] =
                     run_gbuffer_pass(app_context, render_scene_extent, ranges, bounded_frame_index,
@@ -1166,7 +1280,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     },
             };
             fs.timeline_values[stage_index(Stage::DeferredLighting)] = run_deferred_lighting_pass(
-                    app_context, render_scene_extent, {compact_addr, cluster_light_indices_addr}, bounded_frame_index,
+                    app_context, render_scene_extent, {clusters_addr, cluster_light_indices_addr}, bounded_frame_index,
                     SubmitSynchronisation{.timeline_waits = deferred_waits});
         }
 
@@ -1208,7 +1322,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         gpu.ctx.destroy_queue.retire(completed);
 
         auto frame_end = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(ui.last_frame_time - frame_end)
+        auto ms = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(frame_end - ui.last_frame_time)
                           .count();
         stats.add_sample(ms);
 
@@ -1245,7 +1359,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     ui.watcher.reset();
     ui.listeners.clear();
 
-    gpu.ctx.destroy_queue.retire(UINT64_MAX);
+    gpu.ctx.destroy_queue.retire(std::numeric_limits<u64>::max());
 
     destruction::global_command_context(gpu.command_context);
     destruction::bindless_set(gpu.bindless);

@@ -317,6 +317,122 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, D
             sync);
 }
 
+auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, const u32 bounded_frame_index,
+                                     const SubmitSynchronisation &sync) -> u64 {
+    auto &&[gpu, pipes, res, ui] = ctx;
+
+    return submit_stage(
+            gpu.tl_graphics, gpu.device,
+            [&](VkCommandBuffer cmd) {
+                TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "DirectionalShadowMap");
+
+                auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
+                        pipes.graphics_query_pool[bounded_frame_index], pipes.graphics_stats_pool[bounded_frame_index]);
+
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::DirectionalShadowMapBegin);
+                begin_stats(cmd, *stats_pool, GraphicsIndex::ShadowMap);
+
+                auto *shadow_pipeline = gpu.ctx.pipeline_pool.get(pipes.directional_shadow_map_pipeline);
+                auto *shadow_depth = gpu.ctx.textures.get(res.directional_shadow_map_depth);
+                auto shadow_extent = shadow_depth->extent();
+
+                shadow_depth->transition_if_not_initialised(
+                        cmd, VK_IMAGE_LAYOUT_GENERAL,
+                        {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
+
+                VkRenderingAttachmentInfo depth_attachment{};
+                depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                depth_attachment.imageView = shadow_depth->attachment_view;
+                depth_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                depth_attachment.clearValue = {.depthStencil = {0.0f, 0}};
+
+                VkRenderingInfo rendering_info{};
+                rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                rendering_info.renderArea = {.offset = {0, 0}, .extent = shadow_extent};
+                rendering_info.layerCount = 1;
+                rendering_info.pDepthAttachment = &depth_attachment;
+
+                vkCmdBeginRendering(cmd, &rendering_info);
+
+                auto &&[indirect, verts, idx, materials] =
+                        gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), res.mesh.pos_uv_buffer,
+                                                     res.mesh.index_buffer, res.mesh.material_buffer);
+
+                ShadowMapPushConstants pc{
+                        .light_view_proj = ui.shadow_config.light_view_proj,
+                        .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+                        .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
+                        .materials = materials->device_address(),
+                        .base_draw_id = 0,
+                        .sampler_index = pipes.linear_repeat.index(),
+                };
+
+                auto &&[vp, sc] = viewport_scissors(shadow_extent);
+                vkCmdSetViewport(cmd, 0, 1, &vp);
+                vkCmdSetScissor(cmd, 0, 1, &sc);
+                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL); // Reverse-Z
+                vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
+                vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
+                vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                vkCmdSetDepthBias(cmd, -1.25f, 0.0f, -1.75f); // Shadow bias
+
+                vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
+                std::array<VkBuffer, 1> buffers = {verts->buffer()};
+                std::array<VkDeviceSize, 1> offsets = {0};
+                const auto size = VkDeviceSize{verts->size()};
+                vkCmdBindVertexBuffers2(cmd, 0, 1, buffers.data(), offsets.data(), &size, nullptr);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline->layout, 0, 1,
+                                        &gpu.bindless.set, 0, nullptr);
+
+
+                // Render opaque objects
+                if (ranges.opaque_count > 0) {
+                    pc.base_draw_id = ranges.opaque_base;
+
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline->pipeline);
+
+                    vkCmdPushConstants(cmd, shadow_pipeline->layout,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+                    const VkDeviceSize opaque_offset =
+                            static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                            (ranges.opaque_base * sizeof(VkDrawIndexedIndirectCommand));
+
+                    vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), opaque_offset, ranges.opaque_count,
+                                             sizeof(VkDrawIndexedIndirectCommand));
+                }
+
+                vkCmdEndRendering(cmd);
+
+                // Transition shadow map for shader sampling
+                VkImageMemoryBarrier2 shadow_to_read{};
+                shadow_to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                shadow_to_read.srcStageMask =
+                        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                shadow_to_read.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                shadow_to_read.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                shadow_to_read.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                shadow_to_read.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                shadow_to_read.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                shadow_to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                shadow_to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                shadow_to_read.image = shadow_depth->image;
+                shadow_to_read.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &shadow_to_read;
+                vkCmdPipelineBarrier2(cmd, &dep);
+
+                end_stats(cmd, *stats_pool, GraphicsIndex::ShadowMap);
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::DirectionalShadowMapEnd);
+            },
+            sync);
+}
+
 auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const DrawRanges &ranges,
                       const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
@@ -598,6 +714,7 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                 DeferredLightingPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
                         .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
+                        .shadow_matrix = ui.shadow_config.light_view_proj,
 
                         .tiles_x = res.clustering_config.tiles_x,
                         .tiles_y = res.clustering_config.tiles_y,
@@ -614,6 +731,8 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                         .lit_hdr_uav_index = 0,
                         .debug_output_index = res.debug_culling.index(),
                         .sampler_index = pipes.linear_clamp.index(),
+                        .shadow_texture_index = res.directional_shadow_map_depth.index(),
+                        .shadow_sampler_index = pipes.depth_compare_filter.index(),
                         .debug_mode = static_cast<u32>(ui.debug_mode),
                 };
 
@@ -765,12 +884,10 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                 VkImage dst_image = gpu.swapchain.image(swap_image_index);
                 VkImageView dst_view = gpu.swapchain.image_view(swap_image_index); // identity swizzle
 
-                // Ensure tonemapped is initialised to GENERAL if it was recreated (UNDEFINED -> GENERAL once)
                 tonemapped->transition_if_not_initialised(cmd, VK_IMAGE_LAYOUT_GENERAL,
                                                           {VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
                                                            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT});
 
-                // Order: tonemap writes -> fragment sampling in present shader (layout stays GENERAL)
                 auto tonemap_to_sample = create_info<VkImageMemoryBarrier2>();
                 tonemap_to_sample.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                 tonemap_to_sample.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
@@ -781,7 +898,11 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                 tonemap_to_sample.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 tonemap_to_sample.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 tonemap_to_sample.image = tonemapped->image;
-                tonemap_to_sample.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                tonemap_to_sample.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                      .baseMipLevel = 0,
+                                                      .levelCount = 1,
+                                                      .baseArrayLayer = 0,
+                                                      .layerCount = 1};
 
                 auto dep_tm = create_info<VkDependencyInfo>();
                 dep_tm.imageMemoryBarrierCount = 1;
@@ -799,7 +920,11 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                 to_general.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 to_general.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 to_general.image = dst_image;
-                to_general.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                to_general.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                               .baseMipLevel = 0,
+                                               .levelCount = 1,
+                                               .baseArrayLayer = 0,
+                                               .layerCount = 1};
 
                 auto dep_to_general = create_info<VkDependencyInfo>();
                 dep_to_general.imageMemoryBarrierCount = 1;
@@ -821,7 +946,6 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
 
                 vkCmdBeginRendering(cmd, &ri);
 
-                // 1) Present fullscreen pass (samples tonemapped)
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->pipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->layout, 0, 1, &gpu.bindless.set,
                                         0, nullptr);
@@ -858,7 +982,11 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                 to_present.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 to_present.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 to_present.image = dst_image;
-                to_present.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                to_present.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                               .baseMipLevel = 0,
+                                               .levelCount = 1,
+                                               .baseArrayLayer = 0,
+                                               .layerCount = 1};
 
                 auto dep_to_present = create_info<VkDependencyInfo>();
                 dep_to_present.imageMemoryBarrierCount = 1;

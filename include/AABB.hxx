@@ -64,9 +64,9 @@ struct AABB {
         AABB result;
 
         // Transform all 8 corners of the AABB
-        glm::vec3 corners[8] = {
-                {min.x, min.y, min.z}, {min.x, min.y, max.z}, {min.x, max.y, min.z}, {min.x, max.y, max.z},
-                {max.x, min.y, min.z}, {max.x, min.y, max.z}, {max.x, max.y, min.z}, {max.x, max.y, max.z},
+        std::array<glm::vec3, 8> corners = {
+                glm::vec3{min.x, min.y, min.z}, {min.x, min.y, max.z}, {min.x, max.y, min.z}, {min.x, max.y, max.z},
+                {max.x, min.y, min.z},          {max.x, min.y, max.z}, {max.x, max.y, min.z}, {max.x, max.y, max.z},
         };
 
         for (auto const &corner: corners) {

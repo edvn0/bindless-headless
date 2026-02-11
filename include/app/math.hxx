@@ -70,7 +70,8 @@ struct FrustumPlane {
 };
 
 
-glm::mat4 PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear);
+auto PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear) -> glm::mat4;
+auto OrthoRH_ReverseZ(f32, f32, f32, f32, f32, f32) -> glm::mat4;
 
 constexpr auto extract_frustum_planes = [](const glm::mat4 &inv_proj) -> std::array<FrustumPlane, 6> {
     constexpr std::array<glm::vec4, 8> ndc_corners = {

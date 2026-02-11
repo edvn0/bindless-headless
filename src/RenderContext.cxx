@@ -44,6 +44,23 @@ auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::st
     return create_sampler(::create_sampler(allocator, ci, name));
 }
 
+auto RenderContext::create_comparison_sampler(VkSampler &&sampler) -> SamplerHandle {
+    bindless_set->need_repopulate = true;
+    return samplers.create(std::move(sampler));
+}
+
+auto RenderContext::create_comparison_sampler(const VkSamplerCreateInfo info, const std::string_view name)
+        -> SamplerHandle {
+    bindless_set->need_repopulate = true;
+
+    VkSamplerCreateInfo ci{info};
+    ci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ci.pNext = nullptr;
+    ci.flags = 0;
+
+    return create_comparison_sampler(::create_sampler(allocator, ci, name));
+}
+
 auto RenderContext::create_buffer(Buffer &&buffer) -> BufferHandle { return buffers.create(std::move(buffer)); }
 
 auto RenderContext::create_query_pool(QueryPoolState &&state) -> QueryPoolHandle {

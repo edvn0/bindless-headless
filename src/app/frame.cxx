@@ -102,7 +102,8 @@ auto frame_indices(AppUI const &ui) -> std::pair<u32, u32> {
 auto handle_bindless_repopulation(AppContext &ctx, ResizeGraph &window_resize_graph) -> void {
     const u64 completed_now = std::min(ctx.gpu.tl_compute.completed, ctx.gpu.tl_graphics.completed);
 
-    if (!ctx.gpu.bindless.repopulate_if_needed(ctx.gpu.ctx.textures, ctx.gpu.ctx.samplers)) {
+    if (!ctx.gpu.bindless.repopulate_if_needed(ctx.gpu.ctx.textures, ctx.gpu.ctx.samplers,
+                                               ctx.gpu.ctx.comparison_samplers)) {
         return;
     }
 

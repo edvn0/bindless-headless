@@ -121,6 +121,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
         ctx.ui.gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
         ctx.ui.gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
         ctx.ui.gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Present)]);
+        ctx.ui.gpu_frame_graph.push_sample(8, g_times[static_cast<u32>(GraphicsIndex::ShadowMap)]);
     }
 
     widget("Performance Graphs", [&] {
@@ -144,6 +145,45 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
             ctx.ui.gpu_frame_graph.render_split("GPU", ImVec2(-1, 80), shared_scale);
         }
     });
+
+    widget("Sun & Shadow Settings", [&] {
+        if (ImGui::CollapsingHeader("Sun Direction", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::SliderFloat("Elevation", &ctx.ui.sun_config.elevation_degrees, 0.0f, 90.0f, "%.1f°");
+            ImGui::SliderFloat("Azimuth", &ctx.ui.sun_config.azimuth_degrees, 0.0f, 360.0f, "%.1f°");
+            ImGui::SliderFloat("Intensity", &ctx.ui.sun_config.intensity, 0.0f, 5.0f, "%.2f");
+
+            // Optional: preset buttons
+            if (ImGui::Button("Morning (East)")) {
+                ctx.ui.sun_config.elevation_degrees = 30.0f;
+                ctx.ui.sun_config.azimuth_degrees = 90.0f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Noon (Overhead)")) {
+                ctx.ui.sun_config.elevation_degrees = 80.0f;
+                ctx.ui.sun_config.azimuth_degrees = 0.0f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Sunset (West)")) {
+                ctx.ui.sun_config.elevation_degrees = 10.0f;
+                ctx.ui.sun_config.azimuth_degrees = 270.0f;
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Shadow Settings")) {
+            ImGui::SliderFloat("Shadow Distance", &ctx.ui.shadow_config.shadow_distance, -20000.0f, 20000.0f);
+            ImGui::SliderFloat("Ortho Size", &ctx.ui.shadow_config.ortho_size, 5.0f, 10000.0f);
+            ImGui::SliderFloat("Near Plane", &ctx.ui.shadow_config.near_plane, -50000.F, 50000.0F);
+            ImGui::SliderFloat("Far Plane", &ctx.ui.shadow_config.far_plane, -50000.0F, 50000.0f);
+            ImGui::DragFloat3("Light Target", &ctx.ui.shadow_config.light_target.x, 0.1f);
+
+            ImGui::ImageButton("Shadow map", ImTextureRef{ctx.res.directional_shadow_map_depth.index()},
+                               {
+                                       ImGui::GetContentRegionAvail().y,
+                                       ImGui::GetContentRegionAvail().y,
+                               });
+        }
+    });
+
 
     static u64 total_frame_counter = 0;
 
@@ -228,6 +268,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                     row_g("Deferred", GraphicsIndex::Deferred);
                     row_g("Tonemap", GraphicsIndex::Tonemap);
                     row_g("Present", GraphicsIndex::Present);
+                    row_g("ShadowMap", GraphicsIndex::ShadowMap);
 
                     ImGui::EndTable();
                 }

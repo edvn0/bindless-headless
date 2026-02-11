@@ -93,9 +93,8 @@ struct Vertex {
     auto operator==(const Vertex &other) const -> bool = default;
 };
 
-struct VertexWithUV {
+struct PositionOnlyVertex {
     glm::vec3 pos;
-    glm::vec2 uvs;
 };
 
 

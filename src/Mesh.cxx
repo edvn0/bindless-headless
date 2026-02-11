@@ -427,8 +427,10 @@ namespace {
         out.emissive_map = m.emissive_texname;
 
         out.is_alpha_tested = (m.dissolve > 0.0f) || (!m.alpha_texname.empty());
-        info("Material '{}' alpha tested: {}. Dissolve: {}. Alpha texname: '{}'", out.name, out.is_alpha_tested,
-             m.dissolve, m.alpha_texname);
+        if (out.is_alpha_tested) {
+            info("Material '{}' alpha tested: {}. Dissolve: {}. Alpha texname: '{}'", out.name, out.is_alpha_tested,
+                 m.dissolve, m.alpha_texname);
+        }
 
         if (out.albedo_factor == glm::vec4(0.0f))
             out.albedo_factor = glm::vec4{1.0f};
@@ -722,22 +724,21 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
 
     auto position_vb = mesh.vertices | std::views::transform([](const auto &v) {
-                           return VertexWithUV{
+                           return PositionOnlyVertex{
                                    .pos = v.position,
-                                   .uvs = v.uvs,
                            };
                        }) |
-                       to<std::vector<VertexWithUV>>();
+                       to<std::vector<PositionOnlyVertex>>();
 
     auto vertex_buffer =
             Buffer::from_slice<Vertex>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(vb_copy),
                                        std::format("vertex_buffer_{}", obj_path.filename().string()))
                     .value();
 
-    auto pos_uv_buffer =
-            Buffer::from_slice<VertexWithUV>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(position_vb),
-                                             std::format("position_buffer_{}", obj_path.filename().string()))
-                    .value();
+    auto pos_uv_buffer = Buffer::from_slice<PositionOnlyVertex>(
+                                 ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, std::span(position_vb),
+                                 std::format("position_buffer_{}", obj_path.filename().string()))
+                                 .value();
 
     auto index_buffer = Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, std::span(ib_copy),
                                                 std::format("index_buffer_{}", obj_path.filename().string()))

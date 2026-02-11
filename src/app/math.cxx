@@ -49,7 +49,7 @@ auto spawn_lights_in_aabb(AABB const &aabb, std::span<PointLight> lights) -> voi
         colour_intensity = {color_distribution(rng), color_distribution(rng), color_distribution(rng), intensity};
     }
 };
-glm::mat4 PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear) {
+auto PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear) -> glm::mat4 {
     const float f = 1.0f / glm::tan(fovYRadians * 0.5f);
 
     glm::mat4 m{0.0f};
@@ -63,6 +63,20 @@ glm::mat4 PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNea
 
     return m;
 }
+
+auto OrthoRH_ReverseZ(float left, float right, float bottom, float top, float z_near, float z_far) -> glm::mat4 {
+    glm::mat4 result(1.0f);
+
+    result[0][0] = 2.0f / (right - left);
+    result[1][1] = 2.0f / (top - bottom);
+    result[2][2] = 1.0f / (z_near - z_far); // Reversed for reverse-Z
+    result[3][0] = -(right + left) / (right - left);
+    result[3][1] = -(top + bottom) / (top - bottom);
+    result[3][2] = z_near / (z_near - z_far); // Reversed for reverse-Z
+
+    return result;
+}
+
 auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) -> ClusterConfig {
     u32 cluster_count = tiles_x * tiles_y * tiles_z;
     float log_z_scale = static_cast<float>(tiles_z) / std::log2f(z_far / z_near);

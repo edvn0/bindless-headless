@@ -70,9 +70,14 @@ struct OffscreenTarget {
     u32 height{};
     bool initialized{false};
 
-    auto is_depth() const -> bool;
-
-    auto is_stencil() const -> bool;
+    [[nodiscard]] auto is_depth() const -> bool;
+    [[nodiscard]] auto is_stencil() const -> bool;
+    [[nodiscard]] auto extent() const {
+        return VkExtent2D{
+                .width = width,
+                .height = height,
+        };
+    }
 
     auto transition_if_not_initialised(VkCommandBuffer, VkImageLayout,
                                        std::pair<VkAccessFlagBits2, VkPipelineStageFlagBits2> destination_flags)
@@ -90,7 +95,7 @@ struct OffscreenTarget {
     }
 
 private:
-    auto default_subresource_range() const -> VkImageSubresourceRange {
+    [[nodiscard]] auto default_subresource_range() const -> VkImageSubresourceRange {
         VkImageAspectFlags aspect = 0;
 
         if (is_depth())

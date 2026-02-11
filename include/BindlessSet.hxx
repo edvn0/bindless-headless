@@ -58,6 +58,7 @@ struct BindlessSet {
 
     u32 max_textures{1};
     u32 max_samplers{1};
+    u32 max_comparison_samplers{1};
     u32 max_storage_images{1};
     u32 max_accel_structs{1};
 
@@ -67,12 +68,14 @@ struct BindlessSet {
     BindlessCaps caps{};
 
     auto init(VkDevice dev, BindlessCaps const &caps_init, u32 initial_textures, u32 initial_samplers,
+              u32 initial_comparison_samplers, // ✅ ADD THIS
               u32 initial_storage_images, u32 initial_accel_structs) -> void {
         device = dev;
         caps = caps_init;
 
         max_textures = std::min(initial_textures, caps.max_textures);
         max_samplers = std::min(initial_samplers, caps.max_samplers);
+        max_comparison_samplers = std::min(initial_comparison_samplers, caps.max_samplers); // ✅ ADD THIS
         max_storage_images = std::min(initial_storage_images, caps.max_storage_images);
         max_accel_structs = std::min(initial_accel_structs, caps.max_accel_structs);
 
@@ -115,6 +118,7 @@ struct BindlessSet {
         grow_and_clamp(max_textures, req_textures, caps.max_textures);
         grow_and_clamp(max_samplers, req_samplers, caps.max_samplers);
         grow_and_clamp(max_storage_images, req_storage, caps.max_storage_images);
+        grow_and_clamp(max_comparison_samplers, req_samplers, caps.max_samplers);
         grow_and_clamp(max_accel_structs, req_accel, caps.max_accel_structs);
 
         if (!grow && layout != VK_NULL_HANDLE) {
@@ -127,7 +131,7 @@ struct BindlessSet {
         return true;
     }
 
-    auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers) -> bool {
+    auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers, SamplerPool &comparison_samplers) -> bool {
         if (!need_repopulate) [[likely]]
             return false;
 
@@ -146,6 +150,7 @@ struct BindlessSet {
         std::vector<VkDescriptorImageInfo> sampled_infos(max_textures);
         std::vector<VkDescriptorImageInfo> storage_infos(max_storage_images);
         std::vector<VkDescriptorImageInfo> sampler_infos(max_samplers);
+        std::vector<VkDescriptorImageInfo> comparison_sampler_infos(max_comparison_samplers);
 
         for (u32 i = 0; i < max_textures; ++i) {
             sampled_infos[i] = VkDescriptorImageInfo{
@@ -222,7 +227,36 @@ struct BindlessSet {
             }
         }
 
-        std::array<VkWriteDescriptorSet, 3> writes{};
+        {
+            u32 idx = 0;
+            const u32 limit =
+                    std::min<u32>(static_cast<u32>(comparison_samplers.data().size()), max_comparison_samplers);
+
+            for (u32 i = 0; i < max_comparison_samplers; ++i) {
+                comparison_sampler_infos[i] = VkDescriptorImageInfo{
+                        .sampler = dummy_vk_sampler,
+                        .imageView = VK_NULL_HANDLE,
+                        .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                };
+            }
+
+            for (const auto &sampler_entry: comparison_samplers.data()) {
+                if (idx >= limit) {
+                    break;
+                }
+
+                const VkSampler s = sampler_entry.object;
+                comparison_sampler_infos[idx] = VkDescriptorImageInfo{
+                        .sampler = (s != VK_NULL_HANDLE) ? s : dummy_vk_sampler,
+                        .imageView = VK_NULL_HANDLE,
+                        .imageLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                };
+
+                ++idx;
+            }
+        }
+
+        std::array<VkWriteDescriptorSet, 4> writes{};
         u32 num_writes = 0;
 
         writes[num_writes++] = VkWriteDescriptorSet{
@@ -264,6 +298,20 @@ struct BindlessSet {
                 .pTexelBufferView = nullptr,
         };
 
+        writes[num_writes++] = VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = nullptr,
+                .dstSet = set,
+                .dstBinding = 3,
+                .dstArrayElement = 0,
+                .descriptorCount = max_comparison_samplers,
+                .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+                .pImageInfo = comparison_sampler_infos.data(),
+                .pBufferInfo = nullptr,
+                .pTexelBufferView = nullptr,
+        };
+
+
         vkUpdateDescriptorSets(device, num_writes, writes.data(), 0, nullptr);
         need_repopulate = false;
 
@@ -293,9 +341,16 @@ private:
                             .stageFlags = VK_SHADER_STAGE_ALL,
                             .pImmutableSamplers = nullptr});
 
+        // ✅ ADD THIS: New binding for comparison samplers
+        bindings.push_back({.binding = 3u,
+                            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+                            .descriptorCount = max_comparison_samplers,
+                            .stageFlags = VK_SHADER_STAGE_ALL,
+                            .pImmutableSamplers = nullptr});
+
         bool accel_enabled = (max_accel_structs > 0);
         if (accel_enabled) {
-            bindings.push_back({.binding = 3u,
+            bindings.push_back({.binding = 4u, // ✅ CHANGED from 3u to 4u
                                 .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
                                 .descriptorCount = max_accel_structs,
                                 .stageFlags = VK_SHADER_STAGE_ALL,
@@ -323,11 +378,14 @@ private:
         vk_check(vkCreateDescriptorSetLayout(device, &lci, nullptr, &layout));
 
         std::vector<VkDescriptorPoolSize> pool_sizes;
-        pool_sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, max_textures});
-        pool_sizes.push_back({VK_DESCRIPTOR_TYPE_SAMPLER, max_samplers});
-        pool_sizes.push_back({VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, max_storage_images});
+        pool_sizes.push_back({.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = max_textures});
+        pool_sizes.push_back({.type = VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = max_samplers});
+        pool_sizes.push_back({.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = max_storage_images});
+        pool_sizes.push_back(
+                {.type = VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = max_comparison_samplers}); // ✅ ADD THIS
         if (accel_enabled) {
-            pool_sizes.push_back({VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, max_accel_structs});
+            pool_sizes.push_back(
+                    {.type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, .descriptorCount = max_accel_structs});
         }
 
         VkPipelineLayoutCreateInfo plci{

@@ -314,7 +314,7 @@ float3 calculate_ambient(
 struct VertexInput
 {
     float3 position;
-    float2   uvs;           
+    float2   uvs;
     uint   normal;      // 10_10_10_2 snorm-ish
     uint   tangent;     // 10_10_10_2
     uint   bitangent;   // 10_10_10_2
@@ -338,12 +338,9 @@ struct RenderingPushConstants
 {
     UBO*       frame_ubo;
     Transform* transforms;
-
     uint*      draw_material_ids;
     Material*  materials;
-
     uint       base_draw_id;
-
     uint       sampler_index; // choose which sampler to use for material textures
 };
 
@@ -435,17 +432,14 @@ struct Cluster
 struct DeferredLightingPushConstants
 {
     UBO*        frame_ubo;
-
-    PointLight* point_lights;       
-
+    PointLight* point_lights;
+    float4x4 shadow_matrix;
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
     float log_z_scale;
-
     Cluster* clusters;               // Cluster offset/count data
     uint*    cluster_light_indices;  // Packed light indices
-
     uint gbuffer0_index;
     uint gbuffer1_index;
     uint gbuffer2_index;
@@ -453,6 +447,8 @@ struct DeferredLightingPushConstants
     uint debug_culling_index;
     uint lit_hdr_uav_index;
     uint sampler_index;
+    uint shadow_texture_index;
+    uint shadow_sampler_index;
     uint debug_mode;
 };
 
@@ -469,29 +465,24 @@ uint compute_cluster_index(
     float2 tile_coord = screen_pos / screen_size;
     uint cluster_x = uint(tile_coord.x * float(tiles_x));
     uint cluster_y = uint(tile_coord.y * float(tiles_y));
-    
+
     cluster_x = min(cluster_x, tiles_x - 1);
     cluster_y = min(cluster_y, tiles_y - 1);
-    
+
     float depth_ratio = abs(view_z) / z_near;
     uint cluster_z = uint(log2(max(depth_ratio, 1.0)) * log_z_scale);  // ✅ Clamp to >= 1.0
     cluster_z = min(cluster_z, tiles_z - 1);
-    
+
     return cluster_x + cluster_y * tiles_x + cluster_z * tiles_x * tiles_y;
 }
 
 float3 reconstruct_world_pos_from_depth_fixed(float2 uv, float depth, UBO* ubo)
 {
-    // For reverse-Z
     float2 ndc_xy = uv * 2.0 - 1.0;
+    
     float4 clip = float4(ndc_xy, depth, 1.0);
-
     float4 world = mul(ubo->inv_view_projection, clip);
-
-    // CRITICAL: Check for valid W
-    if (abs(world.w) < 1e-6)
-        return float3(0, 0, 0);
-
+    
     return world.xyz / world.w;
 }
 
@@ -501,22 +492,47 @@ struct VSOut
     float2 uv       : TEXCOORD0;
 };
 
-[shader("vertex")]
-VSOut vs_fullscreen_main(uint vertex_id : SV_VertexID)
+
+float calculate_shadow(float3 world_pos, float4x4 shadow_matrix, uint tex_idx, uint comp_samp_idx)
 {
-    float2 pos = float2(
-        (vertex_id == 2) ?  3.0 : -1.0,
-        (vertex_id == 1) ?  3.0 : -1.0
+    // 1. Transform world position to Light Clip Space
+    float4 shadow_coord = mul(shadow_matrix, float4(world_pos, 1.0));
+    
+    // 2. Perspective divide to get NDC
+    float3 ndc = shadow_coord.xyz / shadow_coord.w;
+
+    // 3. Transform NDC [-1, 1] to UV [0, 1]
+    // Vulkan Y is pointing down, so we flip the Y calculation here 
+    // to match how textures are stored/sampled.
+    float2 shadow_uv = float2(
+        ndc.x * 0.5 + 0.5,
+        ndc.y * -0.5 + 0.5 // Note the negative 0.5 to flip Y
     );
 
-    VSOut o;
-    o.position = float4(pos, 0.0, 1.0);
-    o.uv = pos * 0.5 + 0.5;
-    o.uv.y = 1.0 - o.uv.y;
+    // 4. Boundary Check
+    // If we are outside the light's frustum, the pixel is lit.
+    if (any(shadow_uv < 0.0) || any(shadow_uv > 1.0) || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
 
-    return o;
+    uint t_idx = NonUniformResourceIndex(tex_idx);
+    uint cs_idx = NonUniformResourceIndex(comp_samp_idx);
+
+    // 5. Reverse-Z Bias
+    // In Reverse-Z, higher values are closer to the light.
+    // We add a small bias to the current pixel's depth to avoid self-shadowing (acne).
+    float bias = 0.0005; 
+    float reference_depth = ndc.z + bias;
+
+    // 6. Hardware PCF
+    // This uses your VK_COMPARE_OP_GREATER_OR_EQUAL sampler.
+    return sampled_images[t_idx].SampleCmp(
+        comparison_samplers[cs_idx],
+        shadow_uv,
+        reference_depth
+    );
+
 }
-
 [shader("fragment")]
 float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : SV_Target0
 {
@@ -544,6 +560,12 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
 
     float3 N = oct_decode(oct_u);
     float3 world_pos = reconstruct_world_pos_from_depth_fixed(uv, depth, pc.frame_ubo);
+    float shadow_factor = calculate_shadow(
+    world_pos,
+    pc.shadow_matrix,
+    pc.shadow_texture_index,
+    pc.shadow_sampler_index
+);
     float3 V = safe_normalize(pc.frame_ubo->camera_position.xyz - world_pos);
 
     // Ambient
@@ -558,18 +580,18 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     // Sun light
     color += evaluate_directional_light(
         pc.frame_ubo->sun_dir,
-        pc.frame_ubo->sun_intensity,
+        pc.frame_ubo->sun_intensity * shadow_factor,
         float3(1.0, 1.0, 1.0),
         V,
         N,
         albedo,
         rough,
         metal
-    );
+    ) ;
 
     float3 view_pos = mul(pc.frame_ubo->view, float4(world_pos, 1.0)).xyz;
     float2 screen_size = pc.frame_ubo->viewport_size;
-    
+
     uint cluster_idx = compute_cluster_index(
         i.position.xy,
         view_pos.z,
@@ -580,18 +602,17 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
         pc.tiles_z,
         screen_size
     );
-    
+
     var cluster = pc.clusters[cluster_idx];
 
     const uint MAX_LIGHTS_PER_PIXEL = 128u; // Tune this!
 uint lights_to_process = min(cluster.light_count, MAX_LIGHTS_PER_PIXEL);
-    float3 debug_color = {0.0f};
-    for (uint li = 0; li < cluster.light_count; ++li)
+    for (uint li = 0; li < lights_to_process; ++li)
     {
         uint light_idx = pc.cluster_light_indices[cluster.light_offset + li];
         PointLight light = pc.point_lights[light_idx];
 
-        debug_color += evaluate_point_light_fixed_v3(
+        color += evaluate_point_light_fixed_v3(
             light,
             world_pos,
             V,

@@ -139,6 +139,9 @@ SamplerState samplers[];
 [[vk::binding(2, 0)]]
 RWTexture2D<float4> storage_images[];
 
+[[vk::binding(3, 0)]] 
+SamplerComparisonState comparison_samplers[];
+
 float4 sample_texture_lod(float2 uv, uint image_index, uint sampler_index = 0, float lod)
 {
     uint tex_idx = NonUniformResourceIndex(image_index);
