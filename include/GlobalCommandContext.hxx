@@ -24,7 +24,7 @@ struct GlobalCommandContext {
     }
 };
 
-auto create_global_cmd_context(VkDevice device, VkQueue queue, u32 family_index) -> GlobalCommandContext;
+auto create_global_cmd_context(VkDevice device, VkQueue queue, u32 family_index) -> std::unique_ptr<GlobalCommandContext>;
 
 template<typename RecordFn>
 auto submit_one_time_cmd(GlobalCommandContext &ctx, RecordFn &&record, bool wait_immediately = false) -> u64 {

@@ -25,6 +25,7 @@ struct RenderContext {
     VmaAllocator allocator;
     DeferredDestroyQueue destroy_queue{};
     BindlessSet *bindless_set{nullptr};
+    std::unique_ptr<GlobalCommandContext> command_ctx;
     std::unique_ptr<PipelineCache> pipeline_cache;
     AllQueues queues{};
 

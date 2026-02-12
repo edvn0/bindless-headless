@@ -157,8 +157,7 @@ namespace {
 
 } // namespace
 
-ImGuiRenderer::ImGuiRenderer(GLFWwindow *w, u32 initial_slot_count, RenderContext &c, GlobalCommandContext &cc,
-                             Compiler &comp, FontChoice font) : ctx(c), command_ctx(cc), compiler(comp) {
+ImGuiRenderer::ImGuiRenderer(GLFWwindow *w, u32 initial_slot_count, RenderContext &c, Compiler &comp, FontChoice font) : ctx(c), compiler(comp) {
 
     std::ignore = ImGui::CreateContext();
     std::ignore = ImPlot::CreateContext();
@@ -808,7 +807,7 @@ auto ImGuiRenderer::update_font(FontChoice f) -> void {
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     font_texture =
             Holder<TextureHandle>(ctx, ctx.create_texture(create_image_from_span_v2(
-                                               ctx.allocator, command_ctx, width, height, VK_FORMAT_R8G8B8A8_UNORM,
+                                               ctx.allocator, *ctx.command_ctx, width, height, VK_FORMAT_R8G8B8A8_UNORM,
                                                std::span(pixels, width * height * 4), "imgui_fonts")));
     io.Fonts->TexID = font_texture.index();
     io.FontDefault = font;

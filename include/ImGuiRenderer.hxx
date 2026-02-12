@@ -17,7 +17,7 @@ using ImGuiFramebuffer = std::tuple<VkExtent2D, VkFormat, VkFormat, VkColorSpace
 
 class ImGuiRenderer {
 public:
-    ImGuiRenderer(GLFWwindow *main_window, u32 initial_slot_count, RenderContext &, GlobalCommandContext &, Compiler &,
+    ImGuiRenderer(GLFWwindow *main_window, u32 initial_slot_count, RenderContext &, Compiler &,
                   FontChoice = {});
     ~ImGuiRenderer();
 
@@ -50,7 +50,6 @@ private:
     Holder<TextureHandle> font_texture{};
 
     RenderContext &ctx;
-    GlobalCommandContext &command_ctx;
     Compiler &compiler;
 
     f32 display_scale{1.0F};

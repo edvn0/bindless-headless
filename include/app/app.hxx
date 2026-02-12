@@ -48,7 +48,6 @@ struct AppGpuState {
     VkSurfaceKHR surface{VK_NULL_HANDLE};
 
     Swapchain swapchain{};
-    GlobalCommandContext command_context{};
 
     VmaAllocator allocator{VK_NULL_HANDLE};
 

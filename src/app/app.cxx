@@ -421,7 +421,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     }
 
     // --- Command context + allocator + timelines ---
-    gpu.command_context = create_global_cmd_context(gpu.device, gpu.graphics_queue, gpu.graphics_index);
     gpu.allocator = create_allocator(instance.instance, gpu.physical_device, gpu.device);
 
     gpu.tl_compute = create_compute_timeline(gpu.device, gpu.compute_queue, gpu.compute_index);
@@ -440,6 +439,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         gpu.ctx = RenderContext{
                 .allocator = gpu.allocator,
                 .bindless_set = &gpu.bindless,
+                .command_ctx = create_global_cmd_context(gpu.device, gpu.graphics_queue, gpu.graphics_index),
                 .pipeline_cache = std::make_unique<PipelineCache>(gpu.device, opts.pipeline_cache_dir),
                 .queues =
                         {
@@ -540,13 +540,13 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         std::array<u8, 4> flat_normal{128, 128, 255, 255};
 
         auto white_handle = gpu.ctx.create_texture(
-                create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                create_image_from_span_v2(gpu.allocator, *gpu.ctx.command_ctx, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
                                           std::as_bytes(std::span(white)), "white-texture"));
         auto black_handle = gpu.ctx.create_texture(
-                create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                create_image_from_span_v2(gpu.allocator, *gpu.ctx.command_ctx, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
                                           std::as_bytes(std::span(black)), "black-texture"));
         auto flat_normal_handle = gpu.ctx.create_texture(
-                create_image_from_span_v2(gpu.allocator, gpu.command_context, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+                create_image_from_span_v2(gpu.allocator, *gpu.ctx.command_ctx, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
                                           std::as_bytes(std::span(flat_normal)), "flat-normals-texture"));
 
 #ifndef NDEBUG
@@ -563,7 +563,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     {
         auto noise = generate_perlin(2048, 2048);
         res.perlin_noise =
-                gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, gpu.command_context, 2048u, 2048u,
+                gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, *gpu.ctx.command_ctx, 2048u, 2048u,
                                                                  VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
     }
 
@@ -642,7 +642,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Load meshes ---
     {
-        TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, gpu.command_context, "assets/meshes/Sponza-master/sponza.obj"),
+        TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, *gpu.ctx.command_ctx, "assets/meshes/Sponza-master/sponza.obj"),
                       "Failed to load cube mesh");
         res.mesh = std::move(loaded_mesh);
     }
@@ -1019,8 +1019,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     ui.last_viewport_extent = last_scene_extent;
 
-    ui.gui = std::make_unique<ImGuiRenderer>(gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx,
-                                             gpu.command_context, *gpu.compiler);
+    ui.gui = std::make_unique<ImGuiRenderer>(gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx, *gpu.compiler);
 
     auto gui_pipeline_node = window_resize_graph.add_node(
             "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },
@@ -1361,7 +1360,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     gpu.ctx.destroy_queue.retire(std::numeric_limits<u64>::max());
 
-    destruction::global_command_context(gpu.command_context);
+    destruction::global_command_context(*gpu.ctx.command_ctx);
     destruction::bindless_set(gpu.bindless);
     destruction::timelines(gpu.device, gpu.tl_graphics, gpu.tl_transfer, gpu.tl_compute);
     destruction::allocator(gpu.allocator);
