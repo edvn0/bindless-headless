@@ -174,6 +174,11 @@ target_link_libraries(BindlessApp PUBLIC
   BindlessEngine
 )
 
+if(HAS_TRACY)
+  target_link_libraries(BindlessApp PRIVATE Tracy::TracyClient)
+  target_compile_definitions(BindlessApp PRIVATE TRACY_ENABLE TRACY_VK_USE_SYMBOL_TABLE)
+endif()
+
 DEFAULT_COMPILE_OPTIONS(BindlessApp)
 
 # ------------------------------------------------------------

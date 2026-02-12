@@ -429,6 +429,31 @@ struct Cluster
     uint light_count;
 };
 
+/**
+struct DeferredLightingPushConstants {
+    const DeviceAddress frame_ubo;
+    const DeviceAddress point_lights; // All the lights
+    const glm::mat4 shadow_matrix;
+
+    u32 tiles_x;
+    u32 tiles_y;
+    u32 tiles_z;
+    float log_z_scale;
+
+    const DeviceAddress clusters;
+    const DeviceAddress cluster_light_indices;
+
+    u32 gbuffer0_index;
+    u32 gbuffer1_index;
+    u32 gbuffer2_index;
+    u32 depth_index;
+    u32 lit_hdr_uav_index{0}; // For the compute version, just 0 always
+    u32 sampler_index;
+    const u32 shadow_texture_index;
+    const u32 shadow_sampler_index;
+    u32 debug_mode;
+};
+*/
 struct DeferredLightingPushConstants
 {
     UBO*        frame_ubo;
@@ -444,7 +469,6 @@ struct DeferredLightingPushConstants
     uint gbuffer1_index;
     uint gbuffer2_index;
     uint depth_index;
-    uint debug_culling_index;
     uint lit_hdr_uav_index;
     uint sampler_index;
     uint shadow_texture_index;
@@ -492,47 +516,43 @@ struct VSOut
     float2 uv       : TEXCOORD0;
 };
 
-
 float calculate_shadow(float3 world_pos, float4x4 shadow_matrix, uint tex_idx, uint comp_samp_idx)
 {
-    // 1. Transform world position to Light Clip Space
+    // Transform world position to shadow map space
     float4 shadow_coord = mul(shadow_matrix, float4(world_pos, 1.0));
     
-    // 2. Perspective divide to get NDC
+    // Perspective divide to get NDC
     float3 ndc = shadow_coord.xyz / shadow_coord.w;
-
-    // 3. Transform NDC [-1, 1] to UV [0, 1]
-    // Vulkan Y is pointing down, so we flip the Y calculation here 
-    // to match how textures are stored/sampled.
+    
     float2 shadow_uv = float2(
         ndc.x * 0.5 + 0.5,
-        ndc.y * -0.5 + 0.5 // Note the negative 0.5 to flip Y
+        ndc.y * -0.5 + 0.5  
     );
-
-    // 4. Boundary Check
-    // If we are outside the light's frustum, the pixel is lit.
-    if (any(shadow_uv < 0.0) || any(shadow_uv > 1.0) || ndc.z < 0.0 || ndc.z > 1.0) {
-        return 1.0;
-    }
-
+    
+    if (any(shadow_uv < 0.0) || any(shadow_uv > 1.0))
+        return 1.0; // Outside shadow map = fully lit
+    
     uint t_idx = NonUniformResourceIndex(tex_idx);
     uint cs_idx = NonUniformResourceIndex(comp_samp_idx);
-
-    // 5. Reverse-Z Bias
-    // In Reverse-Z, higher values are closer to the light.
-    // We add a small bias to the current pixel's depth to avoid self-shadowing (acne).
-    float bias = 0.0005; 
-    float reference_depth = ndc.z + bias;
-
-    // 6. Hardware PCF
-    // This uses your VK_COMPARE_OP_GREATER_OR_EQUAL sampler.
-    return sampled_images[t_idx].SampleCmp(
+    
+    const float bias = 0.0005; 
+    float reference_depth = ndc.z - bias;  // ✅ Subtract bias for reverse-Z
+    
+    // Clamp to valid depth range
+    reference_depth = saturate(reference_depth);
+    
+    // Hardware comparison sample
+    // Returns 1.0 if lit, 0.0 if shadowed (with GREATER_OR_EQUAL comparison)
+    float lit_factor = sampled_images[t_idx].SampleCmp(
         comparison_samplers[cs_idx],
         shadow_uv,
         reference_depth
     );
-
+    
+    return lit_factor;
 }
+
+
 [shader("fragment")]
 float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : SV_Target0
 {
@@ -574,7 +594,7 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
         metal,
         ao,
         float3(0.03, 0.03, 0.03),
-        0.1
+        3
     );
 
     // Sun light
@@ -604,15 +624,12 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     );
 
     var cluster = pc.clusters[cluster_idx];
-
-    const uint MAX_LIGHTS_PER_PIXEL = 128u; // Tune this!
-uint lights_to_process = min(cluster.light_count, MAX_LIGHTS_PER_PIXEL);
-    for (uint li = 0; li < lights_to_process; ++li)
+    for (uint li = 0; li < cluster.light_count; ++li)
     {
         uint light_idx = pc.cluster_light_indices[cluster.light_offset + li];
         PointLight light = pc.point_lights[light_idx];
 
-        color += evaluate_point_light_fixed_v3(
+        color +=  evaluate_point_light_fixed_v3(
             light,
             world_pos,
             V,

@@ -54,7 +54,7 @@ void fs_main(VSOut i, uniform PC pc)
 {
     Material mat = pc.materials[i.material_id];
     float alpha =  mat.albedo_factor.a;
-    if (alpha < 0.5f) {
+    if (alpha < 1.0F) {
         discard;
     }
 }

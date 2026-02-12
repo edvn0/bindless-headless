@@ -427,15 +427,12 @@ namespace {
         out.emissive_map = m.emissive_texname;
 
         out.is_alpha_tested = (m.dissolve > 0.0f) || (!m.alpha_texname.empty());
-        if (out.is_alpha_tested) {
-            info("Material '{}' alpha tested: {}. Dissolve: {}. Alpha texname: '{}'", out.name, out.is_alpha_tested,
-                 m.dissolve, m.alpha_texname);
-        }
 
         if (out.albedo_factor == glm::vec4(0.0f))
             out.albedo_factor = glm::vec4{1.0f};
 
-        out.albedo_factor.a = out.is_alpha_tested ? m.dissolve : 1.0F;
+        static constexpr auto default_transparency_if_alpha_tested = 0.1F;
+        out.albedo_factor.a = out.is_alpha_tested ? default_transparency_if_alpha_tested : 1.0F;
         return out;
     }
 

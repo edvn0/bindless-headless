@@ -46,7 +46,7 @@ auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::st
 
 auto RenderContext::create_comparison_sampler(VkSampler &&sampler) -> SamplerHandle {
     bindless_set->need_repopulate = true;
-    return samplers.create(std::move(sampler));
+    return comparison_samplers.create(std::move(sampler));
 }
 
 auto RenderContext::create_comparison_sampler(const VkSamplerCreateInfo info, const std::string_view name)
@@ -108,6 +108,7 @@ auto RenderContext::texture_format(TextureHandle handle) const -> VkFormat {
 auto RenderContext::clear_all() -> void {
     textures.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     samplers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
+    comparison_samplers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     buffers.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     query_pools.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
     pipeline_pool.for_each_live([&ctx = *this](auto h, auto &) { destroy(ctx, h); });
@@ -164,10 +165,9 @@ auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void
 }
 
 auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void {
-    auto impl = ctx.samplers.get(handle);
-    if (!impl) {
-        return;
-    }
+    bool is_comparison = ctx.comparison_samplers.maybe_get_handle(handle.index()).valid();
+    auto *impl = is_comparison ? ctx.comparison_samplers.get(handle) : ctx.samplers.get(handle);
+
     ctx.bindless_set->need_repopulate = true;
 
     // Sampler is just a VkSampler handle
@@ -178,7 +178,7 @@ auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void
         vmaGetAllocatorInfo(alloc, &info);
         vkDestroySampler(info.device, sampler, nullptr);
     });
-    ctx.samplers.destroy(handle);
+    is_comparison ? ctx.comparison_samplers.destroy(handle) : ctx.samplers.destroy(handle);
 }
 
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value) -> void {

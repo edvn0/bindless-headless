@@ -114,26 +114,24 @@ struct RotateCubesPushConstant {
 struct DeferredLightingPushConstants
 {
     UBO*        frame_ubo;
-
-    PointLight* point_lights;        // Original full lights buffer
-    uint        point_light_count;   // Total light count (not pointer)
-
+    PointLight* point_lights;
+    float4x4 shadow_matrix;
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
     float log_z_scale;
-
     Cluster* clusters;               // Cluster offset/count data
     uint*    cluster_light_indices;  // Packed light indices
-
     uint gbuffer0_index;
     uint gbuffer1_index;
     uint gbuffer2_index;
     uint depth_index;
-
     uint lit_hdr_uav_index;
-
     uint sampler_index;
+    uint shadow_texture_index;
+    uint shadow_sampler_index;
+    uint debug_mode;
+};
     };*/
 struct DeferredLightingPushConstants {
     const DeviceAddress frame_ubo;
@@ -153,7 +151,6 @@ struct DeferredLightingPushConstants {
     u32 gbuffer2_index;
     u32 depth_index;
     u32 lit_hdr_uav_index{0}; // For the compute version, just 0 always
-    u32 debug_output_index;
     u32 sampler_index;
     const u32 shadow_texture_index;
     const u32 shadow_sampler_index;

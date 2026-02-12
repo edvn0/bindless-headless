@@ -73,30 +73,30 @@ struct FrustumPlane {
 auto PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear) -> glm::mat4;
 auto OrthoRH_ReverseZ(f32, f32, f32, f32, f32, f32) -> glm::mat4;
 
-constexpr auto extract_frustum_planes = [](const glm::mat4 &inv_proj) -> std::array<FrustumPlane, 6> {
-    constexpr std::array<glm::vec4, 8> ndc_corners = {
-            glm::vec4{-1, -1, 0, 1}, {1, -1, 0, 1}, {-1, 1, 0, 1}, {1, 1, 0, 1}, // Near (0-3)
-            glm::vec4{-1, -1, 1, 1}, {1, -1, 1, 1}, {-1, 1, 1, 1}, {1, 1, 1, 1} // Far  (4-7)
-    };
-
-    glm::vec3 v[8];
-    for (int i = 0; i < 8; ++i) {
-        glm::vec4 p = inv_proj * ndc_corners[i];
-        v[i] = glm::vec3(p) / p.w;
-    }
-
-    auto compute_plane = [](glm::vec3 a, glm::vec3 b, glm::vec3 c) {
-        glm::vec3 normal = glm::normalize(glm::cross(c - a, b - a));
-        return glm::vec4(normal, -glm::dot(normal, a));
-    };
-
+constexpr auto extract_frustum_planes = [](const glm::mat4 &view_proj) -> std::array<FrustumPlane, 6> {
     std::array<FrustumPlane, 6> planes{};
-    planes[0].plane = compute_plane(v[0], v[2], v[4]); // Left
-    planes[1].plane = compute_plane(v[1], v[5], v[3]); // Right
-    planes[2].plane = compute_plane(v[0], v[4], v[1]); // Bottom
-    planes[3].plane = compute_plane(v[2], v[3], v[6]); // Top
-    planes[4].plane = compute_plane(v[0], v[1], v[2]); // Near
-    planes[5].plane = compute_plane(v[4], v[6], v[5]); // Far
+
+    planes[0].plane = glm::vec4(view_proj[0][3] + view_proj[0][0], view_proj[1][3] + view_proj[1][0],
+                                view_proj[2][3] + view_proj[2][0], view_proj[3][3] + view_proj[3][0]);
+
+    planes[1].plane = glm::vec4(view_proj[0][3] - view_proj[0][0], view_proj[1][3] - view_proj[1][0],
+                                view_proj[2][3] - view_proj[2][0], view_proj[3][3] - view_proj[3][0]);
+
+    planes[2].plane = glm::vec4(view_proj[0][3] + view_proj[0][1], view_proj[1][3] + view_proj[1][1],
+                                view_proj[2][3] + view_proj[2][1], view_proj[3][3] + view_proj[3][1]);
+
+    planes[3].plane = glm::vec4(view_proj[0][3] - view_proj[0][1], view_proj[1][3] - view_proj[1][1],
+                                view_proj[2][3] - view_proj[2][1], view_proj[3][3] - view_proj[3][1]);
+
+    planes[4].plane = glm::vec4(view_proj[0][3] + view_proj[0][2], view_proj[1][3] + view_proj[1][2],
+                                view_proj[2][3] + view_proj[2][2], view_proj[3][3] + view_proj[3][2]);
+
+    planes[5].plane = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+
+    for (int i = 0; i < 5; ++i) { // Skip far plane
+        float length = glm::length(glm::vec3(planes[i].plane));
+        planes[i].plane /= length;
+    }
 
     return planes;
 };

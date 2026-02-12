@@ -96,7 +96,10 @@ class Holder final {
 
 public:
     explicit Holder(RenderContext &ctx, T h) : context(&ctx), handle(h) {}
-    ~Holder() { destroy(*context, handle); }
+    ~Holder() {
+        if (context)
+            destroy(*context, handle);
+    }
     Holder() = default;
 
     Holder(Holder &&other) : context(other.context), handle(other.handle) {}

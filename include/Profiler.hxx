@@ -58,7 +58,7 @@ struct TracyGpuContext {
     TracyVkCtx ctx{nullptr};
 #endif
 
-    auto init_calibrated(VkInstance, VkPhysicalDevice, VkDevice, const VolkInstanceTable &, std::string_view) -> void;
+    auto init_calibrated(VkInstance, VkPhysicalDevice, VkDevice, std::string_view) -> void;
 
     auto shutdown() -> void;
 };

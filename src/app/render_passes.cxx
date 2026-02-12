@@ -312,7 +312,6 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, D
 
                 end_stats(cmd, *css, ComputeIndex::Clustering);
                 write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringEnd);
-                TracyVkCollect(gpu.tracy_compute.ctx, cmd);
             },
             sync);
 }
@@ -729,7 +728,6 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                         .gbuffer2_index = res.gbuffer2.index(),
                         .depth_index = res.depth.index(),
                         .lit_hdr_uav_index = 0,
-                        .debug_output_index = res.debug_culling.index(),
                         .sampler_index = pipes.linear_clamp.index(),
                         .shadow_texture_index = res.directional_shadow_map_depth.index(),
                         .shadow_sampler_index = pipes.depth_compare_filter.index(),
@@ -995,8 +993,6 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
 
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::PresentEnd);
                 end_query_for_index(cmd, GraphicsIndex::Present, pool);
-
-                TracyVkCollect(gpu.tracy_graphics.ctx, cmd);
             },
             sync);
 }

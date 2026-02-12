@@ -382,12 +382,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         gpu.transfer_queue = xfer_q;
         gpu.enabled_features = std::move(enabled);
 
-        VolkInstanceTable instance_functions{};
-        volkLoadInstanceTable(&instance_functions, instance);
-        gpu.tracy_graphics.init_calibrated(instance, gpu.physical_device, gpu.device, instance_functions,
-                                           "Graphics Queue");
-        gpu.tracy_compute.init_calibrated(instance, gpu.physical_device, gpu.device, instance_functions,
-                                          "Compute Queue");
+        gpu.tracy_graphics.init_calibrated(instance, gpu.physical_device, gpu.device, "Graphics Queue");
+        gpu.tracy_compute.init_calibrated(instance, gpu.physical_device, gpu.device, "Compute Queue");
     }
 
 
@@ -582,7 +578,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             ci.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 
             pipes.linear_repeat = gpu.ctx.create_sampler(ci, "linear_repeat");
-            info("Linear Repeat Sampler Index: {}", pipes.linear_repeat.index());
         }
 
         {
@@ -978,12 +973,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
 
             res.depth = gpu.ctx.create_texture(create_depth_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, false, "depth"));
+                    gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "depth"));
 
             if (res.directional_shadow_map_depth.empty()) {
                 res.directional_shadow_map_depth = gpu.ctx.create_texture(
-                        create_depth_target(gpu.allocator, 4096, 4096, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
-                                            true, "directional_shadow_map"));
+                        create_depth_target(gpu.allocator, 4096 * 4, 4096 * 4, VK_FORMAT_D32_SFLOAT,
+                                            VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
             }
 
             res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
@@ -1019,7 +1014,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     ui.last_viewport_extent = last_scene_extent;
 
-    ui.gui = std::make_unique<ImGuiRenderer>(gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx, *gpu.compiler);
+    ui.gui = std::make_unique<ImGuiRenderer>(gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx,
+                                             *gpu.compiler);
 
     auto gui_pipeline_node = window_resize_graph.add_node(
             "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },
@@ -1054,6 +1050,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     while (!glfwWindowShouldClose(gpu.window) && keep_running) {
         glfwPollEvents();
         handle_bindless_repopulation(app_context, window_resize_graph);
+
 
         update_frame_timing(ui);
         const auto [bounded_frame_index, last_frame_index] = frame_indices(ui);
@@ -1098,7 +1095,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             auto sun_direction_intensity = glm::vec4(sun_dir, ui.sun_config.intensity);
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
             res.frame_ubo_ring.write_field(gpu.ctx, bounded_frame_index, sun_direction_intensity, offset);
-
             /* {
                  const glm::vec3 light_pos =
                          ui.shadow_config.light_target - (sun_dir * ui.shadow_config.shadow_distance);
@@ -1113,29 +1109,38 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 glm::vec3 scene_center = res.mesh.mesh_aabb.center();
                 glm::vec3 scene_extents = (res.mesh.mesh_aabb.max - res.mesh.mesh_aabb.min) * 0.5f;
                 float scene_radius = glm::length(scene_extents);
-
                 // Position light far enough to see entire scene
                 float light_distance = scene_radius * 2.0f + 50.0f;
                 glm::vec3 light_pos = scene_center - sun_dir * light_distance;
 
-                glm::mat4 light_view = glm::lookAt(light_pos, scene_center, glm::vec3(0, 1, 0));
+                // ✅ FIX: Choose stable up vector based on light direction
+                glm::vec3 up_vector;
+                float dot_with_y = glm::abs(glm::dot(sun_dir, glm::vec3(0, 1, 0)));
+
+                if (dot_with_y > 0.99f) // Nearly vertical
+                {
+                    up_vector = glm::vec3(1, 0, 0); // Use X-axis when light is vertical
+                } else {
+                    up_vector = glm::vec3(0, 1, 0); // Use Y-axis normally
+                }
+
+                glm::mat4 light_view = glm::lookAt(light_pos, scene_center, up_vector);
 
                 // Transform AABB to light space
                 auto [ls_min, ls_max] = res.mesh.mesh_aabb.transform(light_view);
-
                 // Calculate bounds with padding
                 const float padding = 20.0f;
                 float ortho_size = glm::max(ls_max.x - ls_min.x, ls_max.y - ls_min.y) + padding;
                 float half_size = ortho_size * 0.5f;
-
                 // Near/far planes
                 float near_plane = glm::max(-ls_max.z - padding, 0.1f);
                 float far_plane = -ls_min.z + padding;
-
                 const glm::mat4 light_proj =
                         OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size, near_plane, far_plane);
-
                 ui.shadow_config.light_view_proj = light_proj * light_view;
+
+                trace("{}", sun_dir.x);
+                trace("{}", ui.shadow_config.light_view_proj[0][0]);
             }
         }
 
@@ -1164,6 +1169,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             vkResetQueryPool(gpu.device, b->pool, 0, b->query_count);
             vkResetQueryPool(gpu.device, c->pool, 0, c->query_count);
             vkResetQueryPool(gpu.device, d->pool, 0, d->query_count);
+
+            // This causes validation errors.
+            TracyVkCollectHost(gpu.tracy_compute.ctx);
+            TracyVkCollectHost(gpu.tracy_graphics.ctx);
         }
 
         // acquire
