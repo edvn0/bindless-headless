@@ -304,6 +304,70 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                                clustering_pct);
         }
     });
+
+    widget("Render settings", [&] {
+        /*    enum class ClusterDebugMode : u32 {
+        None = 0,
+        ClusterGrid = 1,
+        LightCount = 2,
+        LightDensity = 3,
+        ClusterIndex = 4,
+        DepthSlices = 5,
+        LightHeatmap = 6,
+        FirstLight = 7,
+        ClusterOccupancy = 8,
+    };*/
+        /* ImGui::Combo("Cluster Debug Mode", reinterpret_cast<int *>(&ctx.ui.debug_mode),
+                     "None\0Cluster Grid\0Light Count\0Light Density\0Cluster Index\0Depth Slices\0Light Heatmap\0First Light\0Cluster Occupancy\0");
+
+           static constexpr std::array shadow_map_res_options = {512u, 1024u, 2048u, 4096u, 8192u};
+        static int current_res_idx = 2; // Default to 2048
+        if (ImGui::Combo("Shadow Map Resolution", &current_res_idx,
+                         "512\01024\02048\04096\08192\0")) {
+            ctx.ui.shadow_map_resolution = shadow_map_res_options[current_res_idx];
+        } */    
+         
+        const auto& preview_debug_mode = ctx.ui.debug_mode;
+        if (ImGui::BeginCombo("Cluster Debug Mode", std::format("{}", static_cast<u32>(preview_debug_mode)).c_str(), ImGuiComboFlags_HeightLarge)) {
+            for (int i = 0; i < static_cast<int>(AppUI::ClusterDebugMode::Count); i++) {
+                auto mode = static_cast<AppUI::ClusterDebugMode>(i);
+                const char *mode_name = nullptr;
+                switch (mode) {
+                    using enum AppUI::ClusterDebugMode;
+                    case None: mode_name = "None"; break;
+                    case ClusterGrid: mode_name = "Cluster Grid"; break;
+                    case LightCount: mode_name = "Light Count"; break;
+                    case LightDensity: mode_name = "Light Density"; break;
+                    case ClusterIndex: mode_name = "Cluster Index"; break;
+                    case DepthSlices: mode_name = "Depth Slices"; break;
+                    case LightHeatmap: mode_name = "Light Heatmap"; break;
+                    case FirstLight: mode_name = "First Light"; break;
+                    case ClusterOccupancy: mode_name = "Cluster Occupancy"; break;
+                    default: {continue;}
+                }
+
+                if (ImGui::Selectable(mode_name, ctx.ui.debug_mode == mode)) {
+                    ctx.ui.debug_mode = mode;
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        const auto& preview_value = ctx.ui.shadow_map_resolution.peek();
+        if (ImGui::BeginCombo("Shadow Map Resolution", std::format("{}x{}", preview_value, preview_value).c_str(), ImGuiComboFlags_HeightLarge)) {
+            static constexpr std::array shadow_map_res_options = {512u, 1024u, 2048u, 4096u, 8192u};
+            for (size_t i = 0; i < shadow_map_res_options.size(); i++) {
+                const auto res = shadow_map_res_options[i];
+                auto label = std::format("{}x{}", res, res);
+
+                if (ImGui::Selectable(label.c_str(), ctx.ui.shadow_map_resolution.peek() == res)) {
+                    ctx.ui.shadow_map_resolution = res;
+                    ctx.gpu.scene_resize_graph.trigger_resize(ResizeTrigger::ShadowMap);
+                }
+            }
+            ImGui::EndCombo();
+        }
+    });
 }
 
 auto run_ui_frame(AppContext &ctx) -> UiFrameResult {

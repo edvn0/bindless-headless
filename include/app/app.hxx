@@ -21,7 +21,6 @@
 #include "app/math.hxx"
 #include "app/render.hxx"
 #include "ui/PerformanceGraph.hxx"
-#include "vulkan/vulkan_core.h"
 
 struct InstanceWithDebug;
 
@@ -56,6 +55,9 @@ struct AppGpuState {
     TransferTimeline tl_transfer{};
 
     BindlessSet bindless{};
+
+    ResizeGraph window_resize_graph{};
+    ResizeGraph scene_resize_graph{};
 
     RenderContext ctx{};
 
@@ -223,6 +225,8 @@ struct AppUI {
     SunConfig sun_config{};
     ShadowConfig shadow_config{};
 
+    UIValueLatch<u32> shadow_map_resolution{2048};
+
     enum class ClusterDebugMode : u32 {
         None = 0,
         ClusterGrid = 1,
@@ -233,12 +237,13 @@ struct AppUI {
         LightHeatmap = 6,
         FirstLight = 7,
         ClusterOccupancy = 8,
+        Count
     };
 
     ClusterDebugMode debug_mode{ClusterDebugMode::None};
 
     // graphs
-    PerformanceGraph<total_queries, 240> gpu_frame_graph{};
+    PerformanceGraph<total_queries, 120> gpu_frame_graph{};
     bool graphs_initialized{false};
 };
 

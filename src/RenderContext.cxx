@@ -2,7 +2,6 @@
 #include "BindlessHeadless.hxx"
 #include "BindlessSet.hxx"
 #include "Pool.hxx"
-#include "vulkan/vulkan_core.h"
 
 
 auto RenderContext::get_device() const -> VkDevice {

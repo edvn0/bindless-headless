@@ -596,8 +596,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         }
 
         {
-            VkSamplerCreateInfo ci{};
-            ci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            auto ci = create_info<VkSamplerCreateInfo>();
             ci.magFilter = VK_FILTER_LINEAR;
             ci.minFilter = VK_FILTER_LINEAR;
             ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
@@ -613,15 +612,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         }
 
         {
-            VkSamplerCreateInfo sampler_info{};
-            sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            auto sampler_info = create_info<VkSamplerCreateInfo>();
             sampler_info.magFilter = VK_FILTER_LINEAR;
             sampler_info.minFilter = VK_FILTER_LINEAR;
             sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
             sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
             sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-            sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+            sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
             sampler_info.compareEnable = VK_TRUE;
             sampler_info.compareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
             sampler_info.minLod = 0.0f;
@@ -767,17 +765,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     glfwShowWindow(gpu.window);
     glfwFocusWindow(gpu.window);
 
-    ResizeGraph window_resize_graph{};
-    ResizeGraph scene_resize_graph{};
     u32 pipelines_node{};
     {
-        window_resize_graph.add_node("swapchain", [&](VkExtent2D new_extent, const ResizeContext &) {
+        gpu.window_resize_graph.add_node("swapchain", [&](VkExtent2D new_extent, const ResizeContext &) {
             if (auto r = gpu.swapchain.recreate(new_extent); !r) {
                 vk_check(r.error());
             }
         });
 
-        pipelines_node = window_resize_graph.add_node(
+        pipelines_node = gpu.window_resize_graph.add_node(
                 "pipelines",
                 [&](VkExtent2D, const ResizeContext &rc) {
                     const auto old_gbuffer_pipeline_lighting = pipes.gbuffer_pipeline_lighting;
@@ -950,7 +946,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     }
 
     {
-        const auto offscreen_node = scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
+        const auto offscreen_node = gpu.scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
                                                                                          const ResizeContext &rc) {
             const auto old_g0 = res.gbuffer0;
             const auto old_g1 = res.gbuffer1;
@@ -976,9 +972,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "depth"));
 
             if (res.directional_shadow_map_depth.empty()) {
-                res.directional_shadow_map_depth = gpu.ctx.create_texture(
-                        create_depth_target(gpu.allocator, 4096 * 4, 4096 * 4, VK_FORMAT_D32_SFLOAT,
-                                            VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
+                res.directional_shadow_map_depth = gpu.ctx.create_texture(create_depth_target(
+                        gpu.allocator, ui.shadow_map_resolution.peek(), ui.shadow_map_resolution.peek(),
+                        VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
             }
 
             res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
@@ -993,7 +989,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         });
 
         const auto tonemapped_node =
-                scene_resize_graph.add_node("tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
+                gpu.scene_resize_graph.add_node("tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
                     const auto old_tonemap = res.tonemapped;
 
                     res.tonemapped = gpu.ctx.create_texture(create_offscreen_target(
@@ -1001,15 +997,35 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     destroy(gpu.ctx, old_tonemap, resize_context.retire_value);
                 });
 
-        scene_resize_graph.add_dependency(tonemapped_node, offscreen_node);
+        std::ignore = gpu.scene_resize_graph.add_node(
+                "directional_shadow_map",
+                [&](VkExtent2D, const ResizeContext &rc) {
+                    auto maybe_new_res = ui.shadow_map_resolution.consume_if_changed();
+                    if (!maybe_new_res)
+                        return;
+
+                    const u32 sm_res = *maybe_new_res;
+
+                    const auto old_sm = res.directional_shadow_map_depth;
+
+                    res.directional_shadow_map_depth = gpu.ctx.create_texture(
+                            create_depth_target(gpu.allocator, sm_res, sm_res, VK_FORMAT_D32_SFLOAT,
+                                                VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
+
+                    destroy(gpu.ctx, old_sm, rc.retire_value);
+                },
+                ResizeTrigger::ShadowMap);
+
+
+        gpu.scene_resize_graph.add_dependency(tonemapped_node, offscreen_node);
     }
 
     auto last_window_extent = sanitize_window_extent(current_extent(gpu.window), gpu.physical_device, gpu.surface);
     auto last_scene_extent = VkExtent2D{opts.width, opts.height};
 
-    window_resize_graph.rebuild(last_window_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
+    gpu.window_resize_graph.rebuild(last_window_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
                                 ResizeTrigger::Extent);
-    scene_resize_graph.rebuild(last_scene_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
+    gpu.scene_resize_graph.rebuild(last_scene_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
                                ResizeTrigger::Extent);
 
     ui.last_viewport_extent = last_scene_extent;
@@ -1017,14 +1033,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     ui.gui = std::make_unique<ImGuiRenderer>(gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx,
                                              *gpu.compiler);
 
-    auto gui_pipeline_node = window_resize_graph.add_node(
+    auto gui_pipeline_node = gpu.window_resize_graph.add_node(
             "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },
             ResizeTrigger::Shaders);
-    window_resize_graph.add_dependency(gui_pipeline_node, pipelines_node);
+    gpu.window_resize_graph.add_dependency(gui_pipeline_node, pipelines_node);
 
     ui.watcher = std::unique_ptr<efsw::FileWatcher, Deleter>(new efsw::FileWatcher(false), Deleter{});
     ui.listeners["update"] = std::unique_ptr<efsw::FileWatchListener, Deleter>(
-            new ShaderSourceCodeChangeListener(&window_resize_graph), Deleter{});
+            new ShaderSourceCodeChangeListener(&gpu.window_resize_graph), Deleter{});
     std::ignore = ui.watcher->addWatch("shaders", ui.listeners["update"].get(), true,
                                        {efsw::WatcherOption(efsw::Option::WinBufferSize, 128 * 1024)});
     ui.watcher->watch();
@@ -1049,7 +1065,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     while (!glfwWindowShouldClose(gpu.window) && keep_running) {
         glfwPollEvents();
-        handle_bindless_repopulation(app_context, window_resize_graph);
+        handle_bindless_repopulation(app_context, gpu.window_resize_graph);
 
 
         update_frame_timing(ui);
@@ -1065,7 +1081,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         update_pending_resize(ui, ui_frame.desired_scene_extent);
 
-        if (commit_resizes(app_context, window_resize_graph, scene_resize_graph, ui_frame.window_extent,
+        if (commit_resizes(app_context, gpu.window_resize_graph, gpu.scene_resize_graph, ui_frame.window_extent,
                            last_window_extent, render_scene_extent)) {
             continue;
         }
@@ -1109,21 +1125,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 glm::vec3 scene_center = res.mesh.mesh_aabb.center();
                 glm::vec3 scene_extents = (res.mesh.mesh_aabb.max - res.mesh.mesh_aabb.min) * 0.5f;
                 float scene_radius = glm::length(scene_extents);
-                // Position light far enough to see entire scene
                 float light_distance = scene_radius * 2.0f + 50.0f;
                 glm::vec3 light_pos = scene_center - sun_dir * light_distance;
 
-                // ✅ FIX: Choose stable up vector based on light direction
-                glm::vec3 up_vector;
-                float dot_with_y = glm::abs(glm::dot(sun_dir, glm::vec3(0, 1, 0)));
-
-                if (dot_with_y > 0.99f) // Nearly vertical
-                {
-                    up_vector = glm::vec3(1, 0, 0); // Use X-axis when light is vertical
-                } else {
-                    up_vector = glm::vec3(0, 1, 0); // Use Y-axis normally
-                }
-
+                constexpr auto up_vector = glm::vec3(0.0f, 1.0f, 0.0f);
                 glm::mat4 light_view = glm::lookAt(light_pos, scene_center, up_vector);
 
                 // Transform AABB to light space
@@ -1138,9 +1143,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 const glm::mat4 light_proj =
                         OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size, near_plane, far_plane);
                 ui.shadow_config.light_view_proj = light_proj * light_view;
-
-                trace("{}", sun_dir.x);
-                trace("{}", ui.shadow_config.light_view_proj[0][0]);
             }
         }
 

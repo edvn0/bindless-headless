@@ -3,7 +3,6 @@
 #include "Mesh.hxx"
 #include "PipelineCache.hxx"
 #include "RenderContext.hxx"
-#include "vulkan/vulkan_core.h"
 
 #include <glm/glm.hpp>
 #include <utility>

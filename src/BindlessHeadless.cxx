@@ -11,7 +11,6 @@
 #include "Swapchain.hxx"
 
 #include "3PP/PerlinNoise.hpp"
-#include "vulkan/vulkan_core.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -26,16 +25,6 @@ auto vk_check(VkResult result) -> void {
 }
 
 namespace {
-    auto calc_mip_levels(u32 width, u32 height) -> u32 {
-        u32 levels = 1;
-        while (width > 1 || height > 1) {
-            width = std::max(1u, width >> 1);
-            height = std::max(1u, height >> 1);
-            ++levels;
-        }
-        return levels;
-    }
-
     auto mip_extent(u32 base_w, u32 base_h, u32 level) -> VkExtent3D {
         return VkExtent3D{
                 .width = std::max(1u, base_w >> level),
@@ -97,7 +86,6 @@ namespace {
     auto make_depth_image_usage(VkSampleCountFlagBits samples, bool want_sampled) -> VkImageUsageFlags {
         VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 
-        // Same logic: only sample depth if it's single-sample unless you intentionally do MSAA depth sampling.
         if (samples == VK_SAMPLE_COUNT_1_BIT && want_sampled) {
             usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
         }
@@ -514,7 +502,6 @@ auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat fo
     vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.attachment_view));
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
 
-    // Sampled view only if SAMPLED usage was requested and allowed by make_depth_image_usage.
     if ((usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0) {
         vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.sampled_view));
         set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
@@ -533,11 +520,9 @@ auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
                                VkFormat format, std::span<const std::byte> data, std::span<const u32> mip_offsets,
                                std::span<const u32> mip_sizes, std::string_view name) -> OffscreenTarget {
     std::span<const u8> data_u8 = std::span(std::bit_cast<u8 const *>(data.data()), data.size());
-    // forward to the u8 overload
     return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format, data_u8, mip_offsets, mip_sizes, name);
 }
 
-// Helper to detect if a format is block-compressed
 auto is_block_compressed_format(VkFormat format) -> bool {
     switch (format) {
         case VK_FORMAT_BC1_RGB_UNORM_BLOCK:
@@ -562,22 +547,17 @@ auto is_block_compressed_format(VkFormat format) -> bool {
     }
 }
 
-// Wrapper that creates images with proper usage flags for compressed formats
 auto create_texture_image_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height, VkFormat format,
                              std::span<const u8> data, std::span<const u32> mip_offsets, std::span<const u32> mip_sizes,
                              std::string_view name) -> OffscreenTarget {
-    // For compressed formats, we need to bypass create_offscreen_target's
-    // assumption that all color images are attachments
     u32 const mip_levels = static_cast<u32>(mip_offsets.size());
     if (mip_levels == 0 || mip_sizes.size() != mip_levels) {
-        // fallback: use the standard path
         return create_image_from_mips_v2(alloc, cmd_ctx, width, height, format, data, mip_offsets, mip_sizes, name);
     }
 
     bool const is_compressed = is_block_compressed_format(format);
 
     if (is_compressed) {
-        // Manually create the image with proper usage flags for compressed textures
         OffscreenTarget t{};
         t.width = width;
         t.height = height;
@@ -586,7 +566,6 @@ auto create_texture_image_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, 
         VmaAllocatorInfo ai{};
         vmaGetAllocatorInfo(alloc, &ai);
 
-        // Compressed formats: SAMPLED + TRANSFER (no COLOR_ATTACHMENT)
         VkImageUsageFlags const usage =
                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
@@ -622,7 +601,6 @@ auto create_texture_image_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, 
                 .layerCount = 1,
         };
 
-        // Create sampled view (no attachment view for compressed formats)
         vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.sampled_view));
         t.attachment_view = VK_NULL_HANDLE; // Not usable as attachment
         t.storage_view = VK_NULL_HANDLE; // BC7 doesn't support storage

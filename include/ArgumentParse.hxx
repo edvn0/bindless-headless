@@ -4,8 +4,6 @@
 #include <optional>
 #include <string_view>
 
-#include "Logger.hxx"
-
 struct CLIOptions {
     std::optional<std::filesystem::path> pipeline_cache_dir;
     std::uint32_t iteration_count = 5;

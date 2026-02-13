@@ -1,6 +1,4 @@
 #include "app/render_passes.hxx"
-#include "vulkan/vulkan_core.h"
-
 
 namespace {
     constexpr auto begin_query_for_index = [](const RenderContext &c, const VkCommandBuffer cmd,

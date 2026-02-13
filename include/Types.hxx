@@ -7,6 +7,9 @@
 #include <format>
 #include <functional>
 #include <mutex>
+#include <optional>
+#include <utility>
+#include <type_traits>
 #include <numeric>
 #include <source_location>
 #include <string_view>
@@ -298,6 +301,56 @@ public:
         }
     }
 };
+
+
+template <class T>
+struct UIValueLatch
+{
+    T value {};
+    bool changed {false};
+
+    UIValueLatch() = default;
+    UIValueLatch(T v) : value(std::move(v)) {}
+
+    [[nodiscard]] auto peek() const -> T const& { return value; }
+    [[nodiscard]] auto is_changed() const -> bool { return changed; }
+
+    auto set(T v) -> void
+    {
+        if constexpr (requires { value == v; })
+        {
+            if (value == v)
+                return;
+        }
+        value = std::move(v);
+        changed = true;
+    }
+
+    auto consume() -> T
+    {
+        changed = false;
+        if constexpr (std::is_move_constructible_v<T>)
+            return std::move(value);
+        else
+            return value;
+    }
+
+    auto consume_if_changed() -> std::optional<T>
+    {
+        if (!changed)
+            return std::nullopt;
+        return consume();
+    }
+
+    operator T const&() const { return value; }
+
+    auto operator=(T v) -> UIValueLatch&
+    {
+        set(std::move(v));
+        return *this;
+    }
+};
+
 
 constexpr auto matches(const auto &needle, const auto &&...haystack) { return ((needle == haystack) || ...); }
 

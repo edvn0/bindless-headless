@@ -24,11 +24,16 @@ struct ResizeContext {
     [[nodiscard]] auto get_instance() const -> VkInstance;
 };
 
+namespace detail {
+    constexpr auto bit(std::unsigned_integral auto const x) -> u32 { return 1 << x; }
+}
+
 enum class ResizeTrigger : u32 {
     None = 0,
-    Extent = 1 << 0, // Window/Resolution change
-    Shaders = 1 << 1, // Hot-reloading pipelines
-    Bindings = 1 << 2, // Descriptor set changes
+    Extent = detail::bit(0u), // Window/Resolution change
+    Shaders = detail::bit(1u), // Hot-reloading pipelines
+    Bindings = detail::bit(2u), // Descriptor set changes
+    ShadowMap = detail::bit(3u), // Shadow map resolution change
     All = 0xFFFFFFFF
 };
 inline auto to_string(ResizeTrigger flags) -> std::string;
@@ -224,10 +229,11 @@ inline auto to_string(ResizeTrigger flags) -> std::string {
         std::string_view name;
     };
 
-    constexpr std::array<FlagName, 3> names = {
+    constexpr std::array<FlagName, 4> names = {
             FlagName{.flag = ResizeTrigger::Extent, .name = "Extent"},
             FlagName{.flag = ResizeTrigger::Shaders, .name = "Shaders"},
             FlagName{.flag = ResizeTrigger::Bindings, .name = "Bindings"},
+            FlagName{.flag = ResizeTrigger::ShadowMap, .name = "ShadowMap"},
     };
 
     std::string result;

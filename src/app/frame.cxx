@@ -132,30 +132,38 @@ auto update_pending_resize(AppUI &ui, VkExtent2D desired_scene_extent) -> void {
         pr.last_change_time_s = ui.total_time;
     }
 }
-auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGraph &scene_resize_graph,
-                    VkExtent2D window_extent, VkExtent2D &last_window_extent, VkExtent2D &render_scene_extent) -> bool {
-    // returns true if caller should early-continue (e.g. after window rebuild)
+
+auto commit_resizes(AppContext &ctx,
+                    ResizeGraph &window_resize_graph,
+                    ResizeGraph &scene_resize_graph,
+                    VkExtent2D window_extent,
+                    VkExtent2D &last_window_extent,
+                    VkExtent2D &render_scene_extent) -> bool
+{
     const u64 safe_retire = max_in_flight_retire_value(ctx.res);
 
     // --- window resize / shader triggers ---
     const bool window_resized =
-            (window_extent.width != last_window_extent.width) || (window_extent.height != last_window_extent.height);
+        (window_extent.width != last_window_extent.width) ||
+        (window_extent.height != last_window_extent.height);
 
-    ResizeTrigger manual_trigger = window_resize_graph.get_and_clear_triggers();
+    const ResizeTrigger window_manual = window_resize_graph.get_and_clear_triggers();
 
-    if (window_resized || manual_trigger != ResizeTrigger::None) {
-        ResizeTrigger trigger = manual_trigger;
+    if (window_resized || window_manual != ResizeTrigger::None) {
+        ResizeTrigger trigger = window_manual;
         if (window_resized) {
             trigger = trigger | ResizeTrigger::Extent;
         }
 
-        window_resize_graph.rebuild(window_extent, ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
+        window_resize_graph.rebuild(window_extent,
+                                    ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
                                     trigger);
         last_window_extent = window_extent;
-
-        // Important: if swapchain/pipelines were rebuilt, skip the rest of this frame.
-        return true;
+        return true; // skip rest of frame
     }
+
+    // Pull scene manual triggers once
+    ResizeTrigger scene_manual = scene_resize_graph.get_and_clear_triggers();
 
     // --- scene resize debounce ---
     auto &pr = ctx.ui.pending_resize;
@@ -169,12 +177,24 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
 
     pr.was_down = lmb_down;
 
-    if (commit_now) {
-        scene_resize_graph.rebuild(pr.desired, ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
-                                   ResizeTrigger::Extent);
+    // Build combined scene trigger set
+    ResizeTrigger scene_trigger = scene_manual;
+    VkExtent2D target_extent = render_scene_extent;
 
+    if (commit_now) {
+        scene_trigger = scene_trigger | ResizeTrigger::Extent;
+        target_extent = pr.desired;
+    }
+
+    if (scene_trigger != ResizeTrigger::None) {
+        scene_resize_graph.rebuild(target_extent,
+                                   ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
+                                   scene_trigger);
+    }
+
+    if (commit_now) {
         ctx.ui.last_viewport_extent = pr.desired;
-        render_scene_extent = pr.desired; // now safe to use immediately
+        render_scene_extent = pr.desired;
         pr.has = false;
 
         info("Committed new viewport extent: {}x{}", render_scene_extent.width, render_scene_extent.height);
@@ -182,6 +202,8 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
 
     return false;
 }
+
+
 auto choose_render_scene_extent(AppUI const &ui, VkExtent2D desired_scene_extent) -> VkExtent2D {
     // Must be <= attachments this frame.
     if (ui.last_viewport_extent.width != 0 && ui.last_viewport_extent.height != 0) {
