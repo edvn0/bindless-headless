@@ -518,10 +518,7 @@ struct VSOut
 
 float calculate_shadow(float3 world_pos, float4x4 shadow_matrix, uint tex_idx, uint comp_samp_idx)
 {
-    // Transform world position to shadow map space
     float4 shadow_coord = mul(shadow_matrix, float4(world_pos, 1.0));
-    
-    // Perspective divide to get NDC
     float3 ndc = shadow_coord.xyz / shadow_coord.w;
     
     float2 shadow_uv = float2(
@@ -530,19 +527,14 @@ float calculate_shadow(float3 world_pos, float4x4 shadow_matrix, uint tex_idx, u
     );
     
     if (any(shadow_uv < 0.0) || any(shadow_uv > 1.0))
-        return 1.0; // Outside shadow map = fully lit
+        return 1.0;
     
     uint t_idx = NonUniformResourceIndex(tex_idx);
     uint cs_idx = NonUniformResourceIndex(comp_samp_idx);
     
     const float bias = 0.0005; 
-    float reference_depth = ndc.z - bias;  // ✅ Subtract bias for reverse-Z
-    
-    // Clamp to valid depth range
+    float reference_depth = ndc.z - bias;      
     reference_depth = saturate(reference_depth);
-    
-    // Hardware comparison sample
-    // Returns 1.0 if lit, 0.0 if shadowed (with GREATER_OR_EQUAL comparison)
     float lit_factor = sampled_images[t_idx].SampleCmp(
         comparison_samplers[cs_idx],
         shadow_uv,

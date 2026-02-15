@@ -373,7 +373,7 @@ auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, 
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
-                vkCmdSetDepthBias(cmd, -1.25f, 0.0f, -1.75f); // Shadow bias
+                vkCmdSetDepthBias(cmd, 1.25f, 0.0f, 1.75f); // Shadow bias
 
                 vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
                 std::array<VkBuffer, 1> buffers = {verts->buffer()};

@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <imgui.h>
 #include <implot.h>
+#include <bit>
 #include <volk.h>
 
 #include <unordered_map>
@@ -282,6 +283,12 @@ auto ImGuiRenderer::render(VkCommandBuffer cmd) -> void {
     }
 }
 
+
+constexpr std::size_t next_power_of_two(std::size_t n) {
+    if (n == 0) return 1;
+    return std::bit_ceil(n);
+}
+
 auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, PipelineHandle pipeline) -> void {
     if (!dd || dd->TotalIdxCount == 0) {
         return;
@@ -312,17 +319,22 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
     DrawableData &drawable = acquire_draw_slot();
 
     if (static_cast<i32>(drawable.index_count) < dd->TotalIdxCount) {
+        const auto size = (dd->TotalIdxCount * 4) * sizeof(ImDrawIdx);
+        const auto actual_size = static_cast<std::size_t>(next_power_of_two(size));
+        info("Reallocating index buffer to {} bytes", actual_size);
         auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                     dd->TotalIdxCount * sizeof(ImDrawIdx), "imgui_index");
+                                     actual_size, "imgui_index");
         drawable.index = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
-        drawable.index_count = static_cast<u32>(dd->TotalIdxCount);
+        drawable.index_count = static_cast<u32>(actual_size / sizeof(ImDrawIdx));
     }
-
     if (static_cast<i32>(drawable.vertex_count) < dd->TotalVtxCount) {
+        const auto size = (dd->TotalVtxCount * 4) * sizeof(ImDrawVert);
+        const auto actual_size = static_cast<std::size_t>(next_power_of_two(size));
+        info("Reallocating vertex buffer to {} bytes", actual_size);
         auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                     dd->TotalVtxCount * sizeof(ImDrawVert), "imgui_vertex");
+                                     actual_size, "imgui_vertex");
         drawable.vertex = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
-        drawable.vertex_count = static_cast<u32>(dd->TotalVtxCount);
+        drawable.vertex_count = static_cast<u32>(actual_size / sizeof(ImDrawVert));
     }
 
     {

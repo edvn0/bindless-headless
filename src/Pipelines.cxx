@@ -1174,10 +1174,6 @@ namespace {
 }
 
 auto get_or_create_fullscreen_vs(RenderContext &ctx) -> u32 {
-    if (std::ofstream stream{"test.spv", std::ios::binary}; stream) {
-        stream.write(reinterpret_cast<const char *>(fullscreen_vs_spv.data()), fullscreen_vs_spv.size());
-    }
-
     auto handle = ctx.shaders.maybe_get_handle(EngineShaderIndices::fullscreen_vertex_shader);
     if (handle.valid()) {
         return handle.index();

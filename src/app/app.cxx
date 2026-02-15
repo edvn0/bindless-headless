@@ -947,7 +947,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     {
         const auto offscreen_node = gpu.scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
-                                                                                         const ResizeContext &rc) {
+                                                                                             const ResizeContext &rc) {
             const auto old_g0 = res.gbuffer0;
             const auto old_g1 = res.gbuffer1;
             const auto old_g2 = res.gbuffer2;
@@ -988,8 +988,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             destroy(gpu.ctx, old_culling, rc.retire_value);
         });
 
-        const auto tonemapped_node =
-                gpu.scene_resize_graph.add_node("tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
+        const auto tonemapped_node = gpu.scene_resize_graph.add_node(
+                "tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
                     const auto old_tonemap = res.tonemapped;
 
                     res.tonemapped = gpu.ctx.create_texture(create_offscreen_target(
@@ -1024,9 +1024,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     auto last_scene_extent = VkExtent2D{opts.width, opts.height};
 
     gpu.window_resize_graph.rebuild(last_window_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
-                                ResizeTrigger::Extent);
+                                    ResizeTrigger::Extent);
     gpu.scene_resize_graph.rebuild(last_scene_extent, ResizeContext{.ctx = gpu.ctx, .retire_value = 0},
-                               ResizeTrigger::Extent);
+                                   ResizeTrigger::Extent);
 
     ui.last_viewport_extent = last_scene_extent;
 
@@ -1111,17 +1111,19 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             auto sun_direction_intensity = glm::vec4(sun_dir, ui.sun_config.intensity);
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
             res.frame_ubo_ring.write_field(gpu.ctx, bounded_frame_index, sun_direction_intensity, offset);
-            /* {
-                 const glm::vec3 light_pos =
-                         ui.shadow_config.light_target - (sun_dir * ui.shadow_config.shadow_distance);
-                 const glm::mat4 light_view =
-                         glm::lookAt(light_pos, ui.shadow_config.light_target, glm::vec3(0.0f, 1.0f, 0.0f));
-                 const float half_size = ui.shadow_config.ortho_size * 0.5f;
-                 const glm::mat4 light_proj = OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size,
-                                                               ui.shadow_config.near_plane, ui.shadow_config.far_plane);
-                 ui.shadow_config.light_view_proj = light_proj * light_view;
-             }*/
             {
+                const glm::vec3 light_pos =
+                        ui.shadow_config.light_target - (sun_dir * ui.shadow_config.shadow_distance);
+                glm::mat4 light_view =
+                        glm::lookAt(light_pos, ui.shadow_config.light_target, glm::vec3(0.0f, 1.0f, 0.0f));
+                const float ortho_size = ui.shadow_config.ortho_size;
+
+                const float half_size = ortho_size * 0.5F;
+                const glm::mat4 light_proj = OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size,
+                                                              ui.shadow_config.near_plane, ui.shadow_config.far_plane);
+                ui.shadow_config.light_view_proj = light_proj * light_view;
+            }
+            /* {
                 glm::vec3 scene_center = res.mesh.mesh_aabb.center();
                 glm::vec3 scene_extents = (res.mesh.mesh_aabb.max - res.mesh.mesh_aabb.min) * 0.5f;
                 float scene_radius = glm::length(scene_extents);
@@ -1143,7 +1145,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 const glm::mat4 light_proj =
                         OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size, near_plane, far_plane);
                 ui.shadow_config.light_view_proj = light_proj * light_view;
-            }
+            } */
         }
 
         const auto ranges = write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,

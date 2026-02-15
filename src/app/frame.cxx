@@ -33,13 +33,15 @@ auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &
     FrameUBO ubo{};
     fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, z_near);
 
-    frame_ubo_ring.write_field(ctx, frame_index, ubo.view, offsetof(FrameUBO, view));
-    frame_ubo_ring.write_field(ctx, frame_index, ubo.projection, offsetof(FrameUBO, projection));
-    frame_ubo_ring.write_field(ctx, frame_index, ubo.view_projection, offsetof(FrameUBO, view_projection));
-    frame_ubo_ring.write_field(ctx, frame_index, ubo.inv_view_projection, offsetof(FrameUBO, inv_view_projection));
-    frame_ubo_ring.write_field(ctx, frame_index, ubo.inv_projection, offsetof(FrameUBO, inv_projection));
-    frame_ubo_ring.write_field(ctx, frame_index, ubo.camera_position, offsetof(FrameUBO, camera_position));
-    frame_ubo_ring.write_field(ctx, frame_index, ubo.frustum_planes, offsetof(FrameUBO, frustum_planes));
+    auto write = [&](auto &val, auto offset) { frame_ubo_ring.write_field(ctx, frame_index, val, offset); };
+
+    write(ubo.view, offsetof(FrameUBO, view));
+    write(ubo.projection, offsetof(FrameUBO, projection));
+    write(ubo.view_projection, offsetof(FrameUBO, view_projection));
+    write(ubo.inv_view_projection, offsetof(FrameUBO, inv_view_projection));
+    write(ubo.inv_projection, offsetof(FrameUBO, inv_projection));
+    write(ubo.camera_position, offsetof(FrameUBO, camera_position));
+    write(ubo.frustum_planes, offsetof(FrameUBO, frustum_planes));
 }
 auto clamp_u32(u32 v, u32 lo, u32 hi) -> u32 { return std::min(std::max(v, lo), hi); }
 auto sanitize_window_extent(VkExtent2D raw, VkPhysicalDevice physical_device, VkSurfaceKHR surface, ExtentBounds bounds)
@@ -133,19 +135,13 @@ auto update_pending_resize(AppUI &ui, VkExtent2D desired_scene_extent) -> void {
     }
 }
 
-auto commit_resizes(AppContext &ctx,
-                    ResizeGraph &window_resize_graph,
-                    ResizeGraph &scene_resize_graph,
-                    VkExtent2D window_extent,
-                    VkExtent2D &last_window_extent,
-                    VkExtent2D &render_scene_extent) -> bool
-{
+auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGraph &scene_resize_graph,
+                    VkExtent2D window_extent, VkExtent2D &last_window_extent, VkExtent2D &render_scene_extent) -> bool {
     const u64 safe_retire = max_in_flight_retire_value(ctx.res);
 
     // --- window resize / shader triggers ---
     const bool window_resized =
-        (window_extent.width != last_window_extent.width) ||
-        (window_extent.height != last_window_extent.height);
+            (window_extent.width != last_window_extent.width) || (window_extent.height != last_window_extent.height);
 
     const ResizeTrigger window_manual = window_resize_graph.get_and_clear_triggers();
 
@@ -155,8 +151,7 @@ auto commit_resizes(AppContext &ctx,
             trigger = trigger | ResizeTrigger::Extent;
         }
 
-        window_resize_graph.rebuild(window_extent,
-                                    ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
+        window_resize_graph.rebuild(window_extent, ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
                                     trigger);
         last_window_extent = window_extent;
         return true; // skip rest of frame
@@ -187,8 +182,7 @@ auto commit_resizes(AppContext &ctx,
     }
 
     if (scene_trigger != ResizeTrigger::None) {
-        scene_resize_graph.rebuild(target_extent,
-                                   ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
+        scene_resize_graph.rebuild(target_extent, ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
                                    scene_trigger);
     }
 
