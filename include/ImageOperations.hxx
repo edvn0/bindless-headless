@@ -5,7 +5,6 @@
 #include <string>
 #include <string_view>
 
-// Let's just agree that this is still icky - but for now necessary to not leak dependencies
 #include "Forward.hxx"
 using VmaAllocator = struct VmaAllocator_T *;
 

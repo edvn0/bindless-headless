@@ -13,6 +13,8 @@
 #include <numeric>
 #include <source_location>
 #include <string_view>
+#include <numeric>
+#include <cmath>
 #include <volk.h>
 
 #include "Error.hxx"

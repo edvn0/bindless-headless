@@ -14,6 +14,8 @@
 #include <ranges>
 #include <thread>
 
+#include "Logger.hxx"
+
 #include "BindlessHeadless.hxx"
 
 #include "app/app.hxx"
@@ -44,7 +46,11 @@ auto main(int argc, char **argv) -> int {
         return 1;
     }
 
-    auto opts = parse_cli(argc, argv);
+    auto maybe_opts = parse_cli(argc, argv);
+    if (!maybe_opts) {
+        return 1;
+    }
+    auto opts = std::move(maybe_opts.value());
 
     uint32_t count{};
     const char **extensions_raw = glfwGetRequiredInstanceExtensions(&count);

@@ -5,7 +5,7 @@
 
 #include <CLI/CLI.hpp>
 
-auto parse_cli(int argc, char **argv) -> CLIOptions {
+auto parse_cli(int argc, char **argv) -> std::optional<CLIOptions> {
     CLIOptions opt{};
 
     CLI::App app{"Bindless headless runner"};
@@ -33,7 +33,12 @@ auto parse_cli(int argc, char **argv) -> CLIOptions {
     app.allow_extras(false);
 
     // Abort on fail.
-    app.parse(argc, argv);
+    try {
+        app.parse(argc, argv);
+    } catch (const CLI::ParseError &e) {
+        std::ignore = app.exit(e);
+        return std::nullopt;
+    }
 
     // Precedence: flag > positional > env
     if (!flag_cache_dir.empty()) {

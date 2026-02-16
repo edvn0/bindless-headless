@@ -27,6 +27,7 @@ CPMAddPackage(
 CPMAddPackage(
   URI "gh:glfw/glfw#3.4"
   GIT_SHALLOW YES
+  OPTIONS "GLFW_BUILD_WAYLAND OFF"
 )
 
 CPMAddPackage(
@@ -68,10 +69,11 @@ CPMAddPackage(
 )
 
 CPMAddPackage(
-  URI "gh:tinyobjloader/tinyobjloader#d56555b026c1c7cec0f93f3ec7f1de2ff005c5ad"
+  URI "gh:tinyobjloader/tinyobjloader#8a3f8b92d18309e00911bf5cf5e465cfe4eaa1b1"
   GIT_SHALLOW YES
 )
 
+set(SPDLOG_BUILD_SHARED OFF)
 CPMAddPackage(
   URI "gh:gabime/spdlog@1.17.0"
   GIT_SHALLOW YES
@@ -159,18 +161,21 @@ endif()
 
 if(NOT ENGINE_OFFLINE_SHADERS)
   find_package(Slang CONFIG REQUIRED)
+  
+  # Ensure SLANG_ROOT is set if find_package didn't set it automatically
   set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
   set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
 
-  add_library(slang-compiler STATIC IMPORTED)
+  # Note the 'lib' prefix added to the filenames below
+  add_library(slang-compiler SHARED IMPORTED)
   set_target_properties(slang-compiler PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/slang-compiler.lib"
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.so"
     INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
   )
 
-  add_library(slang-rt STATIC IMPORTED)
+  add_library(slang-rt SHARED IMPORTED)
   set_target_properties(slang-rt PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/slang-rt.lib"
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.so"
     INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
   )
 endif()
@@ -185,7 +190,7 @@ CPMAddPackage(
 CPMAddPackage(
   NAME ImPlot
   GITHUB_REPOSITORY epezent/implot
-  GIT_TAG 81b8b1951392767cf458508385fa025fd087a252
+  GIT_TAG 93c801b4bb801c5c11031d880b6af1d1f70bd79d
   GIT_SHALLOW YES
   DOWNLOAD_ONLY YES
 )
@@ -216,7 +221,8 @@ if(ImGui_ADDED AND ImPlot_ADDED)
   target_link_libraries(imgui PUBLIC
     glfw
     volk
+    X11::X11
     volk::volk_headers
   )
-  target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_USER_CONFIG="imconfig.h")
+  target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_USER_CONFIG="imconfig.h")
 endif()

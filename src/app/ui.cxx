@@ -188,7 +188,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
     static u64 total_frame_counter = 0;
 
     widget("Frame Profile", [&] {
-        ImGui::Text("Frame Profile [#%llu]", total_frame_counter++);
+        ImGui::Text("Frame Profile [#%lu]", total_frame_counter++);
         ImGui::Separator();
 
         if (compute_res.has_value()) {
@@ -223,7 +223,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                             ImGui::Unindent();
 
                             ImGui::TableNextColumn();
-                            ImGui::Text("%llu", (*c_stats)[i].compute_shader_invocations);
+                            ImGui::Text("%lu", (*c_stats)[i].compute_shader_invocations);
                         }
                     };
 
@@ -279,9 +279,9 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
 
                     const auto &gb = (*g_stats)[static_cast<u32>(GraphicsIndex::GBuffer)];
 
-                    ImGui::BulletText("Vertices: %llu", gb.input_assembly_vertices);
-                    ImGui::BulletText("Primitives: %llu", gb.input_assembly_primitives);
-                    ImGui::BulletText("Fragment Invocations: %llu", gb.fragment_shader_invocations);
+                    ImGui::BulletText("Vertices: %lu", gb.input_assembly_vertices);
+                    ImGui::BulletText("Primitives: %lu", gb.input_assembly_primitives);
+                    ImGui::BulletText("Fragment Invocations: %lu", gb.fragment_shader_invocations);
                 }
             }
         }

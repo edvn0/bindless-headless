@@ -16,4 +16,4 @@ struct CLIOptions {
     bool disable_output_images{true};
 };
 
-auto parse_cli(int argc, char **argv) -> CLIOptions;
+auto parse_cli(int argc, char **argv) -> std::optional<CLIOptions>;

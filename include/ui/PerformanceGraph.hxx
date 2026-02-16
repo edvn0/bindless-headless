@@ -107,8 +107,8 @@ public:
                     ImPlot::SetupAxisLimits(ImAxis_X1, 0, MaxSamples, ImGuiCond_Always);
                     ImPlot::SetupAxisLimits(ImAxis_Y1, 0, y_max, ImGuiCond_Always);
 
-                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 1.0,
-                                     0.0, ImPlotLineFlags_None, static_cast<int>(line.write_index));
+                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 
+                 1.0, 0.0);
 
                     ImPlot::EndPlot();
                 }
@@ -160,8 +160,8 @@ public:
                     continue;
 
                 if (ImPlot::BeginItem(line.name.data())) {
-                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 1.0,
-                                     0.0, ImPlotLineFlags_None, static_cast<int>(line.write_index));
+                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 
+                 1.0, 0.0);
 
                     for (std::size_t j = 0; j < line.sample_count; ++j) {
                         new_max = std::max(new_max, line.samples[j]);

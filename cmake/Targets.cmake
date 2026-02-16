@@ -6,6 +6,8 @@ include(CMakePushCheckState)
 include(CheckCXXCompilerFlag)
 include(CheckCCompilerFlag)
 
+find_package(X11 REQUIRED)
+
 # ------------------------------------------------------------
 # Core libs you already have
 # ------------------------------------------------------------
@@ -139,16 +141,17 @@ DEFAULT_COMPILE_OPTIONS(BindlessEngine)
 target_compile_definitions(BindlessEngine PUBLIC
   SLANG_DISABLE_EXCEPTIONS=1
   GLM_FORCE_DEPTH_ZERO_TO_ONE
+  GLFW_INCLUDE_NONE
   GLM_ENABLE_EXPERIMENTAL
   ${VOLK_PLATFORM_DEFINE}
 )
 
 # LTO: put it on the engine (exe inherits on some generators, but be explicit)
-if(MINGW)
-  set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-else()
-  set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-endif()
+#if(MINGW)
+#  set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+#else()
+#  set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+#endif()
 
 # ------------------------------------------------------------
 # App library: your app layer (depends on engine)
@@ -172,6 +175,8 @@ target_include_directories(BindlessApp PUBLIC
 
 target_link_libraries(BindlessApp PUBLIC
   BindlessEngine
+  PRIVATE
+  X11::X11
 )
 
 if(HAS_TRACY)
@@ -196,23 +201,21 @@ target_include_directories(BindlessHeadless PRIVATE
   ${CMAKE_SOURCE_DIR}/include
 )
 
+
 target_link_libraries(BindlessHeadless PRIVATE
   BindlessApp
   CLI11::CLI11
+  X11::X11
 )
 
 DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
 
-if(MSVC)
-  target_compile_options(BindlessHeadless PRIVATE /bigobj)
-endif()
-
 # If you still want LTO on the exe explicitly:
-if(MINGW)
-  set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-else()
-  set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-endif()
+#if(MINGW)
+#  set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+#else()
+#  set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+#endif()
 
 # ------------------------------------------------------------
 # ASAN check block unchanged (pure configure-time)
