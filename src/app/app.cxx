@@ -9,6 +9,7 @@
 #include <efsw/efsw.hpp>
 #include <execution>
 #include <future>
+#include <glm/ext/matrix_clip_space.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
@@ -19,6 +20,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "Constants.hxx"
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
 
@@ -135,7 +137,9 @@ namespace {
 
             const bool alt_down =
                     glfwGetKey(w, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
-
+            const auto super_down = glfwGetKey(w, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+                                    glfwGetKey(w, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
+            const bool modifier_down = alt_down || super_down;
             // --- RMB fly look (unchanged) ---
             if (button == GLFW_MOUSE_BUTTON_RIGHT) {
                 if (action == GLFW_PRESS && app.viewport_input.hovered) {
@@ -149,7 +153,7 @@ namespace {
             }
 
             // --- Alt + LMB orbit capture ---
-            if (button == GLFW_MOUSE_BUTTON_LEFT && alt_down) {
+            if (button == GLFW_MOUSE_BUTTON_LEFT && modifier_down) {
                 if (action == GLFW_PRESS && app.viewport_input.hovered) {
                     app.cam_in.lmb = true;
                     app.cam_in.orbit_capture = true;
@@ -186,40 +190,26 @@ namespace {
             }
 
             auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
-
-            // ignore the synthetic event produced by glfwSetCursorPos()
-            if (app.warp_in_progress) {
-                app.warp_in_progress = false;
-                app.last_mouse = app.warp_center;
-                app.mouse_inited = true;
-                return;
-            }
-
             const glm::vec2 pos{static_cast<float>(x), static_cast<float>(y)};
+
+            // In DISABLED mode, pos is already a virtual 'unbounded' coordinate
             const glm::vec2 delta = update_mouse_delta(app, pos);
 
             const bool capturing = app.cam_in.rmb || app.cam_in.orbit_capture;
 
             if (capturing) {
-                // always feed camera deltas while captured (ignore hover/focus/imgui)
                 if (delta.x != 0.0f || delta.y != 0.0f) {
                     auto e = std::make_unique<CursorMovedEvent>();
                     e->position = pos;
                     e->delta = delta;
                     app.event_system.push_event(std::move(e));
                 }
-
-                // warp-to-center to prevent edge clamp
-                app.warp_center = window_center(w);
-                app.warp_in_progress = true;
-                glfwSetCursorPos(w, app.warp_center.x, app.warp_center.y);
+                // REMOVED: warp_to_center logic. GLFW_CURSOR_DISABLED does this for you.
                 return;
             }
 
-            // not capturing => normal gating
-            if (!route_mouse_to_app(app)) {
+            if (!route_mouse_to_app(app))
                 return;
-            }
 
             auto e = std::make_unique<CursorMovedEvent>();
             e->position = pos;
@@ -695,7 +685,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Clustering buffers ---
     {
-        res.clustering_config = cluster_config(16, 9, 16, 0.1F, 1000.0F);
+        res.clustering_config = cluster_config(16, 9, 16, z_near, z_far);
 
         constexpr u32 max_lights_per_cluster = 128u;
         res.max_light_indices = res.clustering_config.cluster_count * max_lights_per_cluster;
@@ -1091,11 +1081,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         // camera update + frame ubo write
         ui.app_state.cam.update(gpu.window, ui.dt, ui.app_state.cam_in);
-        constexpr float fov_y = glm::radians(70.0f);
-        constexpr float z_near = 0.1f;
 
         write_camera_to_frame_ubo(gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam,
-                                  render_scene_extent, fov_y, z_near);
+                                  render_scene_extent, fov_y, z_near, z_far);
 
         ui.total_time += ui.dt;
         {
@@ -1111,7 +1099,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             auto sun_direction_intensity = glm::vec4(sun_dir, ui.sun_config.intensity);
             auto offset = offsetof(FrameUBO, sun_direction_intensity);
             res.frame_ubo_ring.write_field(gpu.ctx, bounded_frame_index, sun_direction_intensity, offset);
-            {
+            /*{
                 const glm::vec3 light_pos =
                         ui.shadow_config.light_target - (sun_dir * ui.shadow_config.shadow_distance);
                 glm::mat4 light_view =
@@ -1119,11 +1107,11 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 const float ortho_size = ui.shadow_config.ortho_size;
 
                 const float half_size = ortho_size * 0.5F;
-                const glm::mat4 light_proj = OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size,
-                                                              ui.shadow_config.near_plane, ui.shadow_config.far_plane);
-                ui.shadow_config.light_view_proj = light_proj * light_view;
-            }
-            /* {
+                
+                const glm::mat4 light_proj = glm::orthoRH_ZO(-half_size, half_size, -half_size, half_size, ui.shadow_config.far_plane, ui.shadow_config.near_plane);
+                ui.shadow_config.light_view_proj =  light_proj * light_view;
+            }*/
+            {
                 glm::vec3 scene_center = res.mesh.mesh_aabb.center();
                 glm::vec3 scene_extents = (res.mesh.mesh_aabb.max - res.mesh.mesh_aabb.min) * 0.5f;
                 float scene_radius = glm::length(scene_extents);
@@ -1143,9 +1131,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 float near_plane = glm::max(-ls_max.z - padding, 0.1f);
                 float far_plane = -ls_min.z + padding;
                 const glm::mat4 light_proj =
-                        OrthoRH_ReverseZ(-half_size, half_size, -half_size, half_size, near_plane, far_plane);
+                        glm::orthoRH_ZO(-half_size, half_size, -half_size, half_size,near_plane, far_plane);
                 ui.shadow_config.light_view_proj = light_proj * light_view;
-            } */
+            }
         }
 
         const auto ranges = write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,

@@ -157,3 +157,43 @@ float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0)
 
     return sampled_images[tex_idx].Sample(samplers[samp_idx], uv);
 }
+
+float3 reconstruct_world_position_from_depth(float2 uv, float depth, Ptr<UBO, Access.Read, AddressSpace.Device> ubo)
+{
+    float2 ndc_xy = uv * 2.0 - 1.0;
+
+    ndc_xy.y = -ndc_xy.y; 
+
+    float4 clip = float4(ndc_xy, depth, 1.0);
+    float4 world = mul(ubo->inv_view_projection, clip);
+    
+    return world.xyz / world.w;
+}
+
+float calculate_shadow(float3 world_pos, float4x4 shadow_matrix, uint tex_idx, uint comp_samp_idx)
+{
+    float4 shadow_coord = mul(shadow_matrix, float4(world_pos, 1.0));
+    float3 ndc = shadow_coord.xyz / shadow_coord.w;
+    
+    float2 shadow_uv = float2(
+        ndc.x * 0.5 + 0.5,
+        ndc.y * -0.5 + 0.5  
+    );
+    
+    if (any(shadow_uv < 0.0) || any(shadow_uv > 1.0))
+        return 1.0;
+    
+    uint t_idx = NonUniformResourceIndex(tex_idx);
+    uint cs_idx = NonUniformResourceIndex(comp_samp_idx);
+    
+    const float bias = 0.0005; 
+    float reference_depth = ndc.z - bias;      
+    reference_depth = saturate(reference_depth);
+    float lit_factor = sampled_images[t_idx].SampleCmp(
+        comparison_samplers[cs_idx],
+        shadow_uv,
+        reference_depth
+    );
+    
+    return lit_factor;
+}

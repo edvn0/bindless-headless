@@ -456,7 +456,7 @@ struct DeferredLightingPushConstants {
 */
 struct DeferredLightingPushConstants
 {
-    UBO*        frame_ubo;
+    Ptr<UBO, Access.Read, AddressSpace.Device>        frame_ubo;
     PointLight* point_lights;
     float4x4 shadow_matrix;
     uint tiles_x;
@@ -500,50 +500,11 @@ uint compute_cluster_index(
     return cluster_x + cluster_y * tiles_x + cluster_z * tiles_x * tiles_y;
 }
 
-float3 reconstruct_world_pos_from_depth_fixed(float2 uv, float depth, UBO* ubo)
-{
-    float2 ndc_xy = uv * 2.0 - 1.0;
-    
-    float4 clip = float4(ndc_xy, depth, 1.0);
-    float4 world = mul(ubo->inv_view_projection, clip);
-    
-    return world.xyz / world.w;
-}
-
 struct VSOut
 {
     float4 position : SV_Position;
     float2 uv       : TEXCOORD0;
 };
-
-float calculate_shadow(float3 world_pos, float4x4 shadow_matrix, uint tex_idx, uint comp_samp_idx)
-{
-    float4 shadow_coord = mul(shadow_matrix, float4(world_pos, 1.0));
-    float3 ndc = shadow_coord.xyz / shadow_coord.w;
-    
-    float2 shadow_uv = float2(
-        ndc.x * 0.5 + 0.5,
-        ndc.y * -0.5 + 0.5  
-    );
-    
-    if (any(shadow_uv < 0.0) || any(shadow_uv > 1.0))
-        return 1.0;
-    
-    uint t_idx = NonUniformResourceIndex(tex_idx);
-    uint cs_idx = NonUniformResourceIndex(comp_samp_idx);
-    
-    const float bias = 0.0005; 
-    float reference_depth = ndc.z - bias;      
-    reference_depth = saturate(reference_depth);
-    float lit_factor = sampled_images[t_idx].SampleCmp(
-        comparison_samplers[cs_idx],
-        shadow_uv,
-        reference_depth
-    );
-    
-    return lit_factor;
-}
-
 
 [shader("fragment")]
 float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : SV_Target0
@@ -554,11 +515,7 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     float4 g0 = sample_texture(uv, pc.gbuffer0_index, pc.sampler_index);
     float4 g1 = sample_texture(uv, pc.gbuffer1_index, pc.sampler_index);
     float4 g2 = sample_texture(uv, pc.gbuffer2_index, pc.sampler_index);
-    float depth = sample_texture(uv, pc.depth_index, pc.sampler_index).x;
-
-    // Early out if no geometry
-    if (depth <= 0.0)
-        return float4(0.0, 0.0, 0.0, 1.0);
+    float depth = sample_texture(uv, pc.depth_index).r;
 
     // Unpack G-Buffer
     float3 albedo = g0.rgb;
@@ -571,7 +528,7 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     float3 emissive = g2.rgb;
 
     float3 N = oct_decode(oct_u);
-    float3 world_pos = reconstruct_world_pos_from_depth_fixed(uv, depth, pc.frame_ubo);
+    float3 world_pos = reconstruct_world_position_from_depth(uv, depth, pc.frame_ubo);
     float shadow_factor = calculate_shadow(
     world_pos,
     pc.shadow_matrix,

@@ -398,28 +398,32 @@ auto run_ui_frame(AppContext &ctx) -> UiFrameResult {
 
     return out;
 }
+
 auto window_center(GLFWwindow *w) -> glm::vec2 {
     int ww = 0, wh = 0;
     glfwGetWindowSize(w, &ww, &wh);
     return glm::vec2{ww * 0.5f, wh * 0.5f};
 }
+
 auto begin_cursor_capture(GLFWwindow *w, AppState &app) -> void {
+    // 1. Get current position BEFORE disabling to seed the tracker
+    double x, y;
+    glfwGetCursorPos(w, &x, &y);
+    app.last_mouse = glm::vec2(static_cast<float>(x), static_cast<float>(y));
+    
+    // 2. Enable Raw Motion (helps X11 significantly)
     if (glfwRawMouseMotionSupported()) {
         glfwSetInputMode(w, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
     }
 
+    // 3. Disable cursor (GLFW now handles virtual centering)
     glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     app.cursor_captured = true;
-
-    app.warp_center = window_center(w);
-    app.warp_in_progress = true;
-    glfwSetCursorPos(w, app.warp_center.x, app.warp_center.y);
-
-    // Seed delta tracking at center
-    app.last_mouse = app.warp_center;
     app.mouse_inited = true;
+    app.warp_in_progress = false; // Usually not needed in DISABLED mode
 }
+
 auto end_cursor_capture(GLFWwindow *w, AppState &app) -> void {
     if (glfwRawMouseMotionSupported()) {
         glfwSetInputMode(w, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
@@ -428,6 +432,5 @@ auto end_cursor_capture(GLFWwindow *w, AppState &app) -> void {
     glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     app.cursor_captured = false;
-    app.warp_in_progress = false;
-    app.mouse_inited = false; // force re-init when returning to normal mouse
+    app.mouse_inited = false;
 }

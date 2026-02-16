@@ -481,7 +481,7 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
                 depth_att.imageView = depth->attachment_view;
                 depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // keep predepth
-                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // no need to store
+                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // no need to store
                 depth_att.clearValue = {.depthStencil = {0.0f, 0}};
 
                 VkRenderingInfo ri{};

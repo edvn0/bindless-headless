@@ -24,9 +24,9 @@ struct FrameUBO {
 
 
 auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent2D extent, float fov_y_radians,
-                                float z_near) -> void;
+                                float z_near, float z_far) -> void;
 auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
-                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float z_near) -> void;
+                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float z_near, float z_far) -> void;
 
 
 struct ExtentBounds {
