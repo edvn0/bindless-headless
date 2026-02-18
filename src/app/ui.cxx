@@ -1,6 +1,7 @@
 // app/ui.hxx
 #include "app/ui.hxx"
 
+#include "Types.hxx"
 #include "app/app.hxx"
 
 #include "BindlessHeadless.hxx"
@@ -117,12 +118,12 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
 
     if (graphics_res.has_value()) {
         const auto &g_times = *graphics_res;
-        ctx.ui.gpu_frame_graph.push_sample(3, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
-        ctx.ui.gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
-        ctx.ui.gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
-        ctx.ui.gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
-        ctx.ui.gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Present)]);
-        ctx.ui.gpu_frame_graph.push_sample(8, g_times[static_cast<u32>(GraphicsIndex::ShadowMap)]);
+        ctx.ui.gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
+        ctx.ui.gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
+        ctx.ui.gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
+        ctx.ui.gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
+        ctx.ui.gpu_frame_graph.push_sample(8, g_times[static_cast<u32>(GraphicsIndex::Present)]);
+        ctx.ui.gpu_frame_graph.push_sample(9, g_times[static_cast<u32>(GraphicsIndex::ShadowMap)]);
     }
 
     widget("Performance Graphs", [&] {
@@ -324,32 +325,54 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
         ClusterOccupancy = 8,
     };*/
         /* ImGui::Combo("Cluster Debug Mode", reinterpret_cast<int *>(&ctx.ui.debug_mode),
-                     "None\0Cluster Grid\0Light Count\0Light Density\0Cluster Index\0Depth Slices\0Light Heatmap\0First Light\0Cluster Occupancy\0");
+                     "None\0Cluster Grid\0Light Count\0Light Density\0Cluster Index\0Depth Slices\0Light Heatmap\0First
+        Light\0Cluster Occupancy\0");
 
            static constexpr std::array shadow_map_res_options = {512u, 1024u, 2048u, 4096u, 8192u};
         static int current_res_idx = 2; // Default to 2048
         if (ImGui::Combo("Shadow Map Resolution", &current_res_idx,
                          "512\01024\02048\04096\08192\0")) {
             ctx.ui.shadow_map_resolution = shadow_map_res_options[current_res_idx];
-        } */    
-         
-        const auto& preview_debug_mode = ctx.ui.debug_mode;
-        if (ImGui::BeginCombo("Cluster Debug Mode", std::format("{}", static_cast<u32>(preview_debug_mode)).c_str(), ImGuiComboFlags_HeightLarge)) {
+        } */
+
+        const auto &preview_debug_mode = ctx.ui.debug_mode;
+        if (ImGui::BeginCombo("Cluster Debug Mode", std::format("{}", static_cast<u32>(preview_debug_mode)).c_str(),
+                              ImGuiComboFlags_HeightLarge)) {
             for (int i = 0; i < static_cast<int>(AppUI::ClusterDebugMode::Count); i++) {
                 auto mode = static_cast<AppUI::ClusterDebugMode>(i);
                 const char *mode_name = nullptr;
                 switch (mode) {
                     using enum AppUI::ClusterDebugMode;
-                    case None: mode_name = "None"; break;
-                    case ClusterGrid: mode_name = "Cluster Grid"; break;
-                    case LightCount: mode_name = "Light Count"; break;
-                    case LightDensity: mode_name = "Light Density"; break;
-                    case ClusterIndex: mode_name = "Cluster Index"; break;
-                    case DepthSlices: mode_name = "Depth Slices"; break;
-                    case LightHeatmap: mode_name = "Light Heatmap"; break;
-                    case FirstLight: mode_name = "First Light"; break;
-                    case ClusterOccupancy: mode_name = "Cluster Occupancy"; break;
-                    default: {continue;}
+                    case None:
+                        mode_name = "None";
+                        break;
+                    case ClusterGrid:
+                        mode_name = "Cluster Grid";
+                        break;
+                    case LightCount:
+                        mode_name = "Light Count";
+                        break;
+                    case LightDensity:
+                        mode_name = "Light Density";
+                        break;
+                    case ClusterIndex:
+                        mode_name = "Cluster Index";
+                        break;
+                    case DepthSlices:
+                        mode_name = "Depth Slices";
+                        break;
+                    case LightHeatmap:
+                        mode_name = "Light Heatmap";
+                        break;
+                    case FirstLight:
+                        mode_name = "First Light";
+                        break;
+                    case ClusterOccupancy:
+                        mode_name = "Cluster Occupancy";
+                        break;
+                    default: {
+                        continue;
+                    }
                 }
 
                 if (ImGui::Selectable(mode_name, ctx.ui.debug_mode == mode)) {
@@ -359,8 +382,9 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
             ImGui::EndCombo();
         }
 
-        const auto& preview_value = ctx.ui.shadow_map_resolution.peek();
-        if (ImGui::BeginCombo("Shadow Map Resolution", std::format("{}x{}", preview_value, preview_value).c_str(), ImGuiComboFlags_HeightLarge)) {
+        const auto &preview_value = ctx.ui.shadow_map_resolution.peek();
+        if (ImGui::BeginCombo("Shadow Map Resolution", std::format("{}x{}", preview_value, preview_value).c_str(),
+                              ImGuiComboFlags_HeightLarge)) {
             static constexpr std::array shadow_map_res_options = {512u, 1024u, 2048u, 4096u, 8192u};
             for (size_t i = 0; i < shadow_map_res_options.size(); i++) {
                 const auto res = shadow_map_res_options[i];
@@ -377,10 +401,10 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
 
     widget("Debug clustering", [&c = ctx] {
         ImGui::ImageButton("Clustering", ImTextureRef{c.res.debug_culling.index()},
-                               {
-                                       ImGui::GetContentRegionAvail().x,
-                                       ImGui::GetContentRegionAvail().y,
-                               });
+                           {
+                                   ImGui::GetContentRegionAvail().x,
+                                   ImGui::GetContentRegionAvail().y,
+                           });
     });
 }
 
@@ -399,8 +423,13 @@ auto run_ui_frame(AppContext &ctx) -> UiFrameResult {
                                              ctx.gpu.ctx.texture_format(ctx.res.tonemapped),
                                              ctx.gpu.swapchain.color_space()));
 
-    draw_ui(ctx, static_cast<u32>(ctx.ui.frame_index % frames_in_flight), ctx.ui.app_state);
-
+    static u8 warmup_frames = frames_in_flight;
+    if (warmup_frames > 0) [[unlikely]] {
+        --warmup_frames;
+    } else {
+        u32 index = static_cast<u32>(ctx.ui.frame_index % frames_in_flight);
+        draw_ui(ctx, index, ctx.ui.app_state);
+    }
     ctx.ui.gui->end_frame();
 
     out.desired_scene_extent =
@@ -424,7 +453,7 @@ auto begin_cursor_capture(GLFWwindow *w, AppState &app) -> void {
     double x, y;
     glfwGetCursorPos(w, &x, &y);
     app.last_mouse = glm::vec2(static_cast<float>(x), static_cast<float>(y));
-    
+
     // 2. Enable Raw Motion (helps X11 significantly)
     if (glfwRawMouseMotionSupported()) {
         glfwSetInputMode(w, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);

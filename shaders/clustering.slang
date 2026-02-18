@@ -40,7 +40,7 @@ bool light_intersects_cluster(PushConstants pc, uint light_index, uint cx, uint 
 {
     var l = pc.lights[light_index];
     float3 view_pos = mul(pc.frame_ubo->view, float4(l.position_radius.xyz, 1.0)).xyz;
-    float radius = l.position_radius.w;
+    float radius = l.position_radius.w *0.1;
 
     var view_data = ClusterViewData(pc.tiles_x, pc.tiles_y, pc.tiles_z, pc.log_z_scale,
                                     pc.z_near, pc.z_far, pc.frame_ubo->inv_projection);

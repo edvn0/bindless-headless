@@ -87,10 +87,10 @@ void rotate_lights_cs(uint3 tid : SV_DispatchThreadID, uniform RotatePushConstan
 
     // 2. Calculate the orbit
     // We can add a per-light phase offset (idx * 0.5) so they don't all move in a line
-    float angle = pc.total_time + (float(idx) * 0.5f);
+    float angle = pc.total_time + (float(idx) * 13.5f);
     
-    float offset_x = cos(0.2f*angle) * l.radius;
-    float offset_z = sin(0.2f*angle) * l.radius;
+    float offset_x = cos(0.02f*angle) * l.radius;
+    float offset_z = sin(0.02f*angle) * l.radius;
 
     // 3. Apply the offset to the x and z coordinates
     float3 orbiting_pos = center + float3(offset_x, 0.0f, offset_z);

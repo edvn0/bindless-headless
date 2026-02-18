@@ -436,7 +436,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         },
         };
 
-        pipes.fullscreen_vs = gpu.ctx.shaders.get_handle(get_or_create_fullscreen_vs(gpu.ctx));
+        pipes.fullscreen_vs = gpu.ctx.shaders.get_handle(Pipeline::get_or_create_fullscreen_vs(gpu.ctx));
     }
 
     {
@@ -847,7 +847,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, directional_shadow_map_code.at(0),
                             VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
-                    auto tp = create_fullscreen_pipeline(FullscreenPipelineInfo{
+                    auto tp = create_fullscreen_pipeline(Pipeline::Fullscreen{
                             .device = gpu.device,
                             .cache = *gpu.ctx.pipeline_cache,
                             .bindless_layout = gpu.bindless.layout,
@@ -859,7 +859,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             .enable_blend = false,
                     });
 
-                    auto present_pipe = create_fullscreen_pipeline(FullscreenPipelineInfo{
+                    auto present_pipe = create_fullscreen_pipeline(Pipeline::Fullscreen{
                             .device = gpu.device,
                             .cache = *gpu.ctx.pipeline_cache,
                             .bindless_layout = gpu.bindless.layout,

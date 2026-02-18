@@ -100,14 +100,14 @@ struct RotateCubesPushConstant {
     */
 struct RotatePushConstant {
     f32 delta_time;
-f32 rads_per_second;
-f32 total_time;
-u32 count;
-const DeviceAddress previous_frame_transforms;
-const DeviceAddress transforms;
-const DeviceAddress previous_point_lights;
-const DeviceAddress point_lights;
-const DeviceAddress static_point_lights;
+    f32 rads_per_second;
+    f32 total_time;
+    u32 count;
+    const DeviceAddress previous_frame_transforms;
+    const DeviceAddress transforms;
+    const DeviceAddress previous_point_lights;
+    const DeviceAddress point_lights;
+    const DeviceAddress static_point_lights;
 };
 
 /*
@@ -255,27 +255,92 @@ auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, c
         -> CompiledPipeline;
 
 auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
-                                       const std::vector<u32>& task_code, const std::vector<u32> &mesh_code, const std::vector<u32> &frag_code,
-                                       VkFormat color_format, VkFormat depth_format, VkSampleCountFlagBits samples)
-        -> CompiledPipeline;
+                                       const std::vector<u32> &task_code, const std::vector<u32> &mesh_code,
+                                       const std::vector<u32> &frag_code, VkFormat color_format, VkFormat depth_format,
+                                       VkSampleCountFlagBits samples) -> CompiledPipeline;
 
-struct FullscreenPipelineInfo {
-    VkDevice device;
-    PipelineCache &cache;
-    VkDescriptorSetLayout bindless_layout;
 
-    VkShaderModule fullscreen_vs;
-    static constexpr std::string_view vs_entry{"main"};
+namespace Pipeline {
+    enum class DepthMode {
+        none, // No depth test/write (tonemap, deferred lighting)
+        write, // Full depth write (predepth, shadow)
+        test_equal, // Test only, equal (gbuffer after predepth)
+        test_greater_equal, // Test only, >= reverse-Z (light volumes)
+    };
 
-    std::span<const u32> frag_code;
-    std::string_view fs_entry;
+    enum class CullMode {
+        none,
+        back,
+        front,
+    };
 
-    VkFormat color_format;
+    struct ColorAttachmentInfo {
+        VkFormat format;
+        bool blend_additive = false; // false = no blend, true = additive (light volumes)
+    };
 
-    u32 push_constant_size;
-    VkShaderStageFlags push_constant_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    struct VertexInputInfo {
+        std::span<const VkVertexInputBindingDescription> bindings;
+        std::span<const VkVertexInputAttributeDescription> attributes;
+    };
 
-    bool enable_blend = false;
-};
-auto create_fullscreen_pipeline(const FullscreenPipelineInfo &) -> CompiledPipeline;
-[[nodiscard]] auto get_or_create_fullscreen_vs(RenderContext &) -> u32;
+    struct ShaderStageInfo {
+        std::span<const u32> code;
+        std::string_view entry;
+        VkShaderStageFlagBits stage;
+    };
+
+    struct Graphics {
+        VkDevice device;
+        PipelineCache &cache;
+        VkDescriptorSetLayout bindless_layout;
+        std::string_view debug_name;
+
+        std::span<const ShaderStageInfo> stages;
+
+        // Push constants
+        u32 push_constant_size = 0;
+        VkShaderStageFlags push_constant_stages = VK_SHADER_STAGE_ALL_GRAPHICS;
+
+        // Attachments
+        std::span<const ColorAttachmentInfo> color_attachments; // empty = depth-only
+        VkFormat depth_format = VK_FORMAT_UNDEFINED;
+
+        // State
+        DepthMode depth_mode = DepthMode::none;
+        CullMode cull_mode = CullMode::none;
+        bool depth_bias = false;
+
+        // Vertex input (empty = fullscreen / mesh shader)
+        std::optional<VertexInputInfo> vertex_input;
+
+        // Multisampling
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+
+        // Extra dynamic states beyond viewport/scissor
+        std::span<const VkDynamicState> extra_dynamic_states;
+    };
+
+    auto create_graphics_pipeline(const Graphics &info) -> CompiledPipeline;
+
+    struct Fullscreen {
+        VkDevice device;
+        PipelineCache &cache;
+        VkDescriptorSetLayout bindless_layout;
+
+        VkShaderModule fullscreen_vs; // This is application cached.
+        static constexpr std::string_view vs_entry{"main"};
+
+        std::span<const u32> frag_code;
+        std::string_view fs_entry;
+
+        VkFormat color_format;
+
+        u32 push_constant_size;
+        VkShaderStageFlags push_constant_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        bool enable_blend = false;
+    };
+    auto create_fullscreen_pipeline(const Fullscreen &) -> CompiledPipeline;
+    [[nodiscard]] auto get_or_create_fullscreen_vs(RenderContext &) -> u32;
+} // namespace Pipeline

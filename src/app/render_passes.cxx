@@ -3,6 +3,7 @@
 #include "CreateInfo.hxx"
 #include "Pipelines.hxx"
 #include "RenderContext.hxx"
+#include "vulkan/vulkan_core.h"
 
 namespace {
     constexpr auto begin_query_for_index = [](const RenderContext &c, const VkCommandBuffer cmd,
@@ -490,6 +491,7 @@ auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, 
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+                vkCmdSetDepthBiasEnable(cmd, VK_TRUE);
                 vkCmdSetDepthBias(cmd, ui.shadow_config.depth_bias_constant_factor, ui.shadow_config.depth_bias_clamp,
                                   ui.shadow_config.depth_bias_slope_factor); // Shadow bias
 
@@ -965,7 +967,7 @@ auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 
                 color_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                 color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-                color_attachment.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
+                color_attachment.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}}};
 
                 auto ri = create_info<VkRenderingInfo>();
                 ri.renderArea = {.offset = {0, 0}, .extent = frame_extent};
@@ -1074,7 +1076,7 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                 color_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
                 color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-                color_attachment.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}}};
+                color_attachment.clearValue = {.color = {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}}};
 
                 auto ri = create_info<VkRenderingInfo>();
                 ri.renderArea = {.offset = {0, 0}, .extent = gpu.swapchain.extent()};

@@ -219,7 +219,7 @@ float3 evaluate_point_light_fixed_v4(
     if (dist > radius) return 0.0.xxx;
     
     float t = 1.0 - (dist / radius);
-    float attenuation = t * t;
+    float attenuation = t*t;
     float3 radiance = light_col * intensity * attenuation;
     return calculate_direct_lighting(safe_normalize(L), V, N, albedo, roughness, metallic, radiance);
     }

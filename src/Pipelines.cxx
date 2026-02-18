@@ -3,9 +3,9 @@
 #include "Mesh.hxx"
 #include "PipelineCache.hxx"
 #include "RenderContext.hxx"
-#include "vulkan/vulkan_core.h"
 
 #include <glm/glm.hpp>
+#include <ranges>
 #include <utility>
 
 
@@ -1006,7 +1006,7 @@ auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache &
     auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
     vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
     vert_stage_ci.module = vert;
-    vert_stage_ci.pName = FullscreenPipelineInfo::vs_entry.data();
+    vert_stage_ci.pName = Pipeline::Fullscreen::vs_entry.data();
 
     auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
     frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1174,144 +1174,314 @@ namespace {
             0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x01, 0x00, 0x38, 0x00, 0x01, 0x00};
 }
 
-auto get_or_create_fullscreen_vs(RenderContext &ctx) -> u32 {
-    auto handle = ctx.shaders.maybe_get_handle(EngineShaderIndices::fullscreen_vertex_shader);
-    if (handle.valid()) {
-        return handle.index();
+namespace Pipeline {
+
+    auto get_or_create_fullscreen_vs(RenderContext &ctx) -> u32 {
+        auto handle = ctx.shaders.maybe_get_handle(EngineShaderIndices::fullscreen_vertex_shader);
+        if (handle.valid()) {
+            return handle.index();
+        }
+
+        std::array<u32, sizeof(fullscreen_vs_spv) / sizeof(u32)> vs_code{};
+        std::memcpy(vs_code.data(), fullscreen_vs_spv.data(), fullscreen_vs_spv.size());
+
+        auto smci = create_info<VkShaderModuleCreateInfo>();
+        smci.codeSize = vs_code.size() * sizeof(u32);
+        smci.pCode = vs_code.data();
+
+        VkShaderModule shader_module{};
+        vk_check(vkCreateShaderModule(ctx.get_device(), &smci, nullptr, &shader_module));
+        return ctx.create_shader(std::move(shader_module)).index();
     }
 
-    std::vector<u32> vs_code(fullscreen_vs_spv.size() / sizeof(u32));
-    std::memcpy(vs_code.data(), fullscreen_vs_spv.data(), fullscreen_vs_spv.size());
 
-    auto smci = create_info<VkShaderModuleCreateInfo>();
-    smci.codeSize = vs_code.size() * sizeof(u32);
-    smci.pCode = vs_code.data();
+    auto create_fullscreen_pipeline(const Fullscreen &info) -> CompiledPipeline {
+        VkShaderModule frag_shader{};
+        {
+            VkShaderModuleCreateInfo ci = create_info<VkShaderModuleCreateInfo>();
+            ci.codeSize = info.frag_code.size() * sizeof(u32);
+            ci.pCode = info.frag_code.data();
+            vk_check(vkCreateShaderModule(info.device, &ci, nullptr, &frag_shader));
+        }
 
-    VkShaderModule shader_module{};
-    vk_check(vkCreateShaderModule(ctx.get_device(), &smci, nullptr, &shader_module));
-    return ctx.create_shader(std::move(shader_module)).index();
-}
+        VkPushConstantRange push_range{
+                .stageFlags = info.push_constant_stages,
+                .offset = 0,
+                .size = info.push_constant_size,
+        };
 
+        VkPipelineLayout pipeline_layout{};
+        {
+            auto plci = create_info<VkPipelineLayoutCreateInfo>();
+            plci.setLayoutCount = 1;
+            plci.pSetLayouts = &info.bindless_layout;
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges = &push_range;
+            vk_check(vkCreatePipelineLayout(info.device, &plci, nullptr, &pipeline_layout));
+        }
 
-auto create_fullscreen_pipeline(const FullscreenPipelineInfo &info) -> CompiledPipeline {
-    VkShaderModule frag_shader{};
-    {
-        VkShaderModuleCreateInfo ci = create_info<VkShaderModuleCreateInfo>();
-        ci.codeSize = info.frag_code.size() * sizeof(u32);
-        ci.pCode = info.frag_code.data();
-        vk_check(vkCreateShaderModule(info.device, &ci, nullptr, &frag_shader));
+        auto vs_stage = create_info<VkPipelineShaderStageCreateInfo>();
+        vs_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        vs_stage.module = info.fullscreen_vs;
+        vs_stage.pName = info.vs_entry.data();
+
+        auto fs_stage = create_info<VkPipelineShaderStageCreateInfo>();
+        fs_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fs_stage.module = frag_shader;
+        fs_stage.pName = info.fs_entry.data();
+
+        std::array stages{vs_stage, fs_stage};
+
+        auto vi = create_info<VkPipelineVertexInputStateCreateInfo>();
+
+        VkPipelineInputAssemblyStateCreateInfo ia = create_info<VkPipelineInputAssemblyStateCreateInfo>();
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo vp = create_info<VkPipelineViewportStateCreateInfo>();
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rs = create_info<VkPipelineRasterizationStateCreateInfo>();
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.cullMode = VK_CULL_MODE_NONE;
+        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.lineWidth = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo ms = create_info<VkPipelineMultisampleStateCreateInfo>();
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
+        ds.depthTestEnable = VK_FALSE;
+        ds.depthWriteEnable = VK_FALSE;
+        ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+
+        VkPipelineColorBlendAttachmentState att{};
+        att.blendEnable = info.enable_blend ? VK_TRUE : VK_FALSE;
+        att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        att.colorBlendOp = VK_BLEND_OP_ADD;
+        att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        att.alphaBlendOp = VK_BLEND_OP_ADD;
+        att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                             VK_COLOR_COMPONENT_A_BIT;
+
+        VkPipelineColorBlendStateCreateInfo cb = create_info<VkPipelineColorBlendStateCreateInfo>();
+        cb.attachmentCount = 1;
+        cb.pAttachments = &att;
+
+        std::array dyn_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dy = create_info<VkPipelineDynamicStateCreateInfo>();
+        dy.dynamicStateCount = static_cast<u32>(dyn_states.size());
+        dy.pDynamicStates = dyn_states.data();
+
+        VkPipelineRenderingCreateInfo ri = create_info<VkPipelineRenderingCreateInfo>();
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachmentFormats = &info.color_format;
+
+        VkGraphicsPipelineCreateInfo gpci = create_info<VkGraphicsPipelineCreateInfo>();
+        gpci.pNext = &ri;
+        gpci.stageCount = static_cast<u32>(stages.size());
+        gpci.pStages = stages.data();
+        gpci.pVertexInputState = &vi;
+        gpci.pInputAssemblyState = &ia;
+        gpci.pViewportState = &vp;
+        gpci.pRasterizationState = &rs;
+        gpci.pMultisampleState = &ms;
+        gpci.pDepthStencilState = &ds;
+        gpci.pColorBlendState = &cb;
+        gpci.pDynamicState = &dy;
+        gpci.layout = pipeline_layout;
+
+        VkPipeline pipeline{};
+        vk_check(vkCreateGraphicsPipelines(info.device, info.cache, 1, &gpci, nullptr, &pipeline));
+
+        vkDestroyShaderModule(info.device, frag_shader, nullptr);
+
+        return CompiledPipeline{.pipeline = pipeline, .layout = pipeline_layout};
     }
 
-    VkPushConstantRange push_range{
-            .stageFlags = info.push_constant_stages,
-            .offset = 0,
-            .size = info.push_constant_size,
-    };
+    auto create_graphics_pipeline(const Pipeline::Graphics &info) -> CompiledPipeline {
+        std::vector<VkShaderModule> modules(info.stages.size());
+        std::vector<VkPipelineShaderStageCreateInfo> stage_cis(info.stages.size());
 
-    VkPipelineLayout pipeline_layout{};
-    {
+        for (auto &&[i, v]: info.stages | std::views::enumerate) {
+            auto smci = create_info<VkShaderModuleCreateInfo>();
+            smci.codeSize = v.code.size() * sizeof(u32);
+            smci.pCode = v.code.data();
+            vk_check(vkCreateShaderModule(info.device, &smci, nullptr, &modules[i]));
+
+            auto &s = stage_cis[i];
+            s = create_info<VkPipelineShaderStageCreateInfo>();
+            s.stage = v.stage;
+            s.module = modules[i];
+            s.pName = v.entry.data();
+        }
+
+        // --- Pipeline layout ---
+        VkPushConstantRange push_range{
+                .stageFlags = info.push_constant_stages,
+                .offset = 0,
+                .size = info.push_constant_size,
+        };
+
         auto plci = create_info<VkPipelineLayoutCreateInfo>();
         plci.setLayoutCount = 1;
         plci.pSetLayouts = &info.bindless_layout;
-        plci.pushConstantRangeCount = 1;
-        plci.pPushConstantRanges = &push_range;
-        vk_check(vkCreatePipelineLayout(info.device, &plci, nullptr, &pipeline_layout));
+        if (info.push_constant_size > 0) {
+            plci.pushConstantRangeCount = 1;
+            plci.pPushConstantRanges = &push_range;
+        }
+
+        VkPipelineLayout layout{};
+        vk_check(vkCreatePipelineLayout(info.device, &plci, nullptr, &layout));
+        set_debug_name(info.device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, info.debug_name);
+
+        // --- Vertex input ---
+        auto vi = create_info<VkPipelineVertexInputStateCreateInfo>();
+        if (info.vertex_input) {
+            vi.vertexBindingDescriptionCount = static_cast<u32>(info.vertex_input->bindings.size());
+            vi.pVertexBindingDescriptions = info.vertex_input->bindings.data();
+            vi.vertexAttributeDescriptionCount = static_cast<u32>(info.vertex_input->attributes.size());
+            vi.pVertexAttributeDescriptions = info.vertex_input->attributes.data();
+        }
+
+        auto ia = create_info<VkPipelineInputAssemblyStateCreateInfo>();
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        // --- Viewport/Scissor ---
+        auto vp = create_info<VkPipelineViewportStateCreateInfo>();
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+
+        // --- Rasterization ---
+        auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
+        rs.lineWidth = 1.0f;
+        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.cullMode = [&] {
+            switch (info.cull_mode) {
+                case CullMode::back:
+                    return VK_CULL_MODE_BACK_BIT;
+                case CullMode::front:
+                    return VK_CULL_MODE_FRONT_BIT;
+                default:
+                    return VK_CULL_MODE_NONE;
+            }
+        }();
+        rs.depthBiasEnable = info.depth_bias ? VK_TRUE : VK_FALSE;
+
+        // --- Multisample ---
+        auto ms = create_info<VkPipelineMultisampleStateCreateInfo>();
+        ms.rasterizationSamples = info.samples;
+
+        // --- Depth/Stencil ---
+        auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
+        switch (info.depth_mode) {
+            case DepthMode::write:
+                ds.depthTestEnable = VK_TRUE;
+                ds.depthWriteEnable = VK_TRUE;
+                ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+                break;
+            case DepthMode::test_equal:
+                ds.depthTestEnable = VK_TRUE;
+                ds.depthWriteEnable = VK_FALSE;
+                ds.depthCompareOp = VK_COMPARE_OP_EQUAL;
+                break;
+            case DepthMode::test_greater_equal:
+                ds.depthTestEnable = VK_TRUE;
+                ds.depthWriteEnable = VK_FALSE;
+                ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+                break;
+            case DepthMode::none:
+            default:
+                ds.depthTestEnable = VK_FALSE;
+                ds.depthWriteEnable = VK_FALSE;
+                ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+                break;
+        }
+        ds.minDepthBounds = 0.0f;
+        ds.maxDepthBounds = 1.0f;
+
+        // --- Color blend ---
+        std::vector<VkPipelineColorBlendAttachmentState> blend_attachments;
+        std::vector<VkFormat> color_formats;
+
+        for (auto &att: info.color_attachments) {
+            color_formats.push_back(att.format);
+            VkPipelineColorBlendAttachmentState a{};
+            a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                               VK_COLOR_COMPONENT_A_BIT;
+            if (att.blend_additive) {
+                a.blendEnable = VK_TRUE;
+                a.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.colorBlendOp = VK_BLEND_OP_ADD;
+                a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.alphaBlendOp = VK_BLEND_OP_ADD;
+            }
+            blend_attachments.push_back(a);
+        }
+
+        auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
+        cb.attachmentCount = static_cast<u32>(blend_attachments.size());
+        cb.pAttachments = blend_attachments.empty() ? nullptr : blend_attachments.data();
+
+        // --- Dynamic rendering ---
+        auto ri = create_info<VkPipelineRenderingCreateInfo>();
+        ri.colorAttachmentCount = static_cast<u32>(color_formats.size());
+        ri.pColorAttachmentFormats = color_formats.empty() ? nullptr : color_formats.data();
+        ri.depthAttachmentFormat = info.depth_format;
+        ri.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+
+        // --- Dynamic states ---
+        std::vector<VkDynamicState> dynamic_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        for (auto s: info.extra_dynamic_states)
+            dynamic_states.push_back(s);
+
+        auto dy = create_info<VkPipelineDynamicStateCreateInfo>();
+        dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
+        dy.pDynamicStates = dynamic_states.data();
+
+        // --- Final create ---
+        auto gpci = create_info<VkGraphicsPipelineCreateInfo>();
+        gpci.pNext = &ri;
+        gpci.stageCount = static_cast<u32>(stage_cis.size());
+        gpci.pStages = stage_cis.data();
+        gpci.pVertexInputState = info.vertex_input ? &vi : nullptr;
+        gpci.pInputAssemblyState = info.vertex_input ? &ia : nullptr;
+        gpci.pViewportState = &vp;
+        gpci.pRasterizationState = &rs;
+        gpci.pMultisampleState = &ms;
+        gpci.pDepthStencilState = &ds;
+        gpci.pColorBlendState = &cb;
+        gpci.pDynamicState = &dy;
+        gpci.layout = layout;
+        gpci.basePipelineHandle = VK_NULL_HANDLE;
+        gpci.basePipelineIndex = -1;
+
+        VkPipeline pipeline{};
+        vk_check(vkCreateGraphicsPipelines(info.device, info.cache, 1, &gpci, nullptr, &pipeline));
+        set_debug_name(info.device, VK_OBJECT_TYPE_PIPELINE, pipeline, info.debug_name);
+
+        for (auto mod: modules)
+            vkDestroyShaderModule(info.device, mod, nullptr);
+
+        return {pipeline, layout};
     }
+} // namespace Pipeline
 
-    auto vs_stage = create_info<VkPipelineShaderStageCreateInfo>();
-    vs_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vs_stage.module = info.fullscreen_vs;
-    vs_stage.pName = info.vs_entry.data();
 
-    auto fs_stage = create_info<VkPipelineShaderStageCreateInfo>();
-    fs_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fs_stage.module = frag_shader;
-    fs_stage.pName = info.fs_entry.data();
-
-    std::array stages{vs_stage, fs_stage};
-
-    auto vi = create_info<VkPipelineVertexInputStateCreateInfo>();
-
-    VkPipelineInputAssemblyStateCreateInfo ia = create_info<VkPipelineInputAssemblyStateCreateInfo>();
-    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-
-    VkPipelineViewportStateCreateInfo vp = create_info<VkPipelineViewportStateCreateInfo>();
-    vp.viewportCount = 1;
-    vp.scissorCount = 1;
-
-    VkPipelineRasterizationStateCreateInfo rs = create_info<VkPipelineRasterizationStateCreateInfo>();
-    rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_NONE;
-    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-    rs.lineWidth = 1.0f;
-
-    VkPipelineMultisampleStateCreateInfo ms = create_info<VkPipelineMultisampleStateCreateInfo>();
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineDepthStencilStateCreateInfo ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
-    ds.depthTestEnable = VK_FALSE;
-    ds.depthWriteEnable = VK_FALSE;
-    ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
-
-    VkPipelineColorBlendAttachmentState att{};
-    att.blendEnable = info.enable_blend ? VK_TRUE : VK_FALSE;
-    att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    att.colorBlendOp = VK_BLEND_OP_ADD;
-    att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    att.alphaBlendOp = VK_BLEND_OP_ADD;
-    att.colorWriteMask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-
-    VkPipelineColorBlendStateCreateInfo cb = create_info<VkPipelineColorBlendStateCreateInfo>();
-    cb.attachmentCount = 1;
-    cb.pAttachments = &att;
-
-    std::array dyn_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dy = create_info<VkPipelineDynamicStateCreateInfo>();
-    dy.dynamicStateCount = static_cast<u32>(dyn_states.size());
-    dy.pDynamicStates = dyn_states.data();
-
-    VkPipelineRenderingCreateInfo ri = create_info<VkPipelineRenderingCreateInfo>();
-    ri.colorAttachmentCount = 1;
-    ri.pColorAttachmentFormats = &info.color_format;
-
-    VkGraphicsPipelineCreateInfo gpci = create_info<VkGraphicsPipelineCreateInfo>();
-    gpci.pNext = &ri;
-    gpci.stageCount = static_cast<u32>(stages.size());
-    gpci.pStages = stages.data();
-    gpci.pVertexInputState = &vi;
-    gpci.pInputAssemblyState = &ia;
-    gpci.pViewportState = &vp;
-    gpci.pRasterizationState = &rs;
-    gpci.pMultisampleState = &ms;
-    gpci.pDepthStencilState = &ds;
-    gpci.pColorBlendState = &cb;
-    gpci.pDynamicState = &dy;
-    gpci.layout = pipeline_layout;
-
-    VkPipeline pipeline{};
-    vk_check(vkCreateGraphicsPipelines(info.device, info.cache, 1, &gpci, nullptr, &pipeline));
-
-    vkDestroyShaderModule(info.device, frag_shader, nullptr);
-
-    return CompiledPipeline{.pipeline = pipeline, .layout = pipeline_layout};
-}
-
-auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache, 
-                                     VkDescriptorSetLayout bindless_layout,
-                                     const std::vector<u32> &task_code, 
-                                     const std::vector<u32> &mesh_code, 
-                                     const std::vector<u32> &frag_code,
-                                     VkFormat color_format, VkFormat depth_format,
-                                     VkSampleCountFlagBits samples) -> CompiledPipeline {
+auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
+                                       const std::vector<u32> &task_code, const std::vector<u32> &mesh_code,
+                                       const std::vector<u32> &frag_code, VkFormat color_format, VkFormat depth_format,
+                                       VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule task_module{};
     auto task_ci = create_info<VkShaderModuleCreateInfo>();
     task_ci.codeSize = task_code.size() * sizeof(u32);
     task_ci.pCode = task_code.data();
     vk_check(vkCreateShaderModule(device, &task_ci, nullptr, &task_module));
-                                        
+
     // 1. Create Shader Modules
     VkShaderModule mesh_module{};
     auto mesh_ci = create_info<VkShaderModuleCreateInfo>();
@@ -1341,12 +1511,12 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache,
     frag_stage_ci.module = frag_module;
     frag_stage_ci.pName = "main_fs_debug";
 
-    std::array stages = { task_stage_ci, mesh_stage_ci, frag_stage_ci };
+    std::array stages = {task_stage_ci, mesh_stage_ci, frag_stage_ci};
 
     VkPushConstantRange push_range{
-        .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT|VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .offset = 0,
-        .size = sizeof(DebugClusteredPushConstants), // 
+            .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset = 0,
+            .size = sizeof(DebugClusteredPushConstants), //
     };
 
     auto layout_ci = create_info<VkPipelineLayoutCreateInfo>();
@@ -1360,15 +1530,15 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache,
 
     // 4. Color Blending (Additive for Light Volumes)
     VkPipelineColorBlendAttachmentState blend_attachment{
-        .blendEnable = VK_TRUE,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
-        .colorBlendOp = VK_BLEND_OP_ADD,
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .alphaBlendOp = VK_BLEND_OP_ADD,
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | 
-                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+            .blendEnable = VK_TRUE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+            .colorBlendOp = VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+            .alphaBlendOp = VK_BLEND_OP_ADD,
+            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                              VK_COLOR_COMPONENT_A_BIT,
     };
 
     auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
@@ -1383,7 +1553,7 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache,
 
     // 6. Rasterization (Front-Face culling so we see volume when inside)
     auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
-    rs.cullMode = VK_CULL_MODE_FRONT_BIT; 
+    rs.cullMode = VK_CULL_MODE_FRONT_BIT;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
 
@@ -1400,7 +1570,7 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache,
     vp.viewportCount = 1;
     vp.scissorCount = 1;
 
-    std::array dynamic_states = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    std::array dynamic_states = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     auto dy = create_info<VkPipelineDynamicStateCreateInfo>();
     dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
     dy.pDynamicStates = dynamic_states.data();
@@ -1420,7 +1590,7 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache,
 
     VkPipeline pipeline;
     vkCreateGraphicsPipelines(device, cache, 1, &ci, nullptr, &pipeline);
-    
+
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "light_volume_mesh_pass");
 
     vkDestroyShaderModule(device, task_module, nullptr);

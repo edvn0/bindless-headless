@@ -1,6 +1,5 @@
 #include "Mesh.hxx"
 #include "CompilerGlue.hxx"
-#include "vulkan/vulkan_core.h"
 
 #include <glm/gtc/packing.hpp>
 #include <glm/packing.hpp>

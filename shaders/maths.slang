@@ -75,8 +75,7 @@ float2 unorm_to_oct(float2 u)   { return u * 2.0 - 1.0; }
 
 float3 unproject_to_view(float4x4 inv_proj, float2 ndc_xy, float linear_depth) {
     float4 clip = float4(ndc_xy, 0.0, 1.0);
-    // No Y flip here — NDC tile coordinates are already in Vulkan NDC space
-    // and view_pos.y from the view matrix is consistent with that
+    clip.y = - clip.y;
     float4 view = mul(inv_proj, clip);
     view /= view.w;
     float2 xy = (view.xy / view.z) * linear_depth;
