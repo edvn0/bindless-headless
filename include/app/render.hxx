@@ -24,3 +24,7 @@ auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndirectWrite
                          AlignedRingBuffer<VkDrawIndexedIndirectCommand> &cmd_ring,
                          AlignedRingBuffer<u32> &material_id_ring, const MeshData &mesh, u32 instance_count,
                          u32 first_instance) -> DrawRanges;
+auto reserve_light_volumes(RenderContext &, u32 , FrameIndirectWriter &,
+                           AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> &,
+                           AlignedRingBuffer<u32> &,
+                           u32 ) -> u32;

@@ -1,5 +1,8 @@
 build
 out
+
+build*
+
 .vs
 .vscode
 .cache

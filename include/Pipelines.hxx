@@ -45,6 +45,7 @@ struct ClusteredLightCullingPushConstants {
     const DeviceAddress frame_ubo;
     const DeviceAddress culled_lights;
     const DeviceAddress culled_light_count;
+    const DeviceAddress mesh_indirect;
 
     float z_near;
     float z_far;
@@ -97,17 +98,16 @@ struct RotateCubesPushConstant {
     PointLight* static_point_lights;
     };
     */
-struct RotateCubesPushConstant {
-    u32 cube_count;
+struct RotatePushConstant {
     f32 delta_time;
-    f32 rads_per_second;
-    f32 total_time;
-    u32 light_count;
-    const DeviceAddress transforms;
-    const DeviceAddress previous_frame_transforms;
-    const DeviceAddress point_lights;
-    const DeviceAddress previous_point_lights;
-    const DeviceAddress static_point_light_base;
+f32 rads_per_second;
+f32 total_time;
+u32 count;
+const DeviceAddress previous_frame_transforms;
+const DeviceAddress transforms;
+const DeviceAddress previous_point_lights;
+const DeviceAddress point_lights;
+const DeviceAddress static_point_lights;
 };
 
 /*
@@ -172,6 +172,27 @@ struct ShadowMapPushConstants {
     const u32 sampler_index;
 };
 
+struct DebugClusteredPushConstants {
+    const DeviceAddress frame_ubo;
+    const DeviceAddress all_lights;
+    const DeviceAddress clusters;
+    const DeviceAddress cluster_light_indices;
+    u32 tiles_x;
+    u32 tiles_y;
+    u32 tiles_z;
+};
+
+struct HeatmapPushConstants {
+    const DeviceAddress clusters;
+    u32 tiles_x;
+    u32 tiles_y;
+    u32 tiles_z;
+    u32 max_lights_per_cluster; // for normalisation
+    u32 debug_texture_uav_index;
+    u32 cell_size;
+    u32 slices_per_row;
+};
+
 struct CompiledPipeline {
     VkPipeline pipeline{VK_NULL_HANDLE};
     VkPipelineLayout layout{VK_NULL_HANDLE};
@@ -231,6 +252,11 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache &cach
 
 auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,
                              const std::vector<u32> &, const std::string_view, const std::string_view, VkFormat)
+        -> CompiledPipeline;
+
+auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
+                                       const std::vector<u32>& task_code, const std::vector<u32> &mesh_code, const std::vector<u32> &frag_code,
+                                       VkFormat color_format, VkFormat depth_format, VkSampleCountFlagBits samples)
         -> CompiledPipeline;
 
 struct FullscreenPipelineInfo {

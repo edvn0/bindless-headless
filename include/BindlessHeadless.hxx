@@ -130,7 +130,7 @@ struct Timeline {
 };
 
 using GraphicsTimeline = Timeline<4>;
-using ComputeTimeline = Timeline<3>;
+using ComputeTimeline = Timeline<4>;
 using TransferTimeline = Timeline<1>;
 
 auto create_compute_timeline(VkDevice, VkQueue, u32) -> ComputeTimeline;
@@ -343,8 +343,8 @@ struct PhysicalDeviceChoice {
 using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32, u32>;
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
-enum class ComputeStamp : u32 { RotateBegin, RotateEnd, CullBegin, CullEnd, ClusteringBegin, ClusteringEnd, Count };
-enum class ComputeIndex : u32 { Rotate = 0, Cull = 1, Clustering, Count };
+enum class ComputeStamp : u32 { RotateGeometryBegin, RotateGeometryEnd, RotateLightsBegin, RotateLightsEnd, LightCullBegin, LightCullEnd,  LightClusteringBegin, LightClusteringEnd, Count };
+enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightCull,  LightClustering, Count };
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
 inline constexpr u32 stats_compute_count = static_cast<u32>(ComputeIndex::Count);

@@ -71,3 +71,8 @@ auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value = UINT64_
 auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, ShaderHandle handle, u64 retire_value = UINT64_MAX) -> void;
+auto create(RenderContext&,CompiledPipeline &&) -> PipelineHandle ;
+auto create(RenderContext&,Buffer &&)           -> BufferHandle   ;
+auto create(RenderContext&,OffscreenTarget &&)  -> TextureHandle  ;
+auto create(RenderContext&,VkShaderModule &&)   -> ShaderHandle   ;
+auto create(RenderContext&,QueryPoolState &&)   -> QueryPoolHandle;

@@ -1,5 +1,6 @@
 #include "Mesh.hxx"
 #include "CompilerGlue.hxx"
+#include "vulkan/vulkan_core.h"
 
 #include <glm/gtc/packing.hpp>
 #include <glm/packing.hpp>
@@ -11,6 +12,21 @@
 
 
 namespace {
+
+    constexpr auto is_normal_mode = [](auto texture) -> bool {
+        char *value{};
+        u32 length{};
+
+        if (KTX_SUCCESS ==
+            ktxHashList_FindValue(&texture->kvDataHead, "KTXwriterScParams", &length, (void **) &value)) {
+            std::string params(value, length);
+
+            if (params.find("--normal-mode") != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     static auto pick_vk_format(TextureLoadPacket::Type type) -> VkFormat {
         switch (type) {
@@ -81,26 +97,15 @@ namespace {
             return out;
         }
 
+        auto is_normal_map = is_normal_mode(ktx2);
+
         if (ktxTexture2_NeedsTranscoding(ktx2)) {
-            // Determine target format based on texture class
             ktx_transcode_fmt_e target_format = KTX_TTF_BC7_RGBA;
 
-            // Check if this is a normal map with XY-only encoding
-            bool is_normal_xy = false;
-            if (texture_class == TextureLoadPacket::Class::Normal) {
-                u32 num_components = 0;
-                u32 component_byte_length = 0;
-                ktxTexture2_GetComponentInfo(ktx2, &num_components, &component_byte_length);
-                is_normal_xy = (num_components == 2);
-            }
-
-            if (is_normal_xy) {
-                target_format = KTX_TTF_BC5_RG;
-            }
 
             res = ktxTexture2_TranscodeBasis(ktx2, target_format, 0);
             if (res != KTX_SUCCESS) {
-                ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
+                ktxTexture2_Destroy(ktx2);
                 out.width = 1;
                 out.height = 1;
                 out.levels = 1;
@@ -111,8 +116,8 @@ namespace {
                 return out;
             }
 
-            if (is_normal_xy) {
-                out.vk_format = VK_FORMAT_BC5_UNORM_BLOCK;
+            if (is_normal_map) {
+                out.vk_format = VK_FORMAT_BC7_UNORM_BLOCK;
             } else {
                 out.vk_format =
                         (type == TextureLoadPacket::Type::SRGB) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;

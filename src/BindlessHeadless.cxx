@@ -141,8 +141,6 @@ namespace destruction {
         t = {};
     }
 
-    auto timeline(VkDevice device, ComputeTimeline &t) -> void { tl(device, t); }
-
     auto timeline(VkDevice device, GraphicsTimeline &t) -> void { tl(device, t); }
 
     auto timeline(VkDevice device, TransferTimeline &t) -> void { tl(device, t); }
@@ -1230,5 +1228,3 @@ auto throttle(auto &tl, VkDevice device) -> void {
 }
 
 auto throttle(ComputeTimeline &tl, VkDevice device) -> void { return throttle<ComputeTimeline>(tl, device); }
-
-auto throttle(GraphicsTimeline &tl, VkDevice device) -> void { return throttle<GraphicsTimeline>(tl, device); }

@@ -50,3 +50,23 @@ auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndirectWrite
             .alpha_count = alpha_count,
     };
 }
+
+auto reserve_light_volumes(RenderContext &ctx, u32 frame_index, FrameIndirectWriter &w,
+                           AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> &mesh_cmd_ring,
+                           AlignedRingBuffer<u32> &material_id_ring,
+                           u32 light_material_id) -> u32 {
+    
+    const u32 slot = w.allocate(1);
+
+    VkDrawMeshTasksIndirectCommandEXT light_cmd{
+        .groupCountX = 0, 
+        .groupCountY = 1,
+        .groupCountZ = 1,
+    };
+
+    mesh_cmd_ring.write_elements(ctx, frame_index, slot, {&light_cmd, 1});
+    
+    material_id_ring.write_elements(ctx, frame_index, slot, {&light_material_id, 1});
+
+    return slot;
+}

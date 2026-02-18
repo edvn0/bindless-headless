@@ -8,6 +8,7 @@
 #include <cassert>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <vector>
@@ -277,3 +278,14 @@ using PipelineHandle = Handle<struct PipelineTag>;
 using PipelinePool = Pool<PipelineTag, CompiledPipeline>;
 using ShaderHandle = Handle<struct ShaderTag>;
 using ShaderPool = Pool<ShaderTag, VkShaderModule>;
+
+constexpr auto hot_swap = []<typename Handle, typename Value>(
+    Handle &current,
+    Value &&next,
+    RenderContext &ctx,
+    u64 retire_val = std::numeric_limits<u64>::max()
+) {
+    Handle old = current;
+    current = create(ctx, std::move(next));
+    destroy(ctx, old, retire_val);
+};

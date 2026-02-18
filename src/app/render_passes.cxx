@@ -1,4 +1,8 @@
 #include "app/render_passes.hxx"
+#include "AlignedRingBuffer.hxx"
+#include "CreateInfo.hxx"
+#include "Pipelines.hxx"
+#include "RenderContext.hxx"
 
 namespace {
     constexpr auto begin_query_for_index = [](const RenderContext &c, const VkCommandBuffer cmd,
@@ -14,79 +18,123 @@ namespace {
         u32 query_idx = static_cast<u32>(index);
         vkCmdEndQuery(cmd, pool, query_idx);
     };
-    auto fill_zeros(VkCommandBuffer cmd, auto &buffers_ctx, auto &&...buffer_handles) {
-        (vkCmdFillBuffer(cmd, buffers_ctx.get(buffer_handles)->buffer(), 0, VK_WHOLE_SIZE, 0), ...);
+    template<typename... Vs>
+    auto fill_zeros(VkCommandBuffer cmd, RenderContext &ctx, u32 frame_index, AlignedRingBuffer<Vs> &...buffers) {
+        (buffers.fill_zeros(cmd, ctx, frame_index), ...);
     }
 } // namespace
 
 auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32 last_frame_index,
                        const DeviceAddress &point_lights_base_addr, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
-    return submit_stage(
+
+    const RotatePushConstant geo_pc{
+            .delta_time = static_cast<float>(ui.dt),
+            .rads_per_second = glm::radians(20.0f),
+            .total_time = static_cast<f32>(ui.total_time),
+            .count = res.instance_count,
+            .previous_frame_transforms = res.transforms_ring.slot_device_address(last_frame_index),
+            .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+            .previous_point_lights = res.point_lights_ring.slot_device_address(last_frame_index),
+            .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
+            .static_point_lights = point_lights_base_addr,
+    };
+
+    const u64 geo_signal = submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
-                TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "RotateCubesGPU");
-
+                TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "RotateGeometryGPU");
                 auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
                         pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
 
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::RotateGeometryBegin);
+                begin_stats(cmd, *stats_pool, ComputeIndex::RotateGeometry);
+
                 auto *pipe = gpu.ctx.pipeline_pool.get(pipes.cube_rotation_pipeline);
-
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::RotateBegin);
-                begin_stats(cmd, *stats_pool, ComputeIndex::Rotate);
-
-                auto *cube_buffer = gpu.ctx.buffers.get(res.transforms_ring.handle());
-
-                RotateCubesPushConstant pc{
-                        .cube_count = res.instance_count,
-                        .delta_time = static_cast<float>(ui.dt),
-                        .rads_per_second = glm::radians(20.0f),
-                        .total_time = static_cast<f32>(ui.total_time),
-                        .light_count = static_cast<u32>(res.all_point_lights.size()),
-                        .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
-                        .previous_frame_transforms = res.transforms_ring.slot_device_address(last_frame_index),
-                        .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
-                        .previous_point_lights = res.point_lights_ring.slot_device_address(last_frame_index),
-                        .static_point_light_base = point_lights_base_addr,
-                };
-
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
-                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(geo_pc), &geo_pc);
 
-                const u32 work_items = std::max(res.instance_count, pc.light_count);
-                const u32 groups = (work_items + 63u) / 64u;
+                const u32 groups = (res.instance_count + 63u) / 64u;
                 vkCmdDispatch(cmd, groups, 1, 1);
 
-                end_stats(cmd, *stats_pool, ComputeIndex::Rotate);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::RotateEnd);
+                end_stats(cmd, *stats_pool, ComputeIndex::RotateGeometry);
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::RotateGeometryEnd);
 
-                std::array<VkBufferMemoryBarrier2, 2> barriers{};
-                barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                barriers[0].buffer = cube_buffer->buffer();
-                barriers[0].offset =
-                        static_cast<VkDeviceSize>(res.transforms_ring.slot_offset_bytes(bounded_frame_index));
-                barriers[0].size = static_cast<VkDeviceSize>(res.instance_count * sizeof(glm::mat4x3));
+                auto *cube_buffer = gpu.ctx.buffers.get(res.transforms_ring.handle());
+                VkBufferMemoryBarrier2 barrier{};
+                barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                barrier.buffer = cube_buffer->buffer();
+                barrier.offset = static_cast<VkDeviceSize>(res.transforms_ring.slot_offset_bytes(bounded_frame_index));
+                barrier.size = static_cast<VkDeviceSize>(res.instance_count * sizeof(glm::mat4x3));
 
-                barriers[1].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-                barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                barriers[1].srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                barriers[1].dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                barriers[1].buffer = gpu.ctx.buffers.get(res.point_lights_ring.handle())->buffer();
-                barriers[1].offset = 0;
-                barriers[1].size = VK_WHOLE_SIZE;
-
-                VkDependencyInfo dep_info{};
-                dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep_info.bufferMemoryBarrierCount = static_cast<u32>(barriers.size());
-                dep_info.pBufferMemoryBarriers = barriers.data();
-                vkCmdPipelineBarrier2(cmd, &dep_info);
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.bufferMemoryBarrierCount = 1;
+                dep.pBufferMemoryBarriers = &barrier;
+                vkCmdPipelineBarrier2(cmd, &dep);
             },
             sync);
+
+    const TimelineWait geo_wait{
+            .value = geo_signal,
+            .semaphore = gpu.tl_compute.timeline,
+            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+    };
+
+    const RotatePushConstant light_pc{
+            .delta_time = static_cast<float>(ui.dt),
+            .rads_per_second = glm::radians(20.0f),
+            .total_time = static_cast<f32>(ui.total_time),
+            .count = static_cast<u32>(res.all_point_lights.size()),
+            .previous_frame_transforms = res.transforms_ring.slot_device_address(last_frame_index),
+            .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+            .previous_point_lights = res.point_lights_ring.slot_device_address(last_frame_index),
+            .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
+            .static_point_lights = point_lights_base_addr,
+    };
+
+    return submit_stage(
+            gpu.tl_compute, gpu.device,
+            [&](VkCommandBuffer cmd) {
+                TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "RotateLightsGPU");
+                auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
+                        pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
+
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::RotateLightsBegin);
+                begin_stats(cmd, *stats_pool, ComputeIndex::RotateLights);
+
+                auto *pipe = gpu.ctx.pipeline_pool.get(pipes.light_rotation_pipeline);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
+                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(light_pc), &light_pc);
+
+                const u32 groups = (static_cast<u32>(res.all_point_lights.size()) + 63u) / 64u;
+                vkCmdDispatch(cmd, groups, 1, 1);
+
+
+                end_stats(cmd, *stats_pool, ComputeIndex::RotateLights);
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::RotateLightsEnd);
+
+                VkBufferMemoryBarrier2 barrier{};
+                barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                barrier.buffer = gpu.ctx.buffers.get(res.point_lights_ring.handle())->buffer();
+                barrier.offset = 0;
+                barrier.size = VK_WHOLE_SIZE;
+
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.bufferMemoryBarrierCount = 1;
+                dep.pBufferMemoryBarriers = &barrier;
+                vkCmdPipelineBarrier2(cmd, &dep);
+            },
+            SubmitSynchronisation{.timeline_waits = std::span(&geo_wait, 1)});
 }
 
 
@@ -199,10 +247,9 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent, const DrawRange
             sync);
 }
 
-auto run_light_frustum_cull_pass(AppContext &ctx, const u32 bounded_frame_index, DeviceAddresses<4> &&device_addresses,
-                                 const SubmitSynchronisation &sync) -> u64 {
+auto run_light_frustum_cull_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync)
+        -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
-    auto &&[flags_addr, prefix_addr, compact_addr, culled_light_count_addr] = device_addresses;
     return submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
@@ -211,16 +258,16 @@ auto run_light_frustum_cull_pass(AppContext &ctx, const u32 bounded_frame_index,
                 auto &&[cqs, css] = gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
                                                                      pipes.compute_stats_pool[bounded_frame_index]);
 
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::CullBegin);
-                begin_stats(cmd, *css, ComputeIndex::Cull);
+                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightCullBegin);
+                begin_stats(cmd, *css, ComputeIndex::LightCull);
 
                 const PointLightCullingPushConstants pc{
                         .ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
                         .lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
-                        .flags = flags_addr,
-                        .prefix = prefix_addr,
-                        .compact = compact_addr,
-                        .culled_light_count = culled_light_count_addr,
+                        .flags = res.flags.slot_device_address(bounded_frame_index),
+                        .prefix = res.prefix.slot_device_address(bounded_frame_index),
+                        .compact = res.compact_lights.slot_device_address(bounded_frame_index),
+                        .culled_light_count = res.culled_light_count.slot_device_address(bounded_frame_index),
                         .light_count = res.light_count,
                 };
 
@@ -248,7 +295,8 @@ auto run_light_frustum_cull_pass(AppContext &ctx, const u32 bounded_frame_index,
                 dep_info.memoryBarrierCount = 1;
                 dep_info.pMemoryBarriers = &mem_barrier;
 
-                fill_zeros(cmd, gpu.ctx.buffers, res.flags, res.prefix, res.compact_lights, res.culled_light_count);
+                fill_zeros(cmd, gpu.ctx, bounded_frame_index, res.flags, res.prefix, res.compact_lights,
+                           res.culled_light_count);
 
                 vkCmdPipelineBarrier2(cmd, &dep_info);
 
@@ -261,33 +309,49 @@ auto run_light_frustum_cull_pass(AppContext &ctx, const u32 bounded_frame_index,
                 vkCmdPipelineBarrier2(cmd, &dep_info);
 
                 bind_and_dispatch(*compact, gc);
+                vkCmdPipelineBarrier2(cmd, &dep_info);
 
-                end_stats(cmd, *css, ComputeIndex::Cull);
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::CullEnd);
+                end_stats(cmd, *css, ComputeIndex::LightCull);
+                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightCullEnd);
             },
             sync);
 }
 
-auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, DeviceAddresses<4> &&device_addresses,
-                               const SubmitSynchronisation &sync) -> u64 {
+auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync)
+        -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
-    auto &&[compact_addr, culled_light_count_addr, clusters_addr, cluster_light_indices_addr] = device_addresses;
+
 
     return submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
+                {
+                    auto barrier = create_info<VkMemoryBarrier2>();
+                    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+
+                    auto dep_info = create_info<VkDependencyInfo>();
+                    dep_info.memoryBarrierCount = 1;
+                    dep_info.pMemoryBarriers = &barrier;
+                    vkCmdPipelineBarrier2(cmd, &dep_info);
+                }
+
                 TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "ClusteredLightCulling");
 
                 auto &&[cqs, css] = gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
                                                                      pipes.compute_stats_pool[bounded_frame_index]);
 
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringBegin);
-                begin_stats(cmd, *css, ComputeIndex::Clustering);
+                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightClusteringBegin);
+                begin_stats(cmd, *css, ComputeIndex::LightClustering);
 
                 const ClusteredLightCullingPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                        .culled_lights = compact_addr,
-                        .culled_light_count = culled_light_count_addr,
+                        .culled_lights = res.compact_lights.slot_device_address(bounded_frame_index),
+                        .culled_light_count = res.culled_light_count.slot_device_address(bounded_frame_index),
+                        .mesh_indirect = res.mesh_indirect_ring.slot_device_address(bounded_frame_index),
 
                         .z_near = res.clustering_config.z_near,
                         .z_far = res.clustering_config.z_far,
@@ -298,18 +362,71 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, D
                         .tiles_z = res.clustering_config.tiles_z,
                         .cluster_count = res.clustering_config.cluster_count,
 
-                        .clusters = clusters_addr,
-                        .cluster_light_indices = cluster_light_indices_addr,
+                        .clusters = res.clusters.slot_device_address(bounded_frame_index),
+                        .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
                 };
 
-                auto build_pipe = gpu.ctx.pipeline_pool.get(pipes.cluster_build_groups_pipeline);
+                auto &&[build_pipe, finalise] = gpu.ctx.pipeline_pool.get_multiple(pipes.cluster_build_groups_pipeline,
+                                                                                   pipes.finalise_compact_pipeline);
 
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, build_pipe->pipeline);
                 vkCmdPushConstants(cmd, build_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
                 vkCmdDispatch(cmd, res.clustering_config.cluster_count, 1, 1);
+                VkMemoryBarrier2 mem_barrier{};
+                mem_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                mem_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mem_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                mem_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                mem_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
 
-                end_stats(cmd, *css, ComputeIndex::Clustering);
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::ClusteringEnd);
+                VkDependencyInfo dep_info{};
+                dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_info.memoryBarrierCount = 1;
+                dep_info.pMemoryBarriers = &mem_barrier;
+                vkCmdPipelineBarrier2(cmd, &dep_info);
+
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, finalise->pipeline);
+                vkCmdPushConstants(cmd, finalise->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+                vkCmdDispatch(cmd, 1, 1, 1);
+                vkCmdPipelineBarrier2(cmd, &dep_info);
+
+                // --------------- DEBUG ------------------
+                auto *heatmap_pipe = gpu.ctx.pipeline_pool.get(pipes.debug_light_clustering);
+                const u32 cell_size = 16;
+                const u32 slices_per_row = 4; // arrange Z slices into a 4x4 grid
+
+                const u32 hm_width = res.clustering_config.tiles_x * slices_per_row * cell_size; // 16*4*16 = 1024
+                const u32 hm_height = res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) *
+                                      cell_size; // 9*4*16 = 576
+
+                const HeatmapPushConstants hm_pc{
+                        .clusters = res.clusters.slot_device_address(bounded_frame_index),
+                        .tiles_x = res.clustering_config.tiles_x,
+                        .tiles_y = res.clustering_config.tiles_y,
+                        .tiles_z = res.clustering_config.tiles_z,
+                        .max_lights_per_cluster = 128,
+                        .debug_texture_uav_index = res.debug_culling.index(),
+                        .cell_size = cell_size,
+                        .slices_per_row = slices_per_row,
+                };
+
+                auto *debug_tex = gpu.ctx.textures.get(res.debug_culling);
+                debug_tex->transition_if_not_initialised(
+                        cmd, VK_IMAGE_LAYOUT_GENERAL,
+                        {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, heatmap_pipe->pipeline);
+                vkCmdPushConstants(cmd, heatmap_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(hm_pc), &hm_pc);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, heatmap_pipe->layout, 0, 1,
+                                        &gpu.bindless.set, 0, nullptr);
+                const u32 gx = (hm_width + 7) / 8;
+                const u32 gy = (hm_height + 7) / 8;
+                vkCmdDispatch(cmd, gx, gy, 1);
+                // ----------------------------------------
+
+
+                end_stats(cmd, *css, ComputeIndex::LightClustering);
+                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightClusteringEnd);
             },
             sync);
 }
@@ -373,7 +490,8 @@ auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, 
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
-                vkCmdSetDepthBias(cmd, 1.25f, 0.0f, 1.75f); // Shadow bias
+                vkCmdSetDepthBias(cmd, ui.shadow_config.depth_bias_constant_factor, ui.shadow_config.depth_bias_clamp,
+                                  ui.shadow_config.depth_bias_slope_factor); // Shadow bias
 
                 vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
                 std::array<VkBuffer, 1> buffers = {verts->buffer()};
@@ -443,7 +561,7 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
                 auto *pool = begin_query_for_index(ctx.gpu.ctx, cmd, GraphicsIndex::GBuffer,
                                                    pipes.graphics_stats_pool[bounded_frame_index]);
 
-                auto *mrt_pipeline = gpu.ctx.pipeline_pool.get(pipes.gbuffer_pipeline_mrt);
+                auto &&[mrt_pipeline] = gpu.ctx.pipeline_pool.get_multiple(pipes.gbuffer_pipeline_mrt);
 
                 auto *g0 = gpu.ctx.textures.get(res.gbuffer0);
                 auto *g1 = gpu.ctx.textures.get(res.gbuffer1);
@@ -563,10 +681,10 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
             sync);
 }
 
-auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, DeviceAddresses<2> &&device_addresses,
+auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32,
                                 const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
-    auto &&[clusters_addr, cluster_light_indices_addr] = device_addresses;
+
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
@@ -577,7 +695,10 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                 auto *pool = begin_query_for_index(ctx.gpu.ctx, cmd, GraphicsIndex::Deferred,
                                                    pipes.graphics_stats_pool[bounded_frame_index]);
 
-                auto mrt_lighting = gpu.ctx.pipeline_pool.get(pipes.gbuffer_pipeline_lighting);
+                auto &&[mrt_lighting, debug_point_light] = gpu.ctx.pipeline_pool.get_multiple(
+                        pipes.gbuffer_pipeline_lighting, pipes.debug_point_light_pipeline);
+
+                // auto *indirect_buffer = gpu.ctx.buffers.get(res.mesh_indirect_ring.handle());
 
                 auto *g0 = gpu.ctx.textures.get(res.gbuffer0);
                 auto *g1 = gpu.ctx.textures.get(res.gbuffer1);
@@ -718,8 +839,8 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                         .tiles_z = res.clustering_config.tiles_z,
                         .log_z_scale = res.clustering_config.log_z_scale,
 
-                        .clusters = clusters_addr,
-                        .cluster_light_indices = cluster_light_indices_addr,
+                        .clusters = res.clusters.slot_device_address(bounded_frame_index),
+                        .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
 
                         .gbuffer0_index = res.gbuffer0.index(),
                         .gbuffer1_index = res.gbuffer1.index(),
@@ -736,6 +857,28 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                                    0, sizeof(pc), &pc);
 
                 vkCmdDraw(cmd, 3, 1, 0, 0);
+
+                {
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_point_light->pipeline);
+                    DebugClusteredPushConstants dbg_pc{
+                            .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
+                            .all_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
+                            .clusters = res.clusters.slot_device_address(bounded_frame_index),
+                            .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
+                            .tiles_x = res.clustering_config.tiles_x,
+                            .tiles_y = res.clustering_config.tiles_y,
+                            .tiles_z = res.clustering_config.tiles_z,
+                    };
+
+                    vkCmdPushConstants(cmd, debug_point_light->layout,
+                                       VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT |
+                                               VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(dbg_pc), &dbg_pc);
+
+                    u32 total_clusters = res.clustering_config.tiles_x * res.clustering_config.tiles_y *
+                                         res.clustering_config.tiles_z;
+                    vkCmdDrawMeshTasksEXT(cmd, total_clusters, 1, 1);
+                }
 
                 vkCmdEndRendering(cmd);
 
@@ -875,7 +1018,6 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                                                    pipes.graphics_stats_pool[bounded_frame_index]);
 
                 auto *tonemapped = gpu.ctx.textures.get(res.tonemapped);
-                auto *present = gpu.ctx.pipeline_pool.get(pipes.present_pipeline);
 
                 VkImage dst_image = gpu.swapchain.image(swap_image_index);
                 VkImageView dst_view = gpu.swapchain.image_view(swap_image_index); // identity swizzle
@@ -941,28 +1083,6 @@ auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 b
                 ri.pColorAttachments = &color_attachment;
 
                 vkCmdBeginRendering(cmd, &ri);
-
-                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->pipeline);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present->layout, 0, 1, &gpu.bindless.set,
-                                        0, nullptr);
-
-                auto &&[vp, sc] = viewport_scissors(gpu.swapchain.extent());
-                vkCmdSetViewport(cmd, 0, 1, &vp);
-                vkCmdSetScissor(cmd, 0, 1, &sc);
-
-                const bool swap_is_srgb = gpu.swapchain.format() == VK_FORMAT_B8G8R8A8_SRGB ||
-                                          gpu.swapchain.format() == VK_FORMAT_R8G8B8A8_SRGB;
-
-                PresentPushConstants pc{
-                        .image_index = res.tonemapped.index(),
-                        .sampler_index = pipes.linear_clamp.index(),
-                        .dst_is_srgb = swap_is_srgb ? 1u : 0u,
-                };
-
-                vkCmdPushConstants(cmd, present->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                   sizeof(pc), &pc);
-
-                vkCmdDraw(cmd, 3, 1, 0, 0);
 
                 ui.gui->render(cmd);
 

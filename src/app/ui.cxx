@@ -109,9 +109,10 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
 
     if (compute_res.has_value()) {
         const auto &c_times = *compute_res;
-        ctx.ui.gpu_frame_graph.push_sample(0, c_times[static_cast<u32>(ComputeIndex::Rotate)]);
-        ctx.ui.gpu_frame_graph.push_sample(1, c_times[static_cast<u32>(ComputeIndex::Cull)]);
-        ctx.ui.gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::Clustering)]);
+        ctx.ui.gpu_frame_graph.push_sample(0, c_times[static_cast<u32>(ComputeIndex::RotateGeometry)]);
+        ctx.ui.gpu_frame_graph.push_sample(1, c_times[static_cast<u32>(ComputeIndex::RotateLights)]);
+        ctx.ui.gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::LightCull)]);
+        ctx.ui.gpu_frame_graph.push_sample(3, c_times[static_cast<u32>(ComputeIndex::LightClustering)]);
     }
 
     if (graphics_res.has_value()) {
@@ -176,6 +177,10 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
             ImGui::SliderFloat("Far Plane", &ctx.ui.shadow_config.far_plane, -50000.0F, 50000.0f);
             ImGui::DragFloat3("Light Target", &ctx.ui.shadow_config.light_target.x, 0.1f);
 
+            ImGui::DragFloat("Depth bias constant factor", &ctx.ui.shadow_config.depth_bias_constant_factor);
+            ImGui::DragFloat("Depth bias clamp", &ctx.ui.shadow_config.depth_bias_clamp);
+            ImGui::DragFloat("Depth bias slope factor", &ctx.ui.shadow_config.depth_bias_slope_factor);
+
             ImGui::ImageButton("Shadow map", ImTextureRef{ctx.res.directional_shadow_map_depth.index()},
                                {
                                        ImGui::GetContentRegionAvail().y,
@@ -227,9 +232,10 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                         }
                     };
 
-                    row_c("Rotate", ComputeIndex::Rotate);
-                    row_c("Cull", ComputeIndex::Cull);
-                    row_c("Clustering", ComputeIndex::Clustering);
+                    row_c("Rotate geometry", ComputeIndex::RotateGeometry);
+                    row_c("Rotate lights", ComputeIndex::RotateLights);
+                    row_c("Light Culling", ComputeIndex::LightCull);
+                    row_c("Light Clustering", ComputeIndex::LightClustering);
 
                     ImGui::EndTable();
                 }
@@ -296,7 +302,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
             for (double m: g_times)
                 total_ms += m;
 
-            double clustering_ms = c_times[static_cast<u32>(ComputeIndex::Clustering)];
+            double clustering_ms = c_times[static_cast<u32>(ComputeIndex::LightClustering)];
             double clustering_pct = (total_ms > 0.0) ? (clustering_ms / total_ms) * 100.0 : 0.0;
 
             ImGui::Separator();
@@ -367,6 +373,14 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
             }
             ImGui::EndCombo();
         }
+    });
+
+    widget("Debug clustering", [&c = ctx] {
+        ImGui::ImageButton("Clustering", ImTextureRef{c.res.debug_culling.index()},
+                               {
+                                       ImGui::GetContentRegionAvail().x,
+                                       ImGui::GetContentRegionAvail().y,
+                               });
     });
 }
 

@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "Constants.hxx"
+#include "Pipelines.hxx"
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
 
@@ -652,11 +653,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.point_lights_ring = std::move(ring.value());
         res.point_lights_ring.write_all_slots(gpu.ctx, res.all_point_lights);
 
-        res.culled_light_count = gpu.ctx.buffers.create(
-                Buffer::from_value<u32>(gpu.allocator,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0u,
-                                        "culled_point_light_count")
-                        .value());
 
         auto transforms =
                 AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, res.mesh_count, VkBufferUsageFlags{}, "transforms");
@@ -665,22 +661,22 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         res.instance_count = static_cast<u32>(res.mesh_count);
 
-        std::vector zeros_lights(res.light_count, 0u);
-        res.flags = gpu.ctx.buffers.create(
-                Buffer::from_slice<u32>(gpu.allocator,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        zeros_lights, "light_flags")
-                        .value());
-        res.prefix = gpu.ctx.buffers.create(
-                Buffer::from_slice<u32>(gpu.allocator,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        zeros_lights, "light_prefix")
-                        .value());
+        res.prefix = AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                    "light_prefix")
+                             .value();
 
-        res.compact_lights = gpu.ctx.buffers.create(
-                Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                               sizeof(PointLight) * opts.light_count, "compact_lights")
-                        .value());
+        res.culled_light_count =
+                AlignedRingBuffer<u32>::create(gpu.ctx, 1, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "culled_light_count_ring")
+                        .value();
+
+        // Replace flags/prefix with rings (element_count = res.light_count)
+        res.flags =
+                AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "flags_ring")
+                        .value();
+
+        res.compact_lights = AlignedRingBuffer<PointLight>::create(
+                                     gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "compact_lights_ring")
+                                     .value();
     }
 
     // --- Clustering buffers ---
@@ -690,59 +686,23 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         constexpr u32 max_lights_per_cluster = 128u;
         res.max_light_indices = res.clustering_config.cluster_count * max_lights_per_cluster;
 
-        std::vector<u32> zero_counts(res.clustering_config.cluster_count, 0u);
-        res.cluster_counts = gpu.ctx.buffers.create(
-                Buffer::from_slice<u32>(gpu.allocator,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        zero_counts, "cluster_counts")
-                        .value());
-
-        struct Cluster {
-            u32 light_offset;
-            u32 light_count;
-        };
-
-        struct LightVisibility {
-            u32 x0, x1, y0, y1, z0, z1, is_visible, _pad;
-        };
-
-        res.visibility = gpu.ctx.buffers.create(Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                               sizeof(LightVisibility) * res.light_count,
-                                                               "light_visibility_buffer")
-                                                        .value());
-
         res.clusters =
-                gpu.ctx.buffers.create(Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                      sizeof(Cluster) * res.clustering_config.cluster_count, "clusters")
-                                               .value());
-
-        std::vector<u32> zero_counters(res.clustering_config.cluster_count, 0u);
-        res.cluster_counters = gpu.ctx.buffers.create(
-                Buffer::from_slice<u32>(gpu.allocator,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                        zero_counters, "cluster_counters")
-                        .value());
+                AlignedRingBuffer<Cluster>::create(gpu.ctx, res.clustering_config.cluster_count, 0, "clusters_ring")
+                        .value();
 
         res.cluster_light_indices =
-                gpu.ctx.buffers.create(Buffer::zeroes(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                      sizeof(u32) * res.max_light_indices, "cluster_light_indices")
-                                               .value());
-
-        res.global_index_count = gpu.ctx.buffers.create(
-                Buffer::from_value<u32>(gpu.allocator,
-                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0u,
-                                        "global_index_count")
-                        .value());
+                AlignedRingBuffer<u32>::create(gpu.ctx, res.max_light_indices, 0, "cluster_light_indices_ring").value();
     }
 
-    // --- Frame UBO ring ---
     res.frame_ubo_ring = std::move(AlignedRingBuffer<FrameUBO>::create(gpu.ctx, "aligned_frame_ubo_buffer").value());
-
-    // --- Indirect/draw streams ---
     res.indirect_ring = std::move(AlignedRingBuffer<VkDrawIndexedIndirectCommand>::create(
                                           gpu.ctx, AppResources::max_draws_per_frame,
                                           VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, "frame_indirect_cmds")
                                           .value());
+    res.mesh_indirect_ring = std::move(AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT>::create(
+                                               gpu.ctx, AppResources::max_draws_per_frame,
+                                               VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, "frame_indirect_mesh_cmds")
+                                               .value());
 
     res.draw_material_id_ring =
             std::move(AlignedRingBuffer<u32>::create(gpu.ctx, AppResources::max_draws_per_frame,
@@ -766,19 +726,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         pipelines_node = gpu.window_resize_graph.add_node(
                 "pipelines",
                 [&](VkExtent2D, const ResizeContext &rc) {
-                    const auto old_gbuffer_pipeline_lighting = pipes.gbuffer_pipeline_lighting;
-                    const auto old_cube_rotation_pipeline = pipes.cube_rotation_pipeline;
-                    const auto old_gbuffer_pipeline_mrt = pipes.gbuffer_pipeline_mrt;
-                    const auto old_flags_pipeline = pipes.flags_pipeline;
-                    const auto old_compact_pipeline = pipes.compact_pipeline;
-                    const auto old_predepth_pipeline = pipes.predepth_pipeline;
-                    const auto old_predepth_alpha_pipeline = pipes.predepth_alpha_pipeline;
-                    const auto old_tonemap_pipeline = pipes.tonemap_pipeline;
-                    const auto old_cluster_build_groups_pipeline = pipes.cluster_build_groups_pipeline;
-                    const auto old_present_pipeline = pipes.present_pipeline;
-                    const auto old_directional_shadow_map_pipeline = pipes.directional_shadow_map_pipeline;
-                    const auto old_directional_shadow_map_alpha_pipeline = pipes.directional_shadow_map_alpha_pipeline;
-
                     std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
                     std::array<ReflectionData, names.size()> reflection_data = {};
                     TRY_UNWRAP_WITH_DISCARD(culling_code,
@@ -787,7 +734,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(reflection_data)),
                                             "Failed to compile light culling shader");
 
-                    std::array<const std::string_view, 1> clustered_culling_names = {"BuildClusterCS"};
+                    std::array<const std::string_view, 2> clustered_culling_names = {"BuildClusterCS",
+                                                                                     "LightFinaliseCS"};
                     std::array<ReflectionData, clustered_culling_names.size()> clustered_culling_reflection_data = {};
                     TRY_UNWRAP_WITH_DISCARD(clustered_culling_code,
                                             gpu.compiler->compile_from_file(
@@ -821,7 +769,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(tonemap_reflection)),
                                             "Failed to compile tonemap shader");
 
-                    std::array<const std::string_view, 1> rotate_cubes_names{"rotate_cs"};
+                    std::array<const std::string_view, 2> rotate_cubes_names{"rotate_geometry_cs", "rotate_lights_cs"};
                     std::array<ReflectionData, rotate_cubes_names.size()> rotate_cubes_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(rotate_cubes_code,
                                             gpu.compiler->compile_from_file("shaders/rotate_cubes.slang",
@@ -846,14 +794,31 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(present_reflection)),
                                             "Failed to compile present shader");
 
+                    std::array<const std::string_view, 1> debug_clustering_names = {"ClusterHeatmapCS"};
+                    std::array<ReflectionData, debug_clustering_names.size()> debug_clustering_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(debug_clustering_code,
+                                            gpu.compiler->compile_from_file("shaders/debug_clustering.slang",
+                                                                            std::span(debug_clustering_names),
+                                                                            std::span(debug_clustering_reflection)),
+                                            "Failed to compile debug clustering shader");
+
+                    std::array<const std::string_view, 3> debug_point_light_names = {"main_as", "main_ms",
+                                                                                     "main_fs_debug"};
+                    std::array<ReflectionData, debug_point_light_names.size()> debug_point_light_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(debug_point_light_code,
+                                            gpu.compiler->compile_from_file("shaders/light_mesh.slang",
+                                                                            std::span(debug_point_light_names),
+                                                                            std::span(debug_point_light_reflection)),
+                                            "Failed to compile point light mesh debug");
+
                     auto &&[fp, cp] = create_compute_pipelines(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
                                                                {}, std::span(culling_code), std::span(names));
 
-                    auto &&[crp] = create_compute_pipelines(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, sizeof(RotateCubesPushConstant),
+                    auto &&[crp, lrp] = create_compute_pipelines(
+                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, sizeof(RotatePushConstant),
                             std::span(rotate_cubes_code), std::span(rotate_cubes_names));
 
-                    auto &&[cl_groups] = create_compute_pipelines(
+                    auto &&[cl_groups, finalise_cl] = create_compute_pipelines(
                             gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
                             sizeof(ClusteredLightCullingPushConstants), std::span(clustered_culling_code),
                             std::span(clustered_culling_names));
@@ -889,7 +854,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             .fullscreen_vs = *gpu.ctx.shaders.get(pipes.fullscreen_vs),
                             .frag_code = tonemap_code.at(1),
                             .fs_entry = "fs_main",
-                            .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .color_format = VK_FORMAT_R8G8B8A8_SRGB,
                             .push_constant_size = sizeof(TonemapPushConstants),
                             .enable_blend = false,
                     });
@@ -906,31 +871,33 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             .enable_blend = false,
                     });
 
-                    pipes.gbuffer_pipeline_lighting = gpu.ctx.create_pipeline(std::move(gbuf_light));
-                    pipes.cube_rotation_pipeline = gpu.ctx.create_pipeline(std::move(crp));
-                    pipes.gbuffer_pipeline_mrt = gpu.ctx.create_pipeline(std::move(gbuffer_pipeline));
-                    pipes.flags_pipeline = gpu.ctx.create_pipeline(std::move(fp));
-                    pipes.compact_pipeline = gpu.ctx.create_pipeline(std::move(cp));
-                    pipes.predepth_pipeline = gpu.ctx.create_pipeline(std::move(pp));
-                    pipes.predepth_alpha_pipeline = gpu.ctx.create_pipeline(std::move(pp_alpha));
-                    pipes.tonemap_pipeline = gpu.ctx.create_pipeline(std::move(tp));
-                    pipes.cluster_build_groups_pipeline = gpu.ctx.create_pipeline(std::move(cl_groups));
-                    pipes.present_pipeline = gpu.ctx.create_pipeline(std::move(present_pipe));
-                    pipes.directional_shadow_map_pipeline = gpu.ctx.create_pipeline(std::move(shadow_map));
-                    pipes.directional_shadow_map_alpha_pipeline = gpu.ctx.create_pipeline(std::move(shadow_map_alpha));
+                    auto debug_pipeline = create_light_volume_mesh_pipeline(
+                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, debug_point_light_code.at(0),
+                            debug_point_light_code.at(1), debug_point_light_code.at(2), VK_FORMAT_R16G16B16A16_SFLOAT,
+                            VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
-                    destroy(gpu.ctx, old_gbuffer_pipeline_lighting, rc.retire_value);
-                    destroy(gpu.ctx, old_cube_rotation_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_gbuffer_pipeline_mrt, rc.retire_value);
-                    destroy(gpu.ctx, old_flags_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_compact_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_predepth_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_predepth_alpha_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_tonemap_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_cluster_build_groups_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_present_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_directional_shadow_map_pipeline, rc.retire_value);
-                    destroy(gpu.ctx, old_directional_shadow_map_alpha_pipeline, rc.retire_value);
+                    auto debug_clustering_pipeline = create_compute_pipeline(
+                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, debug_clustering_code.at(0),
+                            sizeof(HeatmapPushConstants), "ClusterHeatmapCS");
+
+                    hot_swap(pipes.gbuffer_pipeline_lighting, std::move(gbuf_light), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.cube_rotation_pipeline, std::move(crp), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.light_rotation_pipeline, std::move(lrp), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.gbuffer_pipeline_mrt, std::move(gbuffer_pipeline), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.flags_pipeline, std::move(fp), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.compact_pipeline, std::move(cp), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.finalise_compact_pipeline, std::move(finalise_cl), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.predepth_pipeline, std::move(pp), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.predepth_alpha_pipeline, std::move(pp_alpha), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.tonemap_pipeline, std::move(tp), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.cluster_build_groups_pipeline, std::move(cl_groups), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.present_pipeline, std::move(present_pipe), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.directional_shadow_map_pipeline, std::move(shadow_map), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.directional_shadow_map_alpha_pipeline, std::move(shadow_map_alpha), gpu.ctx,
+                             rc.retire_value);
+                    hot_swap(pipes.debug_point_light_pipeline, std::move(debug_pipeline), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.debug_light_clustering, std::move(debug_clustering_pipeline), gpu.ctx,
+                             rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
     }
@@ -955,8 +922,13 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             res.gbuffer2 = gpu.ctx.create_texture(create_offscreen_target(
                     gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
 
+            const u32 cell_size = 16;
+            const u32 slices_per_row = 4; // arrange Z slices into a 4x4 grid
+            const u32 hm_w = res.clustering_config.tiles_x * slices_per_row * cell_size; // 16*4*16 = 1024
+            const u32 hm_h = res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) *
+                             cell_size; // 9*4*16 = 576
             res.debug_culling = gpu.ctx.create_texture(create_offscreen_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
+                    gpu.allocator, hm_w, hm_h, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
 
             res.depth = gpu.ctx.create_texture(create_depth_target(
                     gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "depth"));
@@ -967,9 +939,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
             }
 
-            res.lit_hdr = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
-                                                                         VK_FORMAT_R16G16B16A16_SFLOAT, {}, "lit_hdr"));
-
+            hot_swap(res.lit_hdr,
+                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                             "lit_hdr"),
+                     gpu.ctx);
             destroy(gpu.ctx, old_g0, rc.retire_value);
             destroy(gpu.ctx, old_g1, rc.retire_value);
             destroy(gpu.ctx, old_g2, rc.retire_value);
@@ -983,7 +956,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     const auto old_tonemap = res.tonemapped;
 
                     res.tonemapped = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "tonemapped"));
+                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_SRGB, {}, "tonemapped"));
                     destroy(gpu.ctx, old_tonemap, resize_context.retire_value);
                 });
 
@@ -1037,8 +1010,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Graph setup ---
     if (!ui.graphs_initialized) {
-        ui.gpu_frame_graph.add_line("Rotate");
-        ui.gpu_frame_graph.add_line("Cull");
+        ui.gpu_frame_graph.add_line("Geometry Rotate");
+        ui.gpu_frame_graph.add_line("Light Rotate");
+        ui.gpu_frame_graph.add_line("Light Culling");
         ui.gpu_frame_graph.add_line("Clustering");
         ui.gpu_frame_graph.add_line("Pre-Depth");
         ui.gpu_frame_graph.add_line("GBuffer");
@@ -1107,9 +1081,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 const float ortho_size = ui.shadow_config.ortho_size;
 
                 const float half_size = ortho_size * 0.5F;
-                
-                const glm::mat4 light_proj = glm::orthoRH_ZO(-half_size, half_size, -half_size, half_size, ui.shadow_config.far_plane, ui.shadow_config.near_plane);
-                ui.shadow_config.light_view_proj =  light_proj * light_view;
+
+                const glm::mat4 light_proj = glm::orthoRH_ZO(-half_size, half_size, -half_size, half_size,
+            ui.shadow_config.far_plane, ui.shadow_config.near_plane); ui.shadow_config.light_view_proj =  light_proj *
+            light_view;
             }*/
             {
                 glm::vec3 scene_center = res.mesh.mesh_aabb.center();
@@ -1131,14 +1106,16 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 float near_plane = glm::max(-ls_max.z - padding, 0.1f);
                 float far_plane = -ls_min.z + padding;
                 const glm::mat4 light_proj =
-                        glm::orthoRH_ZO(-half_size, half_size, -half_size, half_size,near_plane, far_plane);
+                        glm::orthoRH_ZO(-half_size, half_size, -half_size, half_size, near_plane, far_plane);
                 ui.shadow_config.light_view_proj = light_proj * light_view;
             }
         }
 
-        const auto ranges = write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,
-                                                res.draw_material_id_ring, res.mesh.mesh, res.instance_count, 0u);
-
+        const auto mesh_ranges =
+                write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,
+                                    res.draw_material_id_ring, res.mesh.mesh, res.instance_count, 0u);
+        const u32 light_slot = reserve_light_volumes(gpu.ctx, bounded_frame_index, res.draw_stream.writer,
+                                                     res.mesh_indirect_ring, res.draw_material_id_ring, 0u);
 
         auto &fs = res.frames[bounded_frame_index];
 
@@ -1181,13 +1158,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         const auto frame_sync = acquired->sync;
 
         // Precompute device addresses used in push constants
-        const auto flags_addr = gpu.ctx.device_address(res.flags);
-        const auto prefix_addr = gpu.ctx.device_address(res.prefix);
-        const auto compact_addr = gpu.ctx.device_address(res.compact_lights);
-        const auto culled_light_count_addr = gpu.ctx.device_address(res.culled_light_count);
         const auto point_lights_base_addr = gpu.ctx.device_address(res.point_lights_base);
-        const auto clusters_addr = gpu.ctx.device_address(res.clusters);
-        const auto cluster_light_indices_addr = gpu.ctx.device_address(res.cluster_light_indices);
 
         {
             fs.timeline_values[stage_index(Stage::CubeRotation)] =
@@ -1202,7 +1173,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             }};
 
             fs.timeline_values[stage_index(Stage::Predepth)] =
-                    run_predepth_pass(app_context, render_scene_extent, ranges, bounded_frame_index,
+                    run_predepth_pass(app_context, render_scene_extent, mesh_ranges, bounded_frame_index,
                                       SubmitSynchronisation{.timeline_waits = cube_rotate_waits});
         }
 
@@ -1214,7 +1185,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             }};
 
             fs.timeline_values[stage_index(Stage::DirectionalShadowMap)] = run_directional_shadow_map_pass(
-                    app_context, ranges, bounded_frame_index,
+                    app_context, mesh_ranges, bounded_frame_index,
                     SubmitSynchronisation{.timeline_waits = directional_shadow_map_waits});
         }
 
@@ -1228,8 +1199,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                  .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
             };
             fs.timeline_values[stage_index(Stage::LightCulling)] = run_light_frustum_cull_pass(
-                    app_context, bounded_frame_index, {flags_addr, prefix_addr, compact_addr, culled_light_count_addr},
-                    SubmitSynchronisation{.timeline_waits = culling_waits});
+                    app_context, bounded_frame_index, SubmitSynchronisation{.timeline_waits = culling_waits});
         }
 
         {
@@ -1238,9 +1208,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                  .semaphore = gpu.tl_compute.timeline,
                                  .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}};
             fs.timeline_values[stage_index(Stage::LightClustering)] = run_light_clustering_pass(
-                    app_context, bounded_frame_index,
-                    {compact_addr, culled_light_count_addr, clusters_addr, cluster_light_indices_addr},
-                    SubmitSynchronisation{.timeline_waits = clustering_waits});
+                    app_context, bounded_frame_index, SubmitSynchronisation{.timeline_waits = clustering_waits});
         }
 
         {
@@ -1262,7 +1230,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     },
             };
             fs.timeline_values[stage_index(Stage::GBuffer)] =
-                    run_gbuffer_pass(app_context, render_scene_extent, ranges, bounded_frame_index,
+                    run_gbuffer_pass(app_context, render_scene_extent, mesh_ranges, bounded_frame_index,
                                      SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         }
 
@@ -1279,9 +1247,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                             .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::DeferredLighting)] = run_deferred_lighting_pass(
-                    app_context, render_scene_extent, {clusters_addr, cluster_light_indices_addr}, bounded_frame_index,
-                    SubmitSynchronisation{.timeline_waits = deferred_waits});
+            fs.timeline_values[stage_index(Stage::DeferredLighting)] =
+                    run_deferred_lighting_pass(app_context, render_scene_extent, light_slot, bounded_frame_index,
+                                               SubmitSynchronisation{.timeline_waits = deferred_waits});
         }
 
         {

@@ -2,6 +2,19 @@ struct PointLight
 {
     float4 position_radius;
     float4 colour_intensity;
+
+    property radius : float {
+        get { return position_radius.w; }
+    }
+    property position : float3 {
+        get { return position_radius.xyz; }
+    }
+    property intensity : float {
+        get { return colour_intensity.w; }
+    }
+    property colour : float3 {
+        get { return colour_intensity.xyz; }
+    }
 };
 
 struct LightVisibility
@@ -11,6 +24,12 @@ struct LightVisibility
     uint z0, z1;
     uint is_visible; 
     uint _pad;
+};
+
+struct Cluster
+{
+    uint light_offset;
+    uint light_count;
 };
 
 struct UBO {
@@ -142,7 +161,7 @@ RWTexture2D<float4> storage_images[];
 [[vk::binding(3, 0)]] 
 SamplerComparisonState comparison_samplers[];
 
-float4 sample_texture_lod(float2 uv, uint image_index, uint sampler_index = 0, float lod)
+float4 sample_texture_lod(float2 uv, uint image_index,  float lod, uint sampler_index = 0)
 {
     uint tex_idx = NonUniformResourceIndex(image_index);
     uint samp_idx = NonUniformResourceIndex(sampler_index);
@@ -156,6 +175,10 @@ float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0)
     uint samp_idx = NonUniformResourceIndex(sampler_index);
 
     return sampled_images[tex_idx].Sample(samplers[samp_idx], uv);
+}
+
+RWTexture2D<float4> get_storage_image(uint image_index) {
+    return storage_images[NonUniformResourceIndex(image_index)];
 }
 
 float3 reconstruct_world_position_from_depth(float2 uv, float depth, Ptr<UBO, Access.Read, AddressSpace.Device> ubo)

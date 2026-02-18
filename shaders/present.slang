@@ -24,7 +24,7 @@ float3 linear_to_srgb(float3 x)
 }
 
 [shader("fragment")]
-PSOut present_fs(VSOut i, uniform PresentPushConstants pc)
+void present_fs(VSOut i, uniform PresentPushConstants pc, out PSOut o)
 {
     uint idx      = NonUniformResourceIndex(pc.image_index);
     uint samp_idx = NonUniformResourceIndex(pc.sampler_index);
@@ -36,7 +36,5 @@ PSOut present_fs(VSOut i, uniform PresentPushConstants pc)
         c.rgb = linear_to_srgb(c.rgb);
     }*/
 
-    PSOut o;
     o.color = c;
-    return o;
 }

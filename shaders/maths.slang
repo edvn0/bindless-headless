@@ -37,3 +37,101 @@ bool aabb_in_frustum(float3 bmin, float3 bmax, float4 planes[6]) {
     }
     return true;
 }
+
+
+float3 safe_normalize(float3 v)
+{
+    float l2 = dot(v, v);
+    if (l2 <= 1e-20) return float3(0.0, 1.0, 0.0);
+    return v * rsqrt(l2);
+}
+
+
+float2 oct_encode(float3 n)
+{
+    n = safe_normalize(n);
+    float inv_l1 = 1.0 / (abs(n.x) + abs(n.y) + abs(n.z) + 1e-8);
+    n *= inv_l1;
+
+    float2 p = n.xy;
+    if (n.z < 0.0)
+    {
+        p = (1.0 - abs(p.yx)) * (float2(p.x >= 0 ? 1 : -1, p.y >= 0 ? 1 : -1));
+    }
+    return p; // [-1,1]
+}
+
+float3 oct_decode(float2 e)
+{
+    float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
+    float t = saturate(-n.z);
+    n.xy += select(n.xy >= 0.0, -t, t);
+
+    return safe_normalize(n);
+}
+
+float2 oct_to_unorm(float2 oct) { return oct * 0.5 + 0.5; }
+float2 unorm_to_oct(float2 u)   { return u * 2.0 - 1.0; }
+
+float3 unproject_to_view(float4x4 inv_proj, float2 ndc_xy, float linear_depth) {
+    float4 clip = float4(ndc_xy, 0.0, 1.0);
+    // No Y flip here — NDC tile coordinates are already in Vulkan NDC space
+    // and view_pos.y from the view matrix is consistent with that
+    float4 view = mul(inv_proj, clip);
+    view /= view.w;
+    float2 xy = (view.xy / view.z) * linear_depth;
+    return float3(xy, -linear_depth);
+}
+
+struct ClusterViewData {
+    uint tiles_x;
+    uint tiles_y;
+    uint tiles_z;
+    float log_z_scale;
+    float z_near;
+    float z_far;
+    float4x4 inv_projection;
+    float4x4 view;
+}
+
+struct ViewAABB {
+    float3 min_v;
+    float3 max_v;
+}
+
+ViewAABB get_cluster_view_aabb(uint x, uint y, uint z, ClusterViewData pc) {
+    // Map tile indices to NDC [-1, 1]
+    // Vulkan Y is down: tile 0 is top (NDC -1), tile pc.tiles_y is bottom (NDC 1)
+    float2 ndc_min = float2(
+        (float(x) / pc.tiles_x) * 2.0 - 1.0,
+        (float(y) / pc.tiles_y) * 2.0 - 1.0
+    );
+    float2 ndc_max = float2(
+        (float(x + 1) / pc.tiles_x) * 2.0 - 1.0,
+        (float(y + 1) / pc.tiles_y) * 2.0 - 1.0
+    );
+
+    // Calculate view-space distances (positive) using your exponential scale
+float z_near_dist = pc.z_near * pow(2.0, float(z)     / pc.log_z_scale);
+float z_far_dist  = pc.z_near * pow(2.0, float(z + 1) / pc.log_z_scale);
+
+    // Get the 4 corners of the cluster frustum at near and far planes
+    float3 p[8];
+    p[0] = unproject_to_view(pc.inv_projection, float2(ndc_min.x, ndc_min.y), z_near_dist);
+    p[1] = unproject_to_view(pc.inv_projection, float2(ndc_max.x, ndc_min.y), z_near_dist);
+    p[2] = unproject_to_view(pc.inv_projection, float2(ndc_min.x, ndc_max.y), z_near_dist);
+    p[3] = unproject_to_view(pc.inv_projection, float2(ndc_max.x, ndc_max.y), z_near_dist);
+    p[4] = unproject_to_view(pc.inv_projection, float2(ndc_min.x, ndc_min.y), z_far_dist);
+    p[5] = unproject_to_view(pc.inv_projection, float2(ndc_max.x, ndc_min.y), z_far_dist);
+    p[6] = unproject_to_view(pc.inv_projection, float2(ndc_min.x, ndc_max.y), z_far_dist);
+    p[7] = unproject_to_view(pc.inv_projection, float2(ndc_max.x, ndc_max.y), z_far_dist);
+
+    ViewAABB aabb;
+    aabb.min_v = aabb.max_v = p[0];
+    [unroll]
+    for(int i = 1; i < 8; ++i) {
+        aabb.min_v = min(aabb.min_v, p[i]);
+        aabb.max_v = max(aabb.max_v, p[i]);
+    }
+    return aabb;
+}

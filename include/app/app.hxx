@@ -71,7 +71,13 @@ struct AppPipelines {
 
     PipelineHandle flags_pipeline{};
     PipelineHandle compact_pipeline{};
+    PipelineHandle finalise_compact_pipeline{};
+    PipelineHandle debug_point_light_pipeline{};
+    PipelineHandle debug_light_clustering{};
+
     PipelineHandle cube_rotation_pipeline{};
+    PipelineHandle light_rotation_pipeline{};
+
     PipelineHandle gbuffer_pipeline_mrt{};
     PipelineHandle gbuffer_pipeline_lighting{};
     PipelineHandle predepth_pipeline{};
@@ -100,6 +106,10 @@ struct ShadowConfig {
     float ortho_size = 30.0f; // Width/height of ortho frustum
     float near_plane = 0.1f;
     float far_plane = 100.0f;
+
+    float depth_bias_constant_factor = 1.25f;
+    float depth_bias_clamp = 0.0f;
+    float depth_bias_slope_factor = 1.75f;
 };
 
 struct SunConfig {
@@ -108,6 +118,11 @@ struct SunConfig {
     float intensity = 1.5f;
 };
 
+
+struct Cluster {
+    u32 light_offset;
+    u32 light_count;
+};
 
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
@@ -120,25 +135,21 @@ struct AppResources {
 
     BufferHandle point_lights_base{};
     AlignedRingBuffer<PointLight> point_lights_ring{};
-    BufferHandle culled_light_count{};
+    AlignedRingBuffer<u32> culled_light_count{};
 
     static constexpr u32 mesh_count = 1;
     AlignedRingBuffer<glm::mat4x3> transforms_ring{};
     u32 instance_count{0};
 
-    BufferHandle flags{};
-    BufferHandle prefix{};
-    BufferHandle compact_lights{};
+    AlignedRingBuffer<u32> flags{};
+    AlignedRingBuffer<u32> prefix{};
+    AlignedRingBuffer<PointLight> compact_lights{};
 
     ClusterConfig clustering_config{};
     u32 max_light_indices{0};
 
-    BufferHandle cluster_counts{};
-    BufferHandle visibility{};
-    BufferHandle clusters{};
-    BufferHandle cluster_counters{};
-    BufferHandle cluster_light_indices{};
-    BufferHandle global_index_count{};
+    AlignedRingBuffer<Cluster> clusters{};
+    AlignedRingBuffer<u32> cluster_light_indices{};
 
     AlignedRingBuffer<FrameUBO> frame_ubo_ring{};
 
@@ -155,6 +166,7 @@ struct AppResources {
 
     static constexpr u32 max_draws_per_frame = 100000U;
     AlignedRingBuffer<VkDrawIndexedIndirectCommand> indirect_ring{};
+    AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> mesh_indirect_ring{};
     AlignedRingBuffer<u32> draw_material_id_ring{};
 
     struct FrameDrawStream {

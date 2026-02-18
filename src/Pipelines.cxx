@@ -3,6 +3,7 @@
 #include "Mesh.hxx"
 #include "PipelineCache.hxx"
 #include "RenderContext.hxx"
+#include "vulkan/vulkan_core.h"
 
 #include <glm/glm.hpp>
 #include <utility>
@@ -1296,4 +1297,135 @@ auto create_fullscreen_pipeline(const FullscreenPipelineInfo &info) -> CompiledP
     vkDestroyShaderModule(info.device, frag_shader, nullptr);
 
     return CompiledPipeline{.pipeline = pipeline, .layout = pipeline_layout};
+}
+
+auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache, 
+                                     VkDescriptorSetLayout bindless_layout,
+                                     const std::vector<u32> &task_code, 
+                                     const std::vector<u32> &mesh_code, 
+                                     const std::vector<u32> &frag_code,
+                                     VkFormat color_format, VkFormat depth_format,
+                                     VkSampleCountFlagBits samples) -> CompiledPipeline {
+    VkShaderModule task_module{};
+    auto task_ci = create_info<VkShaderModuleCreateInfo>();
+    task_ci.codeSize = task_code.size() * sizeof(u32);
+    task_ci.pCode = task_code.data();
+    vk_check(vkCreateShaderModule(device, &task_ci, nullptr, &task_module));
+                                        
+    // 1. Create Shader Modules
+    VkShaderModule mesh_module{};
+    auto mesh_ci = create_info<VkShaderModuleCreateInfo>();
+    mesh_ci.codeSize = mesh_code.size() * sizeof(u32);
+    mesh_ci.pCode = mesh_code.data();
+    vk_check(vkCreateShaderModule(device, &mesh_ci, nullptr, &mesh_module));
+
+    VkShaderModule frag_module{};
+    auto frag_ci = create_info<VkShaderModuleCreateInfo>();
+    frag_ci.codeSize = frag_code.size() * sizeof(u32);
+    frag_ci.pCode = frag_code.data();
+    vk_check(vkCreateShaderModule(device, &frag_ci, nullptr, &frag_module));
+
+    // 2. Stages
+    auto task_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    task_stage_ci.stage = VK_SHADER_STAGE_TASK_BIT_EXT;
+    task_stage_ci.module = task_module;
+    task_stage_ci.pName = "main_as"; // Entry point in Slang
+
+    auto mesh_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    mesh_stage_ci.stage = VK_SHADER_STAGE_MESH_BIT_EXT;
+    mesh_stage_ci.module = mesh_module;
+    mesh_stage_ci.pName = "main_ms"; // Entry point in Slang
+
+    auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    frag_stage_ci.module = frag_module;
+    frag_stage_ci.pName = "main_fs_debug";
+
+    std::array stages = { task_stage_ci, mesh_stage_ci, frag_stage_ci };
+
+    VkPushConstantRange push_range{
+        .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT|VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(DebugClusteredPushConstants), // 
+    };
+
+    auto layout_ci = create_info<VkPipelineLayoutCreateInfo>();
+    layout_ci.setLayoutCount = 1;
+    layout_ci.pSetLayouts = &bindless_layout;
+    layout_ci.pushConstantRangeCount = 1;
+    layout_ci.pPushConstantRanges = &push_range;
+
+    VkPipelineLayout layout;
+    vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
+
+    // 4. Color Blending (Additive for Light Volumes)
+    VkPipelineColorBlendAttachmentState blend_attachment{
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | 
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+
+    auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
+    cb.attachmentCount = 1;
+    cb.pAttachments = &blend_attachment;
+
+    // 5. Depth State (Test against pre-depth, do NOT write)
+    auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_FALSE;
+    ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // Reverse-Z
+
+    // 6. Rasterization (Front-Face culling so we see volume when inside)
+    auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
+    rs.cullMode = VK_CULL_MODE_FRONT_BIT; 
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    // 7. Dynamic Rendering & Multisample
+    auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
+    rendering_info.colorAttachmentCount = 1;
+    rendering_info.pColorAttachmentFormats = &color_format;
+    rendering_info.depthAttachmentFormat = depth_format;
+
+    auto ms = create_info<VkPipelineMultisampleStateCreateInfo>();
+    ms.rasterizationSamples = samples;
+
+    auto vp = create_info<VkPipelineViewportStateCreateInfo>();
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    std::array dynamic_states = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    auto dy = create_info<VkPipelineDynamicStateCreateInfo>();
+    dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
+    dy.pDynamicStates = dynamic_states.data();
+
+    // 8. Final Pipeline Create (Note: no VertexInput or InputAssembly)
+    auto ci = create_info<VkGraphicsPipelineCreateInfo>();
+    ci.pNext = &rendering_info;
+    ci.stageCount = static_cast<u32>(stages.size());
+    ci.pStages = stages.data();
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pDepthStencilState = &ds;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &dy;
+    ci.layout = layout;
+
+    VkPipeline pipeline;
+    vkCreateGraphicsPipelines(device, cache, 1, &ci, nullptr, &pipeline);
+    
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "light_volume_mesh_pass");
+
+    vkDestroyShaderModule(device, task_module, nullptr);
+    vkDestroyShaderModule(device, mesh_module, nullptr);
+    vkDestroyShaderModule(device, frag_module, nullptr);
+
+    return {pipeline, layout};
 }

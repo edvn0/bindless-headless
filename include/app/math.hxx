@@ -91,7 +91,10 @@ constexpr auto extract_frustum_planes = [](const glm::mat4 &view_proj) -> std::a
     planes[4].plane = glm::vec4(view_proj[0][3] + view_proj[0][2], view_proj[1][3] + view_proj[1][2],
                                 view_proj[2][3] + view_proj[2][2], view_proj[3][3] + view_proj[3][2]);
 
-    planes[5].plane = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+planes[5].plane = glm::vec4(view_proj[0][3] - view_proj[0][2], 
+                            view_proj[1][3] - view_proj[1][2],
+                            view_proj[2][3] - view_proj[2][2], 
+                            view_proj[3][3] - view_proj[3][2]);
 
     for (int i = 0; i < 5; ++i) { // Skip far plane
         float length = glm::length(glm::vec3(planes[i].plane));

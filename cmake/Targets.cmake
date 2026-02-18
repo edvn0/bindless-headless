@@ -20,7 +20,7 @@ target_link_libraries(BindlessHeadlessAllocator PUBLIC
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  target_compile_options(BindlessHeadlessAllocator PRIVATE -Wno-nullability-completeness)
+  target_compile_options(BindlessHeadlessAllocator PUBLIC -Wno-nullability-completeness -Wno-nullability-extension)
 endif()
 
 target_compile_definitions(ThirdPartySTB PRIVATE STB_IMAGE_IMPLEMENTATION)

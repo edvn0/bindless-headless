@@ -35,7 +35,7 @@ struct PSOut
 };
 
 [shader("fragment")]
-PSOut fs_main(VSOut i, uniform TonemapPushConstants pc)
+void fs_main(VSOut i, uniform TonemapPushConstants pc, out PSOut o)
 {
     uint idx = NonUniformResourceIndex(pc.image_index);
     uint samp_idx = NonUniformResourceIndex(pc.sampler_index);
@@ -55,10 +55,7 @@ PSOut fs_main(VSOut i, uniform TonemapPushConstants pc)
     float L_t = (L * (a * L + b)) / (L * (c * L + d) + e);
 
     float3 ldr_rgb = color * (L_t / max(L, 1e-5));
-
     ldr_rgb = saturate(ldr_rgb);
 
-    PSOut o;
     o.color = float4(ldr_rgb, 1.0);
-    return o;
 }

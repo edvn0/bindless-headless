@@ -321,7 +321,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
     if (static_cast<i32>(drawable.index_count) < dd->TotalIdxCount) {
         const auto size = (dd->TotalIdxCount * 4) * sizeof(ImDrawIdx);
         const auto actual_size = static_cast<std::size_t>(next_power_of_two(size));
-        info("Reallocating index buffer to {} bytes", actual_size);
+        info("(ImGui) Reallocating index buffer to {} bytes", actual_size);
         auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                                      actual_size, "imgui_index");
         drawable.index = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
@@ -330,7 +330,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
     if (static_cast<i32>(drawable.vertex_count) < dd->TotalVtxCount) {
         const auto size = (dd->TotalVtxCount * 4) * sizeof(ImDrawVert);
         const auto actual_size = static_cast<std::size_t>(next_power_of_two(size));
-        info("Reallocating vertex buffer to {} bytes", actual_size);
+        info("(ImGui) Reallocating vertex buffer to {} bytes", actual_size);
         auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                      actual_size, "imgui_vertex");
         drawable.vertex = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
@@ -631,23 +631,6 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
     TRY_PROPAGATE(shaders, compiler.compile_from_file("shaders/gui.slang", entry_points, reflection),
                   "Could not compile gui shader");
 
-    const std::array<u32, 1> data{0u};
-
-    const VkSpecializationMapEntry is_color_space_nonlinear{
-            .constantID = 0,
-            .offset = 0,
-            .size = sizeof(u32),
-    };
-    const std::array entries{is_color_space_nonlinear};
-    VkSpecializationInfo spec_info{};
-    spec_info.mapEntryCount = 1;
-    spec_info.pMapEntries = entries.data();
-    spec_info.dataSize = 1 * sizeof(u32);
-    spec_info.pData = data.data();
-
-    const std::array spec_infos{spec_info};
-
-
     VkShaderModule vert_shader{};
     {
         auto ci = create_info<VkShaderModuleCreateInfo>();
@@ -699,7 +682,6 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
     frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     frag_stage_ci.module = frag_shader;
     frag_stage_ci.pName = "fs_main";
-    frag_stage_ci.pSpecializationInfo = spec_infos.data();
 
     std::array shader_stages{vert_stage_ci, frag_stage_ci};
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();

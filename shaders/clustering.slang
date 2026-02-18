@@ -1,4 +1,6 @@
 import common;
+import maths;
+import pointer;
 
 static const uint MAX_LIGHTS_PER_CLUSTER = 128;
 static const uint CLUSTER_BUILD_THREADS = 64;
@@ -8,17 +10,18 @@ const int MAX_WAVES_PER_GROUP = 4;
 [[vk::constant_id(1)]]
 const int THREADS_PER_GROUP = 64;
 
-struct Cluster
-{
-    uint light_offset;
-    uint light_count;
+struct VkDrawMeshTasksIndirectCommandEXT {
+    uint groupCountX;
+    uint groupCountY;
+    uint groupCountZ;
 };
 
 struct PushConstants
 {
-    UBO*        frame_ubo;
-    PointLight* lights; // Compacted frustum culled
-    uint*        light_count; // Compacted frustum culled count
+    DeviceReadPtr<UBO>        frame_ubo;
+    DeviceReadPtr<PointLight> lights; // Compacted frustum culled
+    DeviceReadPtr<uint>        light_count; // Compacted frustum culled count
+    DeviceWritePtr<VkDrawMeshTasksIndirectCommandEXT> indirect_command;
 
     float z_near;
     float z_far;
@@ -33,158 +36,28 @@ struct PushConstants
     uint*       cluster_light_indices;  // [total_lights_across_clusters]
 };
 
-
-float2 project_to_ndc(float3 view_pos, float4x4 proj)
+bool light_intersects_cluster(PushConstants pc, uint light_index, uint cx, uint cy, uint cz) 
 {
-    float4 clip = mul(proj, float4(view_pos, 1.0));
-    return clip.xy / clip.w; // [-1, 1]
-}
+    var l = pc.lights[light_index];
+    float3 view_pos = mul(pc.frame_ubo->view, float4(l.position_radius.xyz, 1.0)).xyz;
+    float radius = l.position_radius.w;
 
-uint ndc_to_tile_x(float x_ndc, uint tiles_x)
-{
-    float u = x_ndc * 0.5f + 0.5f;
-    return uint(clamp(u * tiles_x, 0.0f, float(tiles_x - 1)));
-}
+    var view_data = ClusterViewData(pc.tiles_x, pc.tiles_y, pc.tiles_z, pc.log_z_scale,
+                                    pc.z_near, pc.z_far, pc.frame_ubo->inv_projection);
+    ViewAABB box = get_cluster_view_aabb(cx, cy, cz, view_data);
 
-uint ndc_to_tile_y(float y_ndc, uint tiles_y)
-{
-    float v = 1.0f - (y_ndc * 0.5f + 0.5f);
-    return uint(clamp(v * tiles_y, 0.0f, float(tiles_y - 1)));
-}
-
-uint z_to_slice(float view_z, float z_near, float log_z_scale)
-{
-    float depth_ratio = abs(view_z) / z_near;
-    return uint(log2(depth_ratio) * log_z_scale);
-}
-
-void compute_light_cluster_range(
-    PointLight l,
-    UBO* ubo,
-    float z_near,
-    float log_z_scale,
-    uint tiles_x,
-    uint tiles_y,
-    uint tiles_z,
-    out uint x0,
-    out uint x1,
-    out uint y0,
-    out uint y1,
-    out uint z0,
-    out uint z1)
-{
-    float3 world_pos = l.position_radius.xyz;
-    float  radius    = l.position_radius.w;
-
-    // ---- world → view ----
-    float3 view_pos = mul(ubo->view, float4(world_pos, 1.0)).xyz;
-
-    // behind camera → reject early
-if (view_pos.z - radius >= 0.0)
-        {
-        x0 = y0 = z0 = 1;
-        x1 = y1 = z1 = 0;
-        return;
+    float sq_dist = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        float v = view_pos[i];
+        if (v < box.min_v[i]) sq_dist += (box.min_v[i] - v) * (box.min_v[i] - v);
+        if (v > box.max_v[i]) sq_dist += (v - box.max_v[i]) * (v - box.max_v[i]);
     }
 
-    // ---- Z slice range ----
-    float z_min = max(view_pos.z - radius, -z_near);
-    float z_max = view_pos.z + radius;
-
-    z0 = z_to_slice(z_min, z_near, log_z_scale);
-    z1 = z_to_slice(z_max, z_near, log_z_scale);
-    
-    // Clamp to valid range
-    z0 = min(z0, tiles_z - 1);
-    z1 = min(z1, tiles_z - 1);
-
-    // ---- screen-space bounds ----
-    // Conservative: project sphere as AABB in view space
-    float3 vx  = view_pos + float3(radius, 0, 0);
-    float3 vxn = view_pos - float3(radius, 0, 0);
-    float3 vy  = view_pos + float3(0, radius, 0);
-    float3 vyn = view_pos - float3(0, radius, 0);
-
-    float2 ndc0 = project_to_ndc(vxn, ubo->projection);
-    float2 ndc1 = project_to_ndc(vx,  ubo->projection);
-    float2 ndc2 = project_to_ndc(vyn, ubo->projection);
-    float2 ndc3 = project_to_ndc(vy,  ubo->projection);
-
-    float ndc_min_x = min(min(ndc0.x, ndc1.x), min(ndc2.x, ndc3.x));
-    float ndc_max_x = max(max(ndc0.x, ndc1.x), max(ndc2.x, ndc3.x));
-    float ndc_min_y = min(min(ndc0.y, ndc1.y), min(ndc2.y, ndc3.y));
-    float ndc_max_y = max(max(ndc0.y, ndc1.y), max(ndc2.y, ndc3.y));
-
-    x0 = ndc_to_tile_x(ndc_min_x, tiles_x);
-    x1 = ndc_to_tile_x(ndc_max_x, tiles_x);
-    y0 = ndc_to_tile_y(ndc_max_y, tiles_y);
-    y1 = ndc_to_tile_y(ndc_min_y, tiles_y);
+    return sq_dist <= (radius * radius);
 }
-
-uint cluster_index(uint x, uint y, uint z, uint tiles_x, uint tiles_y)
-{
-    return x + y * tiles_x + z * tiles_x * tiles_y;
-}
-
-
 
 groupshared uint g_light_count;
 groupshared uint g_light_indices[MAX_LIGHTS_PER_CLUSTER];
-
-
-bool light_intersects_cluster(
-    PointLight l,
-    UBO* ubo,
-    float z_near,
-    float log_z_scale,
-    uint tiles_x,
-    uint tiles_y,
-    uint tiles_z,
-    uint cluster_x,
-    uint cluster_y,
-    uint cluster_z)
-{
-    float3 world_pos = l.position_radius.xyz;
-    float radius = l.position_radius.w;
-    
-    float3 view_pos = mul(ubo->view, float4(world_pos, 1.0)).xyz;
-    
-if (view_pos.z - radius >= 0.0)        return false;
-    
-    float z_min = max(view_pos.z - radius, -z_near);
-    float z_max = view_pos.z + radius;
-    
-    uint z0 = z_to_slice(z_min, z_near, log_z_scale);
-    uint z1 = z_to_slice(z_max, z_near, log_z_scale);
-    z0 = min(z0, tiles_z - 1);
-    z1 = min(z1, tiles_z - 1);
-    
-    if (cluster_z < z0 || cluster_z > z1)
-        return false;
-    
-    float3 vx = view_pos + float3(radius, 0, 0);
-    float3 vxn = view_pos - float3(radius, 0, 0);
-    float3 vy = view_pos + float3(0, radius, 0);
-    float3 vyn = view_pos - float3(0, radius, 0);
-    
-    float2 ndc0 = project_to_ndc(vxn, ubo->projection);
-    float2 ndc1 = project_to_ndc(vx, ubo->projection);
-    float2 ndc2 = project_to_ndc(vyn, ubo->projection);
-    float2 ndc3 = project_to_ndc(vy, ubo->projection);
-    
-    float ndc_min_x = min(min(ndc0.x, ndc1.x), min(ndc2.x, ndc3.x));
-    float ndc_max_x = max(max(ndc0.x, ndc1.x), max(ndc2.x, ndc3.x));
-    float ndc_min_y = min(min(ndc0.y, ndc1.y), min(ndc2.y, ndc3.y));
-    float ndc_max_y = max(max(ndc0.y, ndc1.y), max(ndc2.y, ndc3.y));
-    
-    uint x0 = ndc_to_tile_x(ndc_min_x, tiles_x);
-    uint x1 = ndc_to_tile_x(ndc_max_x, tiles_x);
-    uint y0 = ndc_to_tile_y(ndc_max_y, tiles_y);
-    uint y1 = ndc_to_tile_y(ndc_min_y, tiles_y);
-    
-    return (cluster_x >= x0 && cluster_x <= x1 &&
-            cluster_y >= y0 && cluster_y <= y1);
-}
 
 [numthreads(CLUSTER_BUILD_THREADS, 1, 1)]
 [shader("compute")]
@@ -194,54 +67,52 @@ void BuildClusterCS(
     uniform PushConstants pc)
 {
     uint cluster_idx = group_id.x;
-    if (cluster_idx >= pc.cluster_count)
-        return;
-    
+    if (cluster_idx >= pc.cluster_count) return;
+
+    // Decode 3D cluster ID
     uint z = cluster_idx / (pc.tiles_x * pc.tiles_y);
-    uint rem = cluster_idx % (pc.tiles_x * pc.tiles_y);
-    uint y = rem / pc.tiles_x;
-    uint x = rem % pc.tiles_x;
-    
-    if (group_index == 0)
-        g_light_count = 0;
-    
+    uint y = (cluster_idx % (pc.tiles_x * pc.tiles_y)) / pc.tiles_x;
+    uint x = cluster_idx % pc.tiles_x;
+
+    if (group_index == 0) g_light_count = 0;
     GroupMemoryBarrierWithGroupSync();
-    
-    uint total_lights = *pc.light_count;
-    
-    for (uint light_idx = group_index; light_idx < total_lights; light_idx += CLUSTER_BUILD_THREADS)
-    {
-        PointLight light = pc.lights[light_idx];
-        
-        if (light_intersects_cluster(light, pc.frame_ubo, pc.z_near, pc.log_z_scale,
-                                     pc.tiles_x, pc.tiles_y, pc.tiles_z,
-                                     x, y, z))
-        {
+
+    uint total_compact_lights = *pc.light_count;
+
+    // Threads collaborate to test all frustum-culled lights against this specific cluster
+    for (uint i = group_index; i < total_compact_lights; i += CLUSTER_BUILD_THREADS) {
+        if (light_intersects_cluster(pc,i, x, y, z)) {
             uint slot;
             InterlockedAdd(g_light_count, 1, slot);
-            
-            if (slot < MAX_LIGHTS_PER_CLUSTER)
-                g_light_indices[slot] = light_idx;
+            if (slot < MAX_LIGHTS_PER_CLUSTER) {
+                g_light_indices[slot] = i;
+            }
         }
     }
-    
-    // ===== BARRIER: Wait for all light tests to complete =====
+
     GroupMemoryBarrierWithGroupSync();
-    
-    // ===== PHASE 3: Write cluster metadata =====
-    uint actual_count = min(g_light_count, MAX_LIGHTS_PER_CLUSTER);
-    
-    if (group_index == 0)
-    {
-        pc.clusters[cluster_idx].light_offset = cluster_idx * MAX_LIGHTS_PER_CLUSTER;
-        pc.clusters[cluster_idx].light_count = actual_count;
-    }
-    
-    // ===== PHASE 4: Write light indices to global memory =====
+
+    uint final_count = min(g_light_count, MAX_LIGHTS_PER_CLUSTER);
     uint base_offset = cluster_idx * MAX_LIGHTS_PER_CLUSTER;
-    
-    for (uint i = group_index; i < actual_count; i += CLUSTER_BUILD_THREADS)
-    {
-        pc.cluster_light_indices[base_offset + i] = g_light_indices[i];
+
+    if (group_index == 0) {
+        pc.clusters[cluster_idx].light_offset = base_offset;
+        pc.clusters[cluster_idx].light_count = final_count;
     }
+
+    // Write global light indices
+    for (uint j = group_index; j < final_count; j += CLUSTER_BUILD_THREADS) {
+        pc.cluster_light_indices[base_offset + j] = g_light_indices[j];
+    }
+}
+
+[numthreads(1, 1, 1)]
+[shader("compute")]
+void LightFinaliseCS(uniform PushConstants pc)
+{
+    uint total_culled = *pc.light_count;
+    
+    pc.indirect_command[0].groupCountX = total_culled;
+    pc.indirect_command[0].groupCountY = 1;
+    pc.indirect_command[0].groupCountZ = 1;
 }

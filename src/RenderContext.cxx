@@ -246,3 +246,9 @@ auto destroy(RenderContext &ctx, ShaderHandle handle, u64 retire_value) -> void 
     });
     ctx.shaders.destroy(handle);
 }
+
+auto create(RenderContext &ctx, CompiledPipeline &&v) -> PipelineHandle { return ctx.create_pipeline(std::move(v)); }
+auto create(RenderContext &ctx, Buffer &&v) -> BufferHandle { return ctx.create_buffer(std::move(v)); }
+auto create(RenderContext &ctx, OffscreenTarget &&v) -> TextureHandle { return ctx.create_texture(std::move(v)); }
+auto create(RenderContext &ctx, VkShaderModule &&v) -> ShaderHandle { return ctx.create_shader(std::move(v)); }
+auto create(RenderContext &ctx, QueryPoolState &&v) -> QueryPoolHandle { return ctx.create_query_pool(std::move(v)); }

@@ -1,40 +1,5 @@
 import common;
-
-float3 safe_normalize(float3 v)
-{
-    float l2 = dot(v, v);
-    if (l2 <= 1e-20) return float3(0.0, 1.0, 0.0);
-    return v * rsqrt(l2);
-}
-
-// -------------------------------------------------------------------------------------------------
-// Oct normal encoding for GBuffer
-// -------------------------------------------------------------------------------------------------
-float2 oct_encode(float3 n)
-{
-    n = safe_normalize(n);
-    float inv_l1 = 1.0 / (abs(n.x) + abs(n.y) + abs(n.z) + 1e-8);
-    n *= inv_l1;
-
-    float2 p = n.xy;
-    if (n.z < 0.0)
-    {
-        p = (1.0 - abs(p.yx)) * (float2(p.x >= 0 ? 1 : -1, p.y >= 0 ? 1 : -1));
-    }
-    return p; // [-1,1]
-}
-
-float3 oct_decode(float2 e)
-{
-    float3 n = float3(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
-    float t = saturate(-n.z);
-    n.xy += select(n.xy >= 0.0, -t, t);
-
-    return safe_normalize(n);
-}
-
-float2 oct_to_unorm(float2 oct) { return oct * 0.5 + 0.5; }
-float2 unorm_to_oct(float2 u)   { return u * 2.0 - 1.0; }
+import maths;
 
 // -------------------------------------------------------------------------------------------------
 // Material evaluation (NOW uses vertex T/B/N for normal mapping)
@@ -51,25 +16,23 @@ struct SurfaceMaterial
 
 float3 sample_normal_map_ts(float2 uv, uint normal_map_index, uint sampler_index)
 {
-    float3 n = sample_texture(uv, normal_map_index, sampler_index).xyz;
-    // Tangent-space normal map in [0,1] -> [-1,1]
-    n = n * 2.0 - 1.0;
-    return safe_normalize(n);
+    float4 s = sample_texture(uv, normal_map_index, sampler_index);
+    float2 nml = s.rg;  // R=X, A=Y  (not .ga)
+    nml = nml * 2.0 - 1.0;
+    float z = sqrt(saturate(1.0 - dot(nml, nml)));
+    return float3(nml.x, nml.y, z);
 }
 
 float3 normal_ts_to_ws(float3 n_ts, float3 t_ws, float3 b_ws, float3 n_ws)
 {
-    // Build TBN from interpolated basis.
-    // We assume your mesh tangent/bitangent were orthonormalized on CPU (your compute_tangent_basis does).
-    float3 T = safe_normalize(t_ws);
-    float3 B = safe_normalize(b_ws);
     float3 N = safe_normalize(n_ws);
-
-    // If the basis drifts under interpolation, re-orthonormalize lightly:
-    T = safe_normalize(T - N * dot(N, T));
-    B = safe_normalize(B - N * dot(N, B));
-
-    // Slang mul convention: mul(vector, matrix) is vector * matrix.
+    float3 T = safe_normalize(t_ws - N * dot(N, t_ws));
+    
+    // Preserve handedness from the original bitangent
+    float3 B = cross(N, T);
+    float handedness = dot(B, b_ws) < 0.0 ? -1.0 : 1.0;
+    B *= handedness;
+    
     float3x3 TBN = float3x3(T, B, N);
     return safe_normalize(mul(n_ts, TBN));
 }
@@ -238,6 +201,29 @@ float3 evaluate_directional_light(
     return calculate_direct_lighting(L, V, N, albedo, roughness, metallic, radiance);
 }
 
+
+float3 evaluate_point_light_fixed_v4(
+    PointLight light,
+    float3 world_pos,
+    float3 V,
+    float3 N,
+    float3 albedo,
+    float  roughness,
+    float  metallic) {
+            float3 light_pos = light.position_radius.xyz;
+    float  radius    = light.position_radius.w;
+    float3 light_col = light.colour_intensity.rgb;
+    float  intensity = light.colour_intensity.a;
+            float3 L = light_pos - world_pos;
+    float dist = length(L);
+    if (dist > radius) return 0.0.xxx;
+    
+    float t = 1.0 - (dist / radius);
+    float attenuation = t * t;
+    float3 radiance = light_col * intensity * attenuation;
+    return calculate_direct_lighting(safe_normalize(L), V, N, albedo, roughness, metallic, radiance);
+    }
+
 float3 evaluate_point_light_fixed_v3(
     PointLight light,
     float3 world_pos,
@@ -336,10 +322,10 @@ struct VertexOutput
 
 struct RenderingPushConstants
 {
-    UBO*       frame_ubo;
-    Transform* transforms;
-    uint*      draw_material_ids;
-    Material*  materials;
+    Ptr<UBO, Access.Read, AddressSpace.Device>       frame_ubo;
+    Ptr<Transform, Access.Read, AddressSpace.Device> transforms;
+    Ptr<uint, Access.Read, AddressSpace.Device>      draw_material_ids;
+    Ptr<Material, Access.Read, AddressSpace.Device>  materials;
     uint       base_draw_id;
     uint       sampler_index; // choose which sampler to use for material textures
 };
@@ -397,16 +383,21 @@ struct GBufferOutput
 void main_fs_mdi(
     VertexOutput input,
     uniform RenderingPushConstants pc,
+    bool is_front_face : SV_IsFrontFace,
     out GBufferOutput out_gbuf)
 {
    Material mat = pc.materials[input.material];
 
+       float3 n_ws  = is_front_face ?  input.n_ws : -input.n_ws;
+    float3 t_ws  = is_front_face ?  input.t_ws : -input.t_ws;
+    float3 b_ws  = is_front_face ?  input.b_ws : -input.b_ws;
+
     SurfaceMaterial surf = evaluate_material_tbn(
         mat,
         input.uv,
-        input.n_ws,
-        input.t_ws,
-        input.b_ws,
+        n_ws,
+        t_ws,
+        b_ws,
         pc.sampler_index
     );
 
@@ -423,11 +414,7 @@ void main_fs_mdi(
 // CLUSTERED DEFERRED LIGHTING
 // -------------------------------------------------------------------------------------------------
 
-struct Cluster
-{
-    uint light_offset;
-    uint light_count;
-};
+
 
 /**
 struct DeferredLightingPushConstants {
@@ -457,14 +444,14 @@ struct DeferredLightingPushConstants {
 struct DeferredLightingPushConstants
 {
     Ptr<UBO, Access.Read, AddressSpace.Device>        frame_ubo;
-    PointLight* point_lights;
+    Ptr<PointLight, Access.Read, AddressSpace.Device> point_lights;
     float4x4 shadow_matrix;
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
     float log_z_scale;
-    Cluster* clusters;               // Cluster offset/count data
-    uint*    cluster_light_indices;  // Packed light indices
+    Ptr<Cluster, Access.Read, AddressSpace.Device> clusters;               // Cluster offset/count data
+    Ptr<uint, Access.Read, AddressSpace.Device>    cluster_light_indices;  // Packed light indices
     uint gbuffer0_index;
     uint gbuffer1_index;
     uint gbuffer2_index;
@@ -477,27 +464,30 @@ struct DeferredLightingPushConstants
 };
 
 uint compute_cluster_index(
-    float2 screen_pos,
-    float view_z,
-    float z_near,
+    float2 screen_pos, // SV_Position.xy
+    float3 view_pos,   // Position in view space
+    float z_near,      // MUST match pc.z_near from builder
     float log_z_scale,
     uint tiles_x,
     uint tiles_y,
     uint tiles_z,
     float2 screen_size)
 {
-    float2 tile_coord = screen_pos / screen_size;
-    uint cluster_x = uint(tile_coord.x * float(tiles_x));
-    uint cluster_y = uint(tile_coord.y * float(tiles_y));
+    uint cluster_x = uint(screen_pos.x / screen_size.x * float(tiles_x));
+    uint cluster_y = uint(screen_pos.y / screen_size.y * float(tiles_y));
 
     cluster_x = min(cluster_x, tiles_x - 1);
     cluster_y = min(cluster_y, tiles_y - 1);
 
-    float depth_ratio = abs(view_z) / z_near;
-    uint cluster_z = uint(log2(max(depth_ratio, 1.0)) * log_z_scale);  // ✅ Clamp to >= 1.0
+    // Use positive distance from camera for the log-distribution
+    float view_dist = -view_pos.z; 
+    
+    // Match the BuildClusterCS logic: 
+    // uint z0 = uint(log2(view_dist / z_near) * log_z_scale);
+    uint cluster_z = uint(log2(max(view_dist / z_near, 1.0)) * log_z_scale);
     cluster_z = min(cluster_z, tiles_z - 1);
 
-    return cluster_x + cluster_y * tiles_x + cluster_z * tiles_x * tiles_y;
+    return cluster_x + (cluster_y * tiles_x) + (cluster_z * tiles_x * tiles_y);
 }
 
 struct VSOut
@@ -563,8 +553,8 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
 
     uint cluster_idx = compute_cluster_index(
         i.position.xy,
-        view_pos.z,
-        0.1F, // pc.z_near some time in the future?
+        view_pos,
+        1.0F, // pc.z_near some time in the future?
         pc.log_z_scale,
         pc.tiles_x,
         pc.tiles_y,
@@ -575,10 +565,10 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     var cluster = pc.clusters[cluster_idx];
     for (uint li = 0; li < cluster.light_count; ++li)
     {
-        uint light_idx = pc.cluster_light_indices[cluster.light_offset + li];
-        PointLight light = pc.point_lights[light_idx];
-
-        color +=  evaluate_point_light_fixed_v3(
+        uint index_in_packed_buffer = cluster.light_offset + li;
+    uint light_idx = pc.cluster_light_indices[index_in_packed_buffer];
+    PointLight light = pc.point_lights[light_idx];
+        color +=  evaluate_point_light_fixed_v4(
             light,
             world_pos,
             V,

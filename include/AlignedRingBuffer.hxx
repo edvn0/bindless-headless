@@ -110,6 +110,23 @@ public:
         buf->write_slice(ctx.allocator, std::span{&value, 1}, off);
     }
 
+    auto fill_zeros(VkCommandBuffer cmd,RenderContext& ctx, u32 slot_index) -> void {
+        auto* buf = ctx.buffers.get(handle());
+        vkCmdFillBuffer(cmd, buf->buffer(), slot_offset_bytes(slot_index), stride(), 0);
+
+        auto barrier = create_info<VkMemoryBarrier2>();
+
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        auto dep = create_info<VkDependencyInfo>();
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &barrier;
+
+        vkCmdPipelineBarrier2(cmd, &dep);
+    }
+
     template<typename FieldT>
         requires std::is_trivial_v<FieldT>
     auto write_field(RenderContext &ctx, u64 slot_index, FieldT const &value, u64 field_offset_bytes) -> void {
