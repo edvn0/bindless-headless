@@ -147,11 +147,11 @@ target_compile_definitions(BindlessEngine PUBLIC
 )
 
 # LTO: put it on the engine (exe inherits on some generators, but be explicit)
-#if(MINGW)
-#  set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-#else()
-#  set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-#endif()
+# if(MINGW)
+# set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+# else()
+# set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+# endif()
 
 # ------------------------------------------------------------
 # App library: your app layer (depends on engine)
@@ -176,7 +176,7 @@ target_include_directories(BindlessApp PUBLIC
 target_link_libraries(BindlessApp PUBLIC
   BindlessEngine
   PRIVATE
-  X11::X11
+  $<$<PLATFORM_ID:Linux>:X11::X11>
 )
 
 if(HAS_TRACY)
@@ -201,21 +201,20 @@ target_include_directories(BindlessHeadless PRIVATE
   ${CMAKE_SOURCE_DIR}/include
 )
 
-
 target_link_libraries(BindlessHeadless PRIVATE
   BindlessApp
   CLI11::CLI11
-  X11::X11
+  $<$<PLATFORM_ID:Linux>:X11::X11>
 )
 
 DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
 
 # If you still want LTO on the exe explicitly:
-#if(MINGW)
-#  set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-#else()
-#  set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-#endif()
+# if(MINGW)
+# set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+# else()
+# set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+# endif()
 
 # ------------------------------------------------------------
 # ASAN check block unchanged (pure configure-time)

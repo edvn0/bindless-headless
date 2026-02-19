@@ -14,11 +14,11 @@ namespace {
 } // namespace
 
 auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent2D extent, float fov_y_radians,
-                                float z_near, float z_far) -> void {
+                                float near_plane, float far_plane) -> void {
     const float aspect = static_cast<float>(extent.width) / std::max(1.0f, static_cast<float>(extent.height));
 
     ubo.view = cam.view_matrix();
-    ubo.projection = glm::perspectiveRH_ZO(fov_y_radians, aspect, z_far, z_near);
+    ubo.projection = glm::perspectiveRH_ZO(fov_y_radians, aspect, far_plane, near_plane);
     ubo.inv_projection = glm::inverse(ubo.projection);
     ubo.view_projection = ubo.projection * ubo.view;
     ubo.camera_position = glm::vec4(cam.camera_position(), 1.0f);
@@ -30,9 +30,9 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
 }
 
 auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
-                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float z_near, float z_far) -> void {
+                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float near_plane, float far_plane) -> void {
     FrameUBO ubo{};
-    fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, z_near, z_far);
+    fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, near_plane, far_plane);
 
     auto write = [&](auto &val, auto offset) { frame_ubo_ring.write_field(ctx, frame_index, val, offset); };
 

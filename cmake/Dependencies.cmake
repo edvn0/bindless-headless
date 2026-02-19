@@ -161,24 +161,56 @@ endif()
 
 if(NOT ENGINE_OFFLINE_SHADERS)
   find_package(Slang CONFIG REQUIRED)
-  
+
   # Ensure SLANG_ROOT is set if find_package didn't set it automatically
   set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
   set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
 
-  # Note the 'lib' prefix added to the filenames below
   add_library(slang-compiler SHARED IMPORTED)
+  add_library(slang-rt       SHARED IMPORTED)
+
   set_target_properties(slang-compiler PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.so"
+    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+  )
+  set_target_properties(slang-rt PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
   )
 
-  add_library(slang-rt SHARED IMPORTED)
-  set_target_properties(slang-rt PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.so"
-    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
-  )
+  if(WIN32)
+    # Typical layout: import libs in lib/, DLLs sometimes in bin/ (depends on the package)
+    # Adjust BIN dir if your package puts DLLs elsewhere.
+    set(SLANG_BIN_DIR "${SLANG_ROOT}/bin")
+
+    set_target_properties(slang-compiler PROPERTIES
+      IMPORTED_IMPLIB   "${SLANG_LIB_DIR}/slang-compiler.lib"
+      IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-compiler.dll"
+    )
+    set_target_properties(slang-rt PROPERTIES
+      IMPORTED_IMPLIB   "${SLANG_LIB_DIR}/slang-rt.lib"
+      IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-rt.dll"
+    )
+
+  elseif(APPLE)
+    set_target_properties(slang-compiler PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.dylib"
+    )
+    set_target_properties(slang-rt PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.dylib"
+    )
+
+  else() # Linux
+    set_target_properties(slang-compiler PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.so"
+    )
+    set_target_properties(slang-rt PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.so"
+    )
+  endif()
+
+  message(STATUS "Slang root: ${SLANG_ROOT}")
+  message(STATUS "Slang lib dir: ${SLANG_LIB_DIR}")
 endif()
+
 
 CPMAddPackage(
   NAME ImGui
@@ -221,7 +253,8 @@ if(ImGui_ADDED AND ImPlot_ADDED)
   target_link_libraries(imgui PUBLIC
     glfw
     volk
-    X11::X11
+    # Link X11::X11 if we are on linux
+    $<$<PLATFORM_ID:Linux>:X11::X11>
     volk::volk_headers
   )
   target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_USER_CONFIG="imconfig.h")
