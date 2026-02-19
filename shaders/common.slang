@@ -58,24 +58,6 @@ struct Transform {
     float3x4 m;
 };
 
-/*float2 unpack_uvs(uint packed_uvs)
-{
-    uint x_bits = packed_uvs & 0xFFFF;
-    uint y_bits = (packed_uvs >> 16) & 0xFFFF;
-    
-    float x = float(x_bits) / 65535.0;
-    float y = float(y_bits) / 65535.0;
-    
-    return float2(x, y);
-}*/
-
-float2 unpack_uvs(uint packed_uvs)
-{
-    // Native Slang/HLSL function for Unorm 2x16
-    printf("%u", packed_uvs);
-    return unpackUnorm2x16ToFloat(packed_uvs).yx;
-}
-
 float4 unpackSnorm3x10_1x2(uint packed)
 {
     // Extract 10-bit fields

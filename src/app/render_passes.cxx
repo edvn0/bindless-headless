@@ -1,5 +1,6 @@
 #include "app/render_passes.hxx"
 #include "AlignedRingBuffer.hxx"
+#include "Constants.hxx"
 #include "CreateInfo.hxx"
 #include "Pipelines.hxx"
 #include "RenderContext.hxx"
@@ -248,76 +249,6 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent, const DrawRange
             sync);
 }
 
-auto run_light_frustum_cull_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync)
-        -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
-    return submit_stage(
-            gpu.tl_compute, gpu.device,
-            [&](VkCommandBuffer cmd) {
-                TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "LightCulling");
-
-                auto &&[cqs, css] = gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
-                                                                     pipes.compute_stats_pool[bounded_frame_index]);
-
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightCullBegin);
-                begin_stats(cmd, *css, ComputeIndex::LightCull);
-
-                const PointLightCullingPushConstants pc{
-                        .ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                        .lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
-                        .flags = res.flags.slot_device_address(bounded_frame_index),
-                        .prefix = res.prefix.slot_device_address(bounded_frame_index),
-                        .compact = res.compact_lights.slot_device_address(bounded_frame_index),
-                        .culled_light_count = res.culled_light_count.slot_device_address(bounded_frame_index),
-                        .light_count = res.light_count,
-                };
-
-                auto bind_and_dispatch = [&](auto &pl, u32 groups_x) {
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.layout, 0, 1, &gpu.bindless.set, 0,
-                                            nullptr);
-
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl.pipeline);
-
-                    vkCmdPushConstants(cmd, pl.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                       sizeof(PointLightCullingPushConstants), &pc);
-
-                    vkCmdDispatch(cmd, groups_x, 1u, 1u);
-                };
-
-                VkMemoryBarrier2 mem_barrier{};
-                mem_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                mem_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                mem_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-                mem_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                mem_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-
-                VkDependencyInfo dep_info{};
-                dep_info.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep_info.memoryBarrierCount = 1;
-                dep_info.pMemoryBarriers = &mem_barrier;
-
-                fill_zeros(cmd, gpu.ctx, bounded_frame_index, res.flags, res.prefix, res.compact_lights,
-                           res.culled_light_count);
-
-                vkCmdPipelineBarrier2(cmd, &dep_info);
-
-                const u32 gc = (res.light_count + THREADS_PER_GROUP - 1) / THREADS_PER_GROUP;
-
-                auto &&[flags, compact] =
-                        gpu.ctx.pipeline_pool.get_multiple(pipes.flags_pipeline, pipes.compact_pipeline);
-
-                bind_and_dispatch(*flags, gc);
-                vkCmdPipelineBarrier2(cmd, &dep_info);
-
-                bind_and_dispatch(*compact, gc);
-                vkCmdPipelineBarrier2(cmd, &dep_info);
-
-                end_stats(cmd, *css, ComputeIndex::LightCull);
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightCullEnd);
-            },
-            sync);
-}
-
 auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync)
         -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
@@ -350,21 +281,21 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
 
                 const ClusteredLightCullingPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                        .culled_lights = res.compact_lights.slot_device_address(bounded_frame_index),
-                        .culled_light_count = res.culled_light_count.slot_device_address(bounded_frame_index),
+                        .all_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
                         .mesh_indirect = res.mesh_indirect_ring.slot_device_address(bounded_frame_index),
+                        .clusters = res.clusters.slot_device_address(bounded_frame_index),
+                        .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
 
                         .z_near = res.clustering_config.z_near,
                         .z_far = res.clustering_config.z_far,
                         .log_z_scale = res.clustering_config.log_z_scale,
 
+                        .light_count = res.light_count,
                         .tiles_x = res.clustering_config.tiles_x,
                         .tiles_y = res.clustering_config.tiles_y,
                         .tiles_z = res.clustering_config.tiles_z,
                         .cluster_count = res.clustering_config.cluster_count,
 
-                        .clusters = res.clusters.slot_device_address(bounded_frame_index),
-                        .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
                 };
 
                 auto &&[build_pipe, finalise] = gpu.ctx.pipeline_pool.get_multiple(pipes.cluster_build_groups_pipeline,
@@ -405,7 +336,7 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
                         .tiles_x = res.clustering_config.tiles_x,
                         .tiles_y = res.clustering_config.tiles_y,
                         .tiles_z = res.clustering_config.tiles_z,
-                        .max_lights_per_cluster = 128,
+                        .max_lights_per_cluster = max_lights_per_cluster,
                         .debug_texture_uav_index = res.debug_culling.index(),
                         .cell_size = cell_size,
                         .slices_per_row = slices_per_row,
@@ -481,7 +412,7 @@ auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, 
                         .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
                         .materials = materials->device_address(),
                         .base_draw_id = 0,
-                        .sampler_index = pipes.linear_repeat.index(),
+                        .sampler_index = pipes.depth_compare_filter.index(),
                 };
 
                 auto &&[vp, sc] = viewport_scissors(shadow_extent);
@@ -834,21 +765,20 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                 DeferredLightingPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
                         .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
+                        .clusters = res.clusters.slot_device_address(bounded_frame_index),
+                        .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
                         .shadow_matrix = ui.shadow_config.light_view_proj,
+                        .log_z_scale = res.clustering_config.log_z_scale,
+                        .near_plane = z_near,
 
                         .tiles_x = res.clustering_config.tiles_x,
                         .tiles_y = res.clustering_config.tiles_y,
                         .tiles_z = res.clustering_config.tiles_z,
-                        .log_z_scale = res.clustering_config.log_z_scale,
-
-                        .clusters = res.clusters.slot_device_address(bounded_frame_index),
-                        .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
 
                         .gbuffer0_index = res.gbuffer0.index(),
                         .gbuffer1_index = res.gbuffer1.index(),
                         .gbuffer2_index = res.gbuffer2.index(),
                         .depth_index = res.depth.index(),
-                        .lit_hdr_uav_index = 0,
                         .sampler_index = pipes.linear_clamp.index(),
                         .shadow_texture_index = res.directional_shadow_map_depth.index(),
                         .shadow_sampler_index = pipes.depth_compare_filter.index(),
@@ -859,28 +789,6 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                                    0, sizeof(pc), &pc);
 
                 vkCmdDraw(cmd, 3, 1, 0, 0);
-
-                {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, debug_point_light->pipeline);
-                    DebugClusteredPushConstants dbg_pc{
-                            .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                            .all_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
-                            .clusters = res.clusters.slot_device_address(bounded_frame_index),
-                            .cluster_light_indices = res.cluster_light_indices.slot_device_address(bounded_frame_index),
-                            .tiles_x = res.clustering_config.tiles_x,
-                            .tiles_y = res.clustering_config.tiles_y,
-                            .tiles_z = res.clustering_config.tiles_z,
-                    };
-
-                    vkCmdPushConstants(cmd, debug_point_light->layout,
-                                       VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT |
-                                               VK_SHADER_STAGE_FRAGMENT_BIT,
-                                       0, sizeof(dbg_pc), &dbg_pc);
-
-                    u32 total_clusters = res.clustering_config.tiles_x * res.clustering_config.tiles_y *
-                                         res.clustering_config.tiles_z;
-                    vkCmdDrawMeshTasksEXT(cmd, total_clusters, 1, 1);
-                }
 
                 vkCmdEndRendering(cmd);
 

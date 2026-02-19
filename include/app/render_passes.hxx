@@ -13,9 +13,6 @@ auto run_rotation_pass(AppContext &, BoundedFrameIndex, BoundedLastFrameIndex,
 auto run_predepth_pass(AppContext &, VkExtent2D frame_extent, const DrawRanges &ranges, BoundedFrameIndex,
                        const SubmitSynchronisation &sync) -> TimelineValue;
 
-auto run_light_frustum_cull_pass(AppContext &, BoundedFrameIndex,
-                                 const SubmitSynchronisation &sync) -> TimelineValue;
-
 auto run_light_clustering_pass(AppContext &, BoundedFrameIndex,
                                const SubmitSynchronisation &sync) -> TimelineValue;
 

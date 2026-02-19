@@ -17,8 +17,10 @@
 #include <cmath>
 #include <volk.h>
 
+#include "Logger.hxx"
 #include "Error.hxx"
 #include "Numeric.hxx"
+#include "vulkan/vulkan.hpp"
 
 #include <vk_mem_alloc.h>
 
@@ -60,7 +62,13 @@ struct TypedDeviceAddress {
     explicit(false) operator DeviceAddress() const { return address; }
 };
 
-auto vk_check(VkResult result) -> void;
+inline auto vk_check(VkResult result, std::source_location err = std::source_location::current()) -> void {
+    if (result != VK_SUCCESS) {
+        warn("Check {} failed from: {}:{}:{}", static_cast<i32>(result),
+                                        err.file_name(), err.line(), err.column());
+        std::abort();
+    }
+}
 
 auto pipeline_cache_path() -> std::optional<std::filesystem::path>;
 

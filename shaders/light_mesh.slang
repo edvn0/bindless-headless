@@ -69,16 +69,14 @@ void main_ms(
             ((tid & 4) == 0) ? 1.0 : -1.0
         );
 
-        float3 world_pos = (local_pos * light.position_radius.w * 0.05F) + light.position_radius.xyz;
+float3 world_pos = (local_pos * light.position_radius.w * 0.01F) + light.position_radius.xyz;
         out_vertices[tid].pos = mul(pc.frame_ubo->view_projection, float4(world_pos, 1.0));
         
-        float3 debug_col = float3(
-    float(light_idx & 0xFF) / 255.0,
-    float((light_idx >> 8) & 0xFF) / 255.0,
-    float((light_idx >> 16) & 0xFF) / 255.0
-);
+float3 view_pos = mul(pc.frame_ubo->view, float4(light.position_radius.xyz, 1.0)).xyz;
+float view_dist = -view_pos.z;
+printf("%f", view_dist);
+out_vertices[tid].color = float4(abs(view_dist) / 500.0, 0.0, 0.0, 1.0);
         
-        out_vertices[tid].color = float4(debug_col, 1.0);
     }
 
     if (tid < 12) {

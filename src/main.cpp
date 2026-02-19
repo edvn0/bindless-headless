@@ -41,6 +41,12 @@ namespace {
 auto main(int argc, char **argv) -> int {
     BindlessApp app;
 
+      if (glfwPlatformSupported(GLFW_PLATFORM_X11)) {
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+  } else {
+    error("No X11 Support");
+  }
+
     if (auto init = glfwInit(); init != GLFW_TRUE) {
         error("Could not initialize GLFW");
         return 1;

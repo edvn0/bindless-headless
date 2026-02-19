@@ -1,5 +1,7 @@
 import common;
 import maths;
+import pointer;
+import constants;
 
 // -------------------------------------------------------------------------------------------------
 // Material evaluation (NOW uses vertex T/B/N for normal mapping)
@@ -201,6 +203,41 @@ float3 evaluate_directional_light(
     return calculate_direct_lighting(L, V, N, albedo, roughness, metallic, radiance);
 }
 
+float3 evaluate_point_light_pbr(
+    PointLight light,
+    float3 world_pos,
+    float3 V,
+    float3 N,
+    float3 albedo,
+    float  roughness,
+    float  metallic)
+{
+    float3 light_pos = light.position_radius.xyz;
+    float  radius    = light.position_radius.w;
+    float3 light_col = light.colour_intensity.rgb;
+    float  intensity = light.colour_intensity.a;
+
+    float3 L_unnorm = light_pos - world_pos;
+    float dist_sq   = dot(L_unnorm, L_unnorm);
+    float dist      = sqrt(dist_sq);
+
+    if (dist < 1e-4 || dist > radius) return 0.0.xxx;
+
+    float3 L = L_unnorm / dist;
+
+    float inv_sq    = 1.0 / max(dist_sq, 0.01 * 0.01);
+float radius_sq = radius * radius;
+float window    = saturate(1.0 - (dist_sq * dist_sq) / (radius_sq * radius_sq));
+window         *= window;
+
+// ref_dist is "at what distance does intensity=1 mean full brightness"
+// For a 4000-unit world with radii in [30,600], something like 1.0–5.0 works.
+// Essentially converts intensity from "power" to "brightness at ref_dist".
+static const float ref_dist_sq = 100000.0; // tune this one constant
+float3 radiance = light_col * intensity * (inv_sq * ref_dist_sq) * window;
+
+    return calculate_direct_lighting(L, V, N, albedo, roughness, metallic, radiance);
+}
 
 float3 evaluate_point_light_fixed_v4(
     PointLight light,
@@ -443,20 +480,20 @@ struct DeferredLightingPushConstants {
 */
 struct DeferredLightingPushConstants
 {
-    Ptr<UBO, Access.Read, AddressSpace.Device>        frame_ubo;
-    Ptr<PointLight, Access.Read, AddressSpace.Device> point_lights;
+    DeviceReadPtr<UBO>        frame_ubo;
+    DeviceReadPtr<PointLight> point_lights;
+    DeviceReadPtr<Cluster> clusters;               // Cluster offset/count data
+    DeviceReadPtr<uint>    cluster_light_indices;  // Packed light indices
     float4x4 shadow_matrix;
+    float log_z_scale;
+    float z_near;
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
-    float log_z_scale;
-    Ptr<Cluster, Access.Read, AddressSpace.Device> clusters;               // Cluster offset/count data
-    Ptr<uint, Access.Read, AddressSpace.Device>    cluster_light_indices;  // Packed light indices
     uint gbuffer0_index;
     uint gbuffer1_index;
     uint gbuffer2_index;
     uint depth_index;
-    uint lit_hdr_uav_index;
     uint sampler_index;
     uint shadow_texture_index;
     uint shadow_sampler_index;
@@ -554,7 +591,7 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     uint cluster_idx = compute_cluster_index(
         i.position.xy,
         view_pos,
-        1.0F, // pc.z_near some time in the future?
+        pc.z_near, 
         pc.log_z_scale,
         pc.tiles_x,
         pc.tiles_y,
@@ -563,12 +600,13 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     );
 
     var cluster = pc.clusters[cluster_idx];
-    for (uint li = 0; li < cluster.light_count; ++li)
+    var count = min(cluster.light_count, MAX_LIGHTS_PER_CLUSTER);
+    for (uint li = 0; li < count; ++li)
     {
         uint index_in_packed_buffer = cluster.light_offset + li;
     uint light_idx = pc.cluster_light_indices[index_in_packed_buffer];
     PointLight light = pc.point_lights[light_idx];
-        color +=  evaluate_point_light_fixed_v4(
+        color +=  evaluate_point_light_pbr(
             light,
             world_pos,
             V,
@@ -580,6 +618,28 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
     }
 
     color += emissive;
+if (pc.debug_mode == 1)
+{
+     uint cluster_z = uint(log2(max(-view_pos.z / pc.z_near, 1.0)) * pc.log_z_scale);
+    cluster_z = min(cluster_z, pc.tiles_z - 1);
+    // Visualise Z slice as a colour
+    float t = float(cluster_z) / float(pc.tiles_z);
+    return float4(t, 1.0 - t, 0.0, 1.0);
+}
+if (pc.debug_mode == 2)
+{
+    // Visualise light count per cluster
+    float t = float(cluster.light_count) / 128.0;
+    return float4(t, t, t, 1.0);
+} 
+if (pc.debug_mode == 3)
+{
+    // Red = view_pos.z is positive (wrong), green = negative (correct)
+    return view_pos.z > 0.0 
+        ? float4(1.0, 0.0, 0.0, 1.0) 
+        : float4(0.0, 1.0, 0.0, 1.0);
+}else {
 
     return float4(color, 1.0);
+}
 }

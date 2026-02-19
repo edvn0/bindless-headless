@@ -927,51 +927,6 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
     return CompiledPipeline{pipeline, pipeline_layout};
 }
 
-auto create_deferred_lighting_compute_pipeline(VkDevice device, PipelineCache &cache,
-                                               VkDescriptorSetLayout bindless_layout, const std::vector<u32> &cs_code,
-                                               std::string_view entry_name) -> CompiledPipeline {
-    VkShaderModule cs_module{};
-    {
-        auto ci = create_info<VkShaderModuleCreateInfo>();
-        ci.codeSize = cs_code.size() * sizeof(u32);
-        ci.pCode = cs_code.data();
-        vk_check(vkCreateShaderModule(device, &ci, nullptr, &cs_module));
-    }
-
-    VkPushConstantRange push_range{
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            .offset = 0,
-            .size = sizeof(DeferredLightingPushConstants),
-    };
-
-    VkPipelineLayout layout{};
-    {
-        auto plci = create_info<VkPipelineLayoutCreateInfo>();
-        plci.setLayoutCount = 1;
-        plci.pSetLayouts = &bindless_layout;
-        plci.pushConstantRangeCount = 1;
-        plci.pPushConstantRanges = &push_range;
-        vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &layout));
-        set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, std::string(entry_name).c_str());
-    }
-
-    auto stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
-    stage_ci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage_ci.module = cs_module;
-    stage_ci.pName = entry_name.data();
-
-    auto cpci = create_info<VkComputePipelineCreateInfo>();
-    cpci.stage = stage_ci;
-    cpci.layout = layout;
-
-    VkPipeline pipeline{};
-    vk_check(vkCreateComputePipelines(device, cache, 1, &cpci, nullptr, &pipeline));
-    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, std::string(entry_name).c_str());
-
-    vkDestroyShaderModule(device, cs_module, nullptr);
-    return {.pipeline = pipeline, .layout = layout};
-}
-
 auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache &cache,
                                                 VkDescriptorSetLayout bindless_layout,
                                                 const std::vector<u32> &frag_code, const VkShaderModule vert,

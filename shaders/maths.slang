@@ -2,19 +2,13 @@ import common;
 
 bool sphere_in_frustum(float3 view_pos, float radius, float4 frustum_planes[6])
 {
-    for (int i = 0; i < 6; ++i) {
-        float3 normal = frustum_planes[i].xyz;
-        float d = frustum_planes[i].w;
-
-        float dist = dot(normal, view_pos) + d;
-
-        if (dist < -radius)
+    for (int i = 0; i < 6; ++i)
+    {
+        if (dot(frustum_planes[i].xyz, view_pos) + frustum_planes[i].w < -radius)
             return false;
     }
-
     return true;
 }
-
 bool light_in_frustum(PointLight l, float4x4 view, float4 frustum_planes[6])
 {
     float3 world_pos = l.position_radius.xyz;
@@ -73,13 +67,22 @@ float3 oct_decode(float2 e)
 float2 oct_to_unorm(float2 oct) { return oct * 0.5 + 0.5; }
 float2 unorm_to_oct(float2 u)   { return u * 2.0 - 1.0; }
 
-float3 unproject_to_view(float4x4 inv_proj, float2 ndc_xy, float linear_depth) {
+float3 unproject_to_view(float4x4 inv_proj, float2 ndc_xy, float linear_depth)
+{
+    // For a perspective projection, the view-space Z is -linear_depth (RH, looking down -Z).
+    // Project that back to NDC Z using the projection terms directly, then unproject.
+    // This avoids the fragile xy/z rescaling entirely.
+
+    // We want view-space point (x, y, -linear_depth).
+    // Unproject NDC xy at w=1 to get the ray direction at z=-1 in view space.
     float4 clip = float4(ndc_xy, 0.0, 1.0);
-    clip.y = - clip.y;
     float4 view = mul(inv_proj, clip);
     view /= view.w;
-    float2 xy = (view.xy / view.z) * linear_depth;
-    return float3(xy, -linear_depth);
+
+    // view.xyz is now a view-space point on the near plane.
+    // Scale so that z = -linear_depth.
+    float scale = -linear_depth / view.z;
+    return view.xyz * scale;
 }
 
 struct ClusterViewData {

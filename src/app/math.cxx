@@ -36,7 +36,7 @@ auto spawn_lights_in_aabb(AABB const &aabb, std::span<PointLight> lights) -> voi
     auto y_distrib = std::uniform_real_distribution{aabb.min.y, aabb.max.y};
     auto z_distrib = std::uniform_real_distribution{aabb.min.z, aabb.max.z};
     auto radius_distrib = std::uniform_real_distribution{30.0F, 600.0F};
-    auto intensity_distrib = std::uniform_real_distribution{100.0F, 500.0F};
+auto intensity_distrib = std::uniform_real_distribution{0.5F,   5.0F};
 
     auto color_distribution = std::uniform_real_distribution{0.0F, 1.0F};
 

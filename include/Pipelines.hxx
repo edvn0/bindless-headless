@@ -2,6 +2,7 @@
 
 #include <volk.h>
 
+#include "Constants.hxx"
 #include "Forward.hxx"
 #include "Types.hxx"
 
@@ -22,11 +23,15 @@ struct PointLightCullingPushConstants {
     const DeviceAddress culled_light_count; // OUTPUT
     const u32 light_count;
 };
-/**struct PushConstants
+
+/**
+struct PushConstants
 {
-    UBO*        frame_ubo;
-    PointLight* lights; // Compacted frustum culled
-    uint*        light_count; // Compacted frustum culled count
+    DeviceReadPtr<UBO>        frame_ubo;
+    DeviceReadPtr<PointLight> lights;       // full unculled array
+    DeviceWritePtr<VkDrawMeshTasksIndirectCommandEXT> indirect_command;
+    uint                      light_count;  // full unculled count (plain uint, no pointer)
+
 
     float z_near;
     float z_far;
@@ -37,27 +42,26 @@ struct PointLightCullingPushConstants {
     uint tiles_z;
     uint cluster_count;
 
-    Cluster*    clusters;               // [cluster_count] - offset and count
-    uint*       cluster_light_indices;  // [total_lights_across_clusters]
-};
- */
+    Cluster* clusters;
+    uint*    cluster_light_indices;
+}; */
 struct ClusteredLightCullingPushConstants {
     const DeviceAddress frame_ubo;
-    const DeviceAddress culled_lights;
-    const DeviceAddress culled_light_count;
+    const DeviceAddress all_lights;
     const DeviceAddress mesh_indirect;
-
+    const DeviceAddress clusters;
+    const DeviceAddress cluster_light_indices;
+    
     float z_near;
     float z_far;
     float log_z_scale;
-
+    
+    u32 light_count;
     u32 tiles_x;
     u32 tiles_y;
     u32 tiles_z;
     u32 cluster_count;
 
-    const DeviceAddress clusters;
-    const DeviceAddress cluster_light_indices;
 };
 
 struct PredepthPushConstants {
@@ -110,50 +114,47 @@ struct RotatePushConstant {
     const DeviceAddress static_point_lights;
 };
 
-/*
+/**
 struct DeferredLightingPushConstants
 {
-    UBO*        frame_ubo;
-    PointLight* point_lights;
+    DeviceReadPtr<UBO>        frame_ubo;
+    DeviceReadPtr<PointLight> point_lights;
+    DeviceReadPtr<Cluster> clusters;               // Cluster offset/count data
+    DeviceReadPtr<uint>    cluster_light_indices;  // Packed light indices
     float4x4 shadow_matrix;
+    float log_z_scale;
+    float z_near;
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
-    float log_z_scale;
-    Cluster* clusters;               // Cluster offset/count data
-    uint*    cluster_light_indices;  // Packed light indices
     uint gbuffer0_index;
     uint gbuffer1_index;
     uint gbuffer2_index;
     uint depth_index;
-    uint lit_hdr_uav_index;
     uint sampler_index;
     uint shadow_texture_index;
     uint shadow_sampler_index;
     uint debug_mode;
-};
-    };*/
+}; */
 struct DeferredLightingPushConstants {
     const DeviceAddress frame_ubo;
     const DeviceAddress point_lights; // All the lights
+    const DeviceAddress clusters;
+    const DeviceAddress cluster_light_indices;
     const glm::mat4 shadow_matrix;
+    float log_z_scale;
+    f32 near_plane {z_near};
 
     u32 tiles_x;
     u32 tiles_y;
     u32 tiles_z;
-    float log_z_scale;
-
-    const DeviceAddress clusters;
-    const DeviceAddress cluster_light_indices;
-
     u32 gbuffer0_index;
     u32 gbuffer1_index;
     u32 gbuffer2_index;
     u32 depth_index;
-    u32 lit_hdr_uav_index{0}; // For the compute version, just 0 always
     u32 sampler_index;
-    const u32 shadow_texture_index;
-    const u32 shadow_sampler_index;
+    u32 shadow_texture_index;
+    u32 shadow_sampler_index;
     u32 debug_mode;
 };
 
@@ -224,10 +225,6 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache &cache, VkDescriptor
                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                              VkFormat gbuffer0_format, VkFormat gbuffer1_format, VkFormat gbuffer2_format,
                              VkFormat depth_format) -> CompiledPipeline;
-
-auto create_deferred_lighting_compute_pipeline(VkDevice device, PipelineCache &cache,
-                                               VkDescriptorSetLayout bindless_layout, const std::vector<u32> &cs_code,
-                                               std::string_view entry_name) -> CompiledPipeline;
 
 auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache &cache,
                                                 VkDescriptorSetLayout bindless_layout, const std::vector<u32> &frag,

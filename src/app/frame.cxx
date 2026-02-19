@@ -1,7 +1,9 @@
 #include "app/frame.hxx"
-#include <glm/ext/matrix_clip_space.hpp>
 
 #include "app/app.hxx"
+
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/gtx/string_cast.hpp>
 
 namespace {
     auto max_in_flight_retire_value(AppResources const &res) -> u64 {
@@ -18,6 +20,7 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     const float aspect = static_cast<float>(extent.width) / std::max(1.0f, static_cast<float>(extent.height));
 
     ubo.view = cam.view_matrix();
+    // info("{}", glm::to_string(ubo.view));
     ubo.projection = glm::perspectiveRH_ZO(fov_y_radians, aspect, far_plane, near_plane);
     ubo.inv_projection = glm::inverse(ubo.projection);
     ubo.view_projection = ubo.projection * ubo.view;
@@ -25,8 +28,10 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     ubo.inv_view_projection = glm::inverse(ubo.view_projection);
     ubo.viewport_size = glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
 
-    const auto planes = extract_frustum_planes(ubo.view_projection);
+    const auto planes = extract_frustum_planes(ubo.projection);
+    
     ubo.frustum_planes = planes;
+    std::swap(ubo.frustum_planes[4], ubo.frustum_planes[5]);
 }
 
 auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,

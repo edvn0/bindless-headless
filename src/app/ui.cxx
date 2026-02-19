@@ -112,18 +112,17 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
         const auto &c_times = *compute_res;
         ctx.ui.gpu_frame_graph.push_sample(0, c_times[static_cast<u32>(ComputeIndex::RotateGeometry)]);
         ctx.ui.gpu_frame_graph.push_sample(1, c_times[static_cast<u32>(ComputeIndex::RotateLights)]);
-        ctx.ui.gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::LightCull)]);
-        ctx.ui.gpu_frame_graph.push_sample(3, c_times[static_cast<u32>(ComputeIndex::LightClustering)]);
+        ctx.ui.gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::LightClustering)]);
     }
 
     if (graphics_res.has_value()) {
         const auto &g_times = *graphics_res;
-        ctx.ui.gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
-        ctx.ui.gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
-        ctx.ui.gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
-        ctx.ui.gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
-        ctx.ui.gpu_frame_graph.push_sample(8, g_times[static_cast<u32>(GraphicsIndex::Present)]);
-        ctx.ui.gpu_frame_graph.push_sample(9, g_times[static_cast<u32>(GraphicsIndex::ShadowMap)]);
+        ctx.ui.gpu_frame_graph.push_sample(3, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
+        ctx.ui.gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
+        ctx.ui.gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
+        ctx.ui.gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
+        ctx.ui.gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Present)]);
+        ctx.ui.gpu_frame_graph.push_sample(8, g_times[static_cast<u32>(GraphicsIndex::ShadowMap)]);
     }
 
     widget("Performance Graphs", [&] {
@@ -235,7 +234,6 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
 
                     row_c("Rotate geometry", ComputeIndex::RotateGeometry);
                     row_c("Rotate lights", ComputeIndex::RotateLights);
-                    row_c("Light Culling", ComputeIndex::LightCull);
                     row_c("Light Clustering", ComputeIndex::LightClustering);
 
                     ImGui::EndTable();
@@ -449,17 +447,14 @@ auto window_center(GLFWwindow *w) -> glm::vec2 {
 }
 
 auto begin_cursor_capture(GLFWwindow *w, AppState &app) -> void {
-    // 1. Get current position BEFORE disabling to seed the tracker
-    double x, y;
+    double x{}, y{};
     glfwGetCursorPos(w, &x, &y);
     app.last_mouse = glm::vec2(static_cast<float>(x), static_cast<float>(y));
 
-    // 2. Enable Raw Motion (helps X11 significantly)
     if (glfwRawMouseMotionSupported()) {
         glfwSetInputMode(w, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
     }
 
-    // 3. Disable cursor (GLFW now handles virtual centering)
     glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     app.cursor_captured = true;

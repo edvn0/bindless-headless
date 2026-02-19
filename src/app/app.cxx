@@ -19,8 +19,10 @@
 #include <ranges>
 #include <thread>
 #include <unordered_map>
+#include <vulkan/vulkan_core.h>
 
 #include "Constants.hxx"
+#include "Logger.hxx"
 #include "Pipelines.hxx"
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
@@ -389,8 +391,19 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             return 1;
         }
 
-        vk_check(glfwCreateWindowSurface(instance.instance, gpu.window, nullptr, &gpu.surface));
+        auto res = glfwCreateWindowSurface(instance.instance, gpu.window, nullptr, &gpu.surface);
+
+        if (res != VK_SUCCESS) {
+            const char *description;
+            int code = glfwGetError(&description);
+
+            if (description) {
+                error("GLFW Error ({}): {}",code, description);
+                std::abort();
+            }
+        }
     }
+
 
     {
         auto maybe_swapchain = Swapchain::create(SwapchainCreateInfo{
@@ -681,9 +694,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Clustering buffers ---
     {
-        res.clustering_config = cluster_config(16, 9, 16, z_near, z_far);
+        res.clustering_config = cluster_config(16, 9, 24, z_near, z_far);
 
-        constexpr u32 max_lights_per_cluster = 128u;
         res.max_light_indices = res.clustering_config.cluster_count * max_lights_per_cluster;
 
         res.clusters =
@@ -1012,7 +1024,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     if (!ui.graphs_initialized) {
         ui.gpu_frame_graph.add_line("Geometry Rotate");
         ui.gpu_frame_graph.add_line("Light Rotate");
-        ui.gpu_frame_graph.add_line("Light Culling");
         ui.gpu_frame_graph.add_line("Clustering");
         ui.gpu_frame_graph.add_line("Pre-Depth");
         ui.gpu_frame_graph.add_line("GBuffer");
@@ -1190,25 +1201,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         }
 
         {
-            const std::array culling_waits{
-                    TimelineWait{.value = fs.timeline_values[stage_index(Stage::Predepth)],
-                                 .semaphore = gpu.tl_graphics.timeline,
-                                 .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
-                    TimelineWait{.value = fs.timeline_values[stage_index(Stage::CubeRotation)],
-                                 .semaphore = gpu.tl_compute.timeline,
-                                 .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT},
-            };
-            fs.timeline_values[stage_index(Stage::LightCulling)] = run_light_frustum_cull_pass(
-                    app_context, bounded_frame_index, SubmitSynchronisation{.timeline_waits = culling_waits});
-        }
-
-        {
-            const std::array clustering_waits{
-                    TimelineWait{.value = fs.timeline_values[stage_index(Stage::LightCulling)],
-                                 .semaphore = gpu.tl_compute.timeline,
-                                 .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}};
-            fs.timeline_values[stage_index(Stage::LightClustering)] = run_light_clustering_pass(
-                    app_context, bounded_frame_index, SubmitSynchronisation{.timeline_waits = clustering_waits});
+            fs.timeline_values[stage_index(Stage::LightClustering)] =
+                    run_light_clustering_pass(app_context, bounded_frame_index, no_waits);
         }
 
         {

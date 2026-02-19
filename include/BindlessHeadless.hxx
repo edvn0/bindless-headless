@@ -4,11 +4,10 @@
 #include "GlobalCommandContext.hxx"
 #include "Logger.hxx"
 #include "Types.hxx"
+#include "Logger.hxx"
+#include "CreateInfo.hxx"
 
 #include <bitset>
-#include <volk.h>
-
-#include <GLFW/glfw3.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -20,11 +19,11 @@
 #include <string_view>
 #include <vector>
 
-
+#include <GLFW/glfw3.h>
+#include <volk.h>
 #include <tl/expected.hpp>
 #include <vk_mem_alloc.h>
 
-#include "CreateInfo.hxx"
 
 
 namespace detail {
@@ -48,6 +47,7 @@ namespace detail {
                                     .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
                                     .pInheritanceInfo = nullptr};
         vk_check(vkBeginCommandBuffer(cb, &bi));
+
 
         record(cb);
 
@@ -84,14 +84,13 @@ auto set_debug_name(VkDevice dev, VkObjectType t, const T &obj, std::string_view
 }
 
 enum class Stage : u32 {
-    LightCulling = 0,
-    GBuffer = 1,
-    Predepth = 2,
-    Tonemapping = 3,
-    CubeRotation = 4,
-    DeferredLighting = 5,
-    LightClustering = 6,
-    DirectionalShadowMap = 7,
+    GBuffer,
+    Predepth,
+    Tonemapping,
+    CubeRotation,
+    DeferredLighting,
+    LightClustering,
+    DirectionalShadowMap,
     Count,
 };
 
@@ -130,7 +129,7 @@ struct Timeline {
 };
 
 using GraphicsTimeline = Timeline<4>;
-using ComputeTimeline = Timeline<4>;
+using ComputeTimeline = Timeline<3>;
 using TransferTimeline = Timeline<1>;
 
 auto create_compute_timeline(VkDevice, VkQueue, u32) -> ComputeTimeline;
@@ -343,8 +342,8 @@ struct PhysicalDeviceChoice {
 using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32, u32>;
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
-enum class ComputeStamp : u32 { RotateGeometryBegin, RotateGeometryEnd, RotateLightsBegin, RotateLightsEnd, LightCullBegin, LightCullEnd,  LightClusteringBegin, LightClusteringEnd, Count };
-enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightCull,  LightClustering, Count };
+enum class ComputeStamp : u32 { RotateGeometryBegin, RotateGeometryEnd, RotateLightsBegin, RotateLightsEnd,  LightClusteringBegin, LightClusteringEnd, Count };
+enum class ComputeIndex : u32 { RotateGeometry, RotateLights,  LightClustering, Count };
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
 inline constexpr u32 stats_compute_count = static_cast<u32>(ComputeIndex::Count);

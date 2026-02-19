@@ -1,5 +1,6 @@
 import common;
 import maths;
+import pointer;
 
 [[vk::constant_id(0)]]
 const int MAX_WAVES_PER_GROUP = 4;
@@ -8,11 +9,11 @@ const int THREADS_PER_GROUP = 64;
 
 struct PushConstants
 {
-    UBO*        frame_ubo;
-    PointLight* lights;
+    DeviceReadPtr<UBO>        frame_ubo;
+    DeviceReadPtr<PointLight> lights;
 
-    uint*       flags;                // [light_count]
-    uint*       prefix;               // [light_count] (inclusive, per-group)
+    DeviceWritePtr<uint>       flags;                // [light_count]
+    DeviceWritePtr<uint>       prefix;               // [light_count] (inclusive, per-group)
 
     PointLight* compact;              // output compacted lights
     uint*       culled_light_count;   // single uint (global atomic counter)

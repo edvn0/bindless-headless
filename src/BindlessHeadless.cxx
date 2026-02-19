@@ -16,13 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <optional>
-
-auto vk_check(VkResult result) -> void {
-    if (result != VK_SUCCESS) {
-        warn("Check failed: {}", static_cast<u32>(result));
-        std::abort();
-    }
-}
+#include <source_location>
 
 namespace {
     auto mip_extent(u32 base_w, u32 base_h, u32 level) -> VkExtent3D {
@@ -142,7 +136,7 @@ namespace destruction {
     }
 
     auto timeline(VkDevice device, GraphicsTimeline &t) -> void { tl(device, t); }
-
+    auto timeline(VkDevice device, ComputeTimeline &t) -> void { tl(device, t); }
     auto timeline(VkDevice device, TransferTimeline &t) -> void { tl(device, t); }
 
     auto pipeline(VkDevice dev, VkPipeline &p, VkPipelineLayout &l) -> void {
@@ -1170,6 +1164,8 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
     vk_check(vkCreateDevice(pd, &dci, nullptr, &device));
     volkLoadDevice(device);
 
+    info("Created device.");
+
     VkQueue gq{};
     vkGetDeviceQueue(device, graphics_index, 0u, &gq);
 
@@ -1178,6 +1174,8 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
 
     VkQueue tq{};
     vkGetDeviceQueue(device, transfer_index, 0u, &tq);
+
+    info("Created all the queues.");
 
     return {device, gq, cq, tq, enabled_features};
 }

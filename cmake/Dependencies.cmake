@@ -27,7 +27,9 @@ CPMAddPackage(
 CPMAddPackage(
   URI "gh:glfw/glfw#3.4"
   GIT_SHALLOW YES
-  OPTIONS "GLFW_BUILD_WAYLAND OFF"
+  OPTIONS 
+  "GLFW_BUILD_WAYLAND OFF"
+  "GLFW_BUILD_X11 ON"
 )
 
 CPMAddPackage(
@@ -227,7 +229,7 @@ CPMAddPackage(
   DOWNLOAD_ONLY YES
 )
 
-if(ImGui_ADDED AND ImPlot_ADDED)
+if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR)
   set(IMGUI_SRCS
     ${ImGui_SOURCE_DIR}/imgui.cpp
     ${ImGui_SOURCE_DIR}/imgui_demo.cpp
@@ -238,24 +240,34 @@ if(ImGui_ADDED AND ImPlot_ADDED)
     ${ImGui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
   )
 
-  # Add ImPlot sources
   set(IMPLOT_SRCS
     ${ImPlot_SOURCE_DIR}/implot.cpp
     ${ImPlot_SOURCE_DIR}/implot_items.cpp
   )
 
   add_library(imgui STATIC ${IMGUI_SRCS} ${IMPLOT_SRCS})
+
   target_include_directories(imgui PUBLIC
     ${ImGui_SOURCE_DIR}
     ${ImGui_SOURCE_DIR}/backends
-    ${ImPlot_SOURCE_DIR} # Add ImPlot includes
+    ${ImPlot_SOURCE_DIR}
   )
+
   target_link_libraries(imgui PUBLIC
     glfw
     volk
-    # Link X11::X11 if we are on linux
-    $<$<PLATFORM_ID:Linux>:X11::X11>
     volk::volk_headers
+    X11::X11
   )
-  target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE IMGUI_IMPL_VULKAN_USE_VOLK IMGUI_USER_CONFIG="imconfig.h")
+
+  target_compile_definitions(imgui
+    PUBLIC
+      GLFW_INCLUDE_NONE
+      IMGUI_IMPL_VULKAN_USE_VOLK
+      IMGUI_USER_CONFIG="imconfig.h"
+    PRIVATE
+      # These must be PRIVATE (affect .cpp compilation) not PUBLIC
+      GLFW_HAS_X11=1
+      GLFW_HAS_WAYLAND=0
+  )
 endif()

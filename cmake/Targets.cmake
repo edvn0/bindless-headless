@@ -100,6 +100,7 @@ target_include_directories(BindlessEngine PUBLIC
 
 target_link_libraries(BindlessEngine PUBLIC
   volk
+  X11::X11
   BindlessHeadlessAllocator
   ktx
   spdlog::spdlog
@@ -176,7 +177,7 @@ target_include_directories(BindlessApp PUBLIC
 target_link_libraries(BindlessApp PUBLIC
   BindlessEngine
   PRIVATE
-  $<$<PLATFORM_ID:Linux>:X11::X11>
+    X11::X11
 )
 
 if(HAS_TRACY)
@@ -204,7 +205,7 @@ target_include_directories(BindlessHeadless PRIVATE
 target_link_libraries(BindlessHeadless PRIVATE
   BindlessApp
   CLI11::CLI11
-  $<$<PLATFORM_ID:Linux>:X11::X11>
+  X11::X11
 )
 
 DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
