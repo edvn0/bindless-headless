@@ -1,10 +1,10 @@
 #include "app/render_passes.hxx"
 #include "AlignedRingBuffer.hxx"
+#include "BindlessHeadless.hxx"
 #include "Constants.hxx"
 #include "CreateInfo.hxx"
 #include "Pipelines.hxx"
 #include "RenderContext.hxx"
-#include "vulkan/vulkan_core.h"
 
 namespace {
     constexpr auto begin_query_for_index = [](const RenderContext &c, const VkCommandBuffer cmd,
@@ -34,7 +34,7 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
             .delta_time = static_cast<float>(ui.dt),
             .rads_per_second = glm::radians(20.0f),
             .total_time = static_cast<f32>(ui.total_time),
-            .count = res.instance_count,
+            .count = res.instance_count(),
             .previous_frame_transforms = res.transforms_ring.slot_device_address(last_frame_index),
             .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
             .previous_point_lights = res.point_lights_ring.slot_device_address(last_frame_index),
@@ -56,7 +56,7 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
                 vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(geo_pc), &geo_pc);
 
-                const u32 groups = (res.instance_count + 63u) / 64u;
+                const u32 groups = (res.instance_count() + 63u) / 64u;
                 vkCmdDispatch(cmd, groups, 1, 1);
 
                 end_stats(cmd, *stats_pool, ComputeIndex::RotateGeometry);
@@ -71,7 +71,7 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
                 barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                 barrier.buffer = cube_buffer->buffer();
                 barrier.offset = static_cast<VkDeviceSize>(res.transforms_ring.slot_offset_bytes(bounded_frame_index));
-                barrier.size = static_cast<VkDeviceSize>(res.instance_count * sizeof(glm::mat4x3));
+                barrier.size = static_cast<VkDeviceSize>(res.instance_count() * sizeof(glm::mat4x3));
 
                 VkDependencyInfo dep{};
                 dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -140,8 +140,11 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
 }
 
 
-auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent, const DrawRanges &ranges,
-                       const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
+auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
+                       std::span<const MeshInstanceRange> mesh_instance_ranges,
+                       std::span<const DrawRanges> ranges,
+                       const u32 bounded_frame_index,
+                       const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
 
     return submit_stage(
@@ -150,7 +153,8 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent, const DrawRange
                 TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "Predepth");
 
                 auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
-                        pipes.graphics_query_pool[bounded_frame_index], pipes.graphics_stats_pool[bounded_frame_index]);
+                        pipes.graphics_query_pool[bounded_frame_index],
+                        pipes.graphics_stats_pool[bounded_frame_index]);
 
                 auto &&[predepth, alpha] =
                         gpu.ctx.pipeline_pool.get_multiple(pipes.predepth_pipeline, pipes.predepth_alpha_pipeline);
@@ -158,88 +162,102 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent, const DrawRange
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::PreDepthBegin);
                 begin_stats(cmd, *stats_pool, GraphicsIndex::PreDepth);
 
-                auto &&depth = gpu.ctx.textures.get(res.depth);
-                auto &&[indirect, verts, idx, materials] =
-                        gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), res.mesh.pos_uv_buffer,
-                                                     res.mesh.index_buffer, res.mesh.material_buffer);
+                auto *depth = gpu.ctx.textures.get(res.depth);
 
                 depth->transition_if_not_initialised(
                         cmd, VK_IMAGE_LAYOUT_GENERAL,
-                        {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
+                        {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
 
                 VkRenderingAttachmentInfo depth_attachment{};
-                depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                depth_attachment.imageView = depth->attachment_view;
+                depth_attachment.sType      = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                depth_attachment.imageView  = depth->attachment_view;
                 depth_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                depth_attachment.loadOp     = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                depth_attachment.storeOp    = VK_ATTACHMENT_STORE_OP_STORE;
                 depth_attachment.clearValue = {.depthStencil = {0.0f, 0}};
 
                 VkRenderingInfo rendering_info{};
-                rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                rendering_info.renderArea = {.offset = {0, 0}, .extent = {frame_extent.width, frame_extent.height}};
-                rendering_info.layerCount = 1;
-                rendering_info.pDepthAttachment = &depth_attachment;
+                rendering_info.sType             = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                rendering_info.renderArea        = {.offset = {0, 0},
+                                                    .extent = {frame_extent.width, frame_extent.height}};
+                rendering_info.layerCount        = 1;
+                rendering_info.pDepthAttachment  = &depth_attachment;
 
                 vkCmdBeginRendering(cmd, &rendering_info);
-
-                const PredepthPushConstants pc{
-                        .ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                        .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
-                        .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
-                        .materials = materials->device_address(),
-                        .base_draw_id = ranges.opaque_base,
-                        .sampler_index = 0,
-                };
 
                 auto &&[vp, sc] = viewport_scissors(frame_extent);
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &sc);
-                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL); // Reverse-Z
-                vkCmdSetDepthBounds(cmd, 0.0F, 1.0F);
+                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
+                vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
-                vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
-                std::array<VkBuffer, 1> buffers = {verts->buffer()};
-                std::array<VkDeviceSize, 1> offsets = {0};
-                const auto size = VkDeviceSize{verts->size()};
-                vkCmdBindVertexBuffers2(cmd, 0, 1, buffers.data(), offsets.data(), &size, nullptr);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gpu.bindless.pipeline_layout, 0, 1,
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        gpu.bindless.pipeline_layout, 0, 1,
                                         &gpu.bindless.set, 0, nullptr);
 
-                if (ranges.opaque_count > 0) {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
+                auto *indirect = gpu.ctx.buffers.get(res.indirect_ring.handle());
 
-                    PredepthPushConstants opaque_pc = pc;
-                    opaque_pc.base_draw_id = ranges.opaque_base;
+                for (auto i = 0U; i < mesh_instance_ranges.size(); ++i) {
+                    const auto &mir   = mesh_instance_ranges[i];
+                    const auto &range = ranges[i];
+                    const auto &mesh  = res.meshes[mir.mesh_index];
 
-                    vkCmdPushConstants(cmd, predepth->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(opaque_pc),
-                                       &opaque_pc);
+                    auto &&[verts, idx, materials] = gpu.ctx.buffers.get_multiple(
+                            mesh.pos_uv_buffer,
+                            mesh.index_buffer,
+                            mesh.material_buffer);
 
-                    const VkDeviceSize opaque_offset =
-                            static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                            (ranges.opaque_base * sizeof(VkDrawIndexedIndirectCommand));
+                    vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
+                    const std::array<VkBuffer, 1>     vert_bufs = {verts->buffer()};
+                    const std::array<VkDeviceSize, 1> vert_offs = {0};
+                    const VkDeviceSize                vert_size = verts->size();
+                    vkCmdBindVertexBuffers2(cmd, 0, 1,
+                                           vert_bufs.data(), vert_offs.data(),
+                                           &vert_size, nullptr);
 
-                    vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), opaque_offset, ranges.opaque_count,
-                                             sizeof(VkDrawIndexedIndirectCommand));
-                }
+                    PredepthPushConstants pc{
+                            .ubo              = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
+                            .transforms       = res.transforms_ring.slot_device_address(bounded_frame_index),
+                            .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
+                            .materials        = materials->device_address(),
+                            .base_draw_id     = 0,
+                            .sampler_index    = 0,
+                    };
 
-                if (ranges.alpha_count > 0) {
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->pipeline);
+                    if (range.opaque_count > 0) {
+                        pc.base_draw_id = range.opaque_base;
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
+                        vkCmdPushConstants(cmd, predepth->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT,
+                                           0, sizeof(pc), &pc);
 
-                    PredepthPushConstants alpha_pc = pc;
-                    alpha_pc.base_draw_id = ranges.alpha_base;
+                        const VkDeviceSize offset =
+                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                                range.opaque_base * sizeof(VkDrawIndexedIndirectCommand);
 
-                    vkCmdPushConstants(cmd, alpha->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                       sizeof(alpha_pc), &alpha_pc);
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset,
+                                                 range.opaque_count,
+                                                 sizeof(VkDrawIndexedIndirectCommand));
+                    }
 
-                    const VkDeviceSize alpha_offset =
-                            static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                            (ranges.alpha_base * sizeof(VkDrawIndexedIndirectCommand));
+                    if (range.alpha_count > 0) {
+                        pc.base_draw_id = range.alpha_base;
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->pipeline);
+                        vkCmdPushConstants(cmd, alpha->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                           0, sizeof(pc), &pc);
 
-                    vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), alpha_offset, ranges.alpha_count,
-                                             sizeof(VkDrawIndexedIndirectCommand));
+                        const VkDeviceSize offset =
+                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                                range.alpha_base * sizeof(VkDrawIndexedIndirectCommand);
+
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset,
+                                                 range.alpha_count,
+                                                 sizeof(VkDrawIndexedIndirectCommand));
+                    }
                 }
 
                 vkCmdEndRendering(cmd);
@@ -247,6 +265,120 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent, const DrawRange
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::PreDepthEnd);
             },
             sync);
+}
+
+auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index, const SubmitSynchronisation &sync)
+        -> TimelineValue {
+    auto &&[gpu, pipes, res, ui] = ctx;
+
+    return submit_stage(gpu.tl_graphics, gpu.device, [&](VkCommandBuffer cmd) {
+        TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "EnvironmentSkybox");
+
+        auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
+                pipes.graphics_query_pool[bounded_frame_index],
+                pipes.graphics_stats_pool[bounded_frame_index]);
+
+        write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::SkyboxBegin);
+        begin_stats(cmd, *stats_pool, GraphicsIndex::Skybox);
+
+        auto *skybox_pipe = gpu.ctx.pipeline_pool.get(pipes.skybox_pipeline);
+        auto *lit         = gpu.ctx.textures.get(res.lit_hdr);
+        auto *depth       = gpu.ctx.textures.get(res.depth);
+
+        // lit_hdr was written by deferred lighting; we need it as a colour attachment again.
+        // depth was written by predepth/gbuffer; we need it as read-only for the skybox depth test.
+        const std::array<VkImageMemoryBarrier2, 2> barriers{{
+            VkImageMemoryBarrier2{
+                .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .pNext               = nullptr,
+                .srcStageMask        = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                .srcAccessMask       = VK_ACCESS_2_SHADER_READ_BIT,
+                .dstStageMask        = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                .dstAccessMask       = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image               = lit->image,
+                .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+            },
+            VkImageMemoryBarrier2{
+                .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                .pNext               = nullptr,
+                .srcStageMask        = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                .srcAccessMask       = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                .dstStageMask        = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                .dstAccessMask       = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image               = depth->image,
+                .subresourceRange    = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+            },
+        }};
+
+        VkDependencyInfo dep{};
+        dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dep.imageMemoryBarrierCount = static_cast<u32>(barriers.size());
+        dep.pImageMemoryBarriers    = barriers.data();
+        vkCmdPipelineBarrier2(cmd, &dep);
+
+        VkRenderingAttachmentInfo lit_att{};
+        lit_att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        lit_att.imageView   = lit->attachment_view;
+        lit_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        lit_att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;   // preserve deferred lighting output
+        lit_att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingAttachmentInfo depth_att{};
+        depth_att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depth_att.imageView   = depth->attachment_view;
+        depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        depth_att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+        depth_att.storeOp     = VK_ATTACHMENT_STORE_OP_NONE; // depth is read-only here
+
+        VkRenderingInfo ri{};
+        ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ri.renderArea           = {.offset = {0, 0}, .extent = frame_extent};
+        ri.layerCount           = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments    = &lit_att;
+        ri.pDepthAttachment     = &depth_att;
+
+        vkCmdBeginRendering(cmd, &ri);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skybox_pipe->pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                skybox_pipe->layout, 0, 1,
+                                &gpu.bindless.set, 0, nullptr);
+
+        auto &&[vp, sc] = viewport_scissors(frame_extent);
+        vkCmdSetViewport(cmd, 0, 1, &vp);
+        vkCmdSetScissor(cmd, 0, 1, &sc);
+        vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL); // reverse-Z: skybox at depth 0.0
+        vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
+        vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+        vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
+
+        SkyboxPushConstants pc{
+                .frame_ubo        = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
+                .cubemap_index    = res.environment_cubemap.index(),
+                .sampler_index    = pipes.linear_clamp.index(),
+        };
+
+        vkCmdPushConstants(cmd, skybox_pipe->layout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, sizeof(pc), &pc);
+
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+
+        vkCmdEndRendering(cmd);
+
+        end_stats(cmd, *stats_pool, GraphicsIndex::Skybox);
+        write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::SkyboxEnd);
+    }, sync);
 }
 
 auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync)
@@ -363,7 +495,10 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
             sync);
 }
 
-auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, const u32 bounded_frame_index,
+auto run_directional_shadow_map_pass(AppContext &ctx,
+                                     std::span<const MeshInstanceRange> mesh_instance_ranges,
+                                     std::span<const DrawRanges> ranges,
+                                     const u32 bounded_frame_index,
                                      const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
 
@@ -373,106 +508,120 @@ auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, 
                 TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "DirectionalShadowMap");
 
                 auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
-                        pipes.graphics_query_pool[bounded_frame_index], pipes.graphics_stats_pool[bounded_frame_index]);
+                        pipes.graphics_query_pool[bounded_frame_index],
+                        pipes.graphics_stats_pool[bounded_frame_index]);
 
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::DirectionalShadowMapBegin);
                 begin_stats(cmd, *stats_pool, GraphicsIndex::ShadowMap);
 
                 auto *shadow_pipeline = gpu.ctx.pipeline_pool.get(pipes.directional_shadow_map_pipeline);
-                auto *shadow_depth = gpu.ctx.textures.get(res.directional_shadow_map_depth);
-                auto shadow_extent = shadow_depth->extent();
+                auto *shadow_depth    = gpu.ctx.textures.get(res.directional_shadow_map_depth);
+                auto  shadow_extent   = shadow_depth->extent();
 
                 shadow_depth->transition_if_not_initialised(
                         cmd, VK_IMAGE_LAYOUT_GENERAL,
-                        {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
+                        {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
 
                 VkRenderingAttachmentInfo depth_attachment{};
-                depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                depth_attachment.imageView = shadow_depth->attachment_view;
+                depth_attachment.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                depth_attachment.imageView   = shadow_depth->attachment_view;
                 depth_attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-                depth_attachment.clearValue = {.depthStencil = {0.0f, 0}};
+                depth_attachment.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                depth_attachment.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                depth_attachment.clearValue  = {.depthStencil = {0.0f, 0}};
 
                 VkRenderingInfo rendering_info{};
-                rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                rendering_info.renderArea = {.offset = {0, 0}, .extent = shadow_extent};
-                rendering_info.layerCount = 1;
+                rendering_info.sType            = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                rendering_info.renderArea       = {.offset = {0, 0}, .extent = shadow_extent};
+                rendering_info.layerCount       = 1;
                 rendering_info.pDepthAttachment = &depth_attachment;
 
                 vkCmdBeginRendering(cmd, &rendering_info);
 
-                auto &&[indirect, verts, idx, materials] =
-                        gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), res.mesh.pos_uv_buffer,
-                                                     res.mesh.index_buffer, res.mesh.material_buffer);
-
-                ShadowMapPushConstants pc{
-                        .light_view_proj = ui.shadow_config.light_view_proj,
-                        .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
-                        .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
-                        .materials = materials->device_address(),
-                        .base_draw_id = 0,
-                        .sampler_index = pipes.depth_compare_filter.index(),
-                };
-
                 auto &&[vp, sc] = viewport_scissors(shadow_extent);
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &sc);
-                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL); // Reverse-Z
+                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
                 vkCmdSetDepthBiasEnable(cmd, VK_TRUE);
-                vkCmdSetDepthBias(cmd, ui.shadow_config.depth_bias_constant_factor, ui.shadow_config.depth_bias_clamp,
-                                  ui.shadow_config.depth_bias_slope_factor); // Shadow bias
+                vkCmdSetDepthBias(cmd,
+                                  ui.shadow_config.depth_bias_constant_factor,
+                                  ui.shadow_config.depth_bias_clamp,
+                                  ui.shadow_config.depth_bias_slope_factor);
 
-                vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
-                std::array<VkBuffer, 1> buffers = {verts->buffer()};
-                std::array<VkDeviceSize, 1> offsets = {0};
-                const auto size = VkDeviceSize{verts->size()};
-                vkCmdBindVertexBuffers2(cmd, 0, 1, buffers.data(), offsets.data(), &size, nullptr);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline->layout, 0, 1,
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline->pipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        shadow_pipeline->layout, 0, 1,
                                         &gpu.bindless.set, 0, nullptr);
 
+                auto *indirect = gpu.ctx.buffers.get(res.indirect_ring.handle());
 
-                // Render opaque objects
-                if (ranges.opaque_count > 0) {
-                    pc.base_draw_id = ranges.opaque_base;
+                for (usize i = 0; i < mesh_instance_ranges.size(); ++i) {
+                    const auto &mir   = mesh_instance_ranges[i];
+                    const auto &range = ranges[i];
+                    const auto &mesh  = res.meshes[mir.mesh_index];
 
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline->pipeline);
+                    auto &&[verts, idx, materials] = gpu.ctx.buffers.get_multiple(
+                            mesh.pos_uv_buffer,
+                            mesh.index_buffer,
+                            mesh.material_buffer);
 
-                    vkCmdPushConstants(cmd, shadow_pipeline->layout,
-                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+                    vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
+                    const std::array<VkBuffer, 1>     vert_bufs = {verts->buffer()};
+                    const std::array<VkDeviceSize, 1> vert_offs = {0};
+                    const VkDeviceSize                vert_size = verts->size();
+                    vkCmdBindVertexBuffers2(cmd, 0, 1,
+                                           vert_bufs.data(), vert_offs.data(),
+                                           &vert_size, nullptr);
 
-                    const VkDeviceSize opaque_offset =
-                            static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                            (ranges.opaque_base * sizeof(VkDrawIndexedIndirectCommand));
+                    ShadowMapPushConstants pc{
+                            .light_view_proj   = ui.shadow_config.light_view_proj,
+                            .transforms        = res.transforms_ring.slot_device_address(bounded_frame_index),
+                            .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
+                            .materials         = materials->device_address(),
+                            .base_draw_id      = 0,
+                            .sampler_index     = pipes.depth_compare_filter.index(),
+                    };
 
-                    vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), opaque_offset, ranges.opaque_count,
-                                             sizeof(VkDrawIndexedIndirectCommand));
+                    if (range.opaque_count > 0) {
+                        pc.base_draw_id = range.opaque_base;
+                        vkCmdPushConstants(cmd, shadow_pipeline->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                           0, sizeof(pc), &pc);
+
+                        const VkDeviceSize offset =
+                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                                range.opaque_base * sizeof(VkDrawIndexedIndirectCommand);
+
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset,
+                                                 range.opaque_count,
+                                                 sizeof(VkDrawIndexedIndirectCommand));
+                    }
                 }
 
                 vkCmdEndRendering(cmd);
 
-                // Transition shadow map for shader sampling
                 VkImageMemoryBarrier2 shadow_to_read{};
-                shadow_to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-                shadow_to_read.srcStageMask =
-                        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                shadow_to_read.srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                shadow_to_read.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-                shadow_to_read.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
-                shadow_to_read.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-                shadow_to_read.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                shadow_to_read.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                shadow_to_read.srcStageMask        = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                                     VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                shadow_to_read.srcAccessMask       = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                shadow_to_read.dstStageMask        = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                shadow_to_read.dstAccessMask       = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                shadow_to_read.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+                shadow_to_read.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
                 shadow_to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 shadow_to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                shadow_to_read.image = shadow_depth->image;
-                shadow_to_read.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                shadow_to_read.image               = shadow_depth->image;
+                shadow_to_read.subresourceRange    = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
 
                 VkDependencyInfo dep{};
-                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                 dep.imageMemoryBarrierCount = 1;
-                dep.pImageMemoryBarriers = &shadow_to_read;
+                dep.pImageMemoryBarriers    = &shadow_to_read;
                 vkCmdPipelineBarrier2(cmd, &dep);
 
                 end_stats(cmd, *stats_pool, GraphicsIndex::ShadowMap);
@@ -481,9 +630,13 @@ auto run_directional_shadow_map_pass(AppContext &ctx, const DrawRanges &ranges, 
             sync);
 }
 
-auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const DrawRanges &ranges,
-                      const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
+auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent,
+                      std::span<const MeshInstanceRange> mesh_instance_ranges,
+                      std::span<const DrawRanges> ranges,
+                      const u32 bounded_frame_index,
+                      const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
+
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
@@ -496,31 +649,35 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
 
                 auto &&[mrt_pipeline] = gpu.ctx.pipeline_pool.get_multiple(pipes.gbuffer_pipeline_mrt);
 
-                auto *g0 = gpu.ctx.textures.get(res.gbuffer0);
-                auto *g1 = gpu.ctx.textures.get(res.gbuffer1);
-                auto *g2 = gpu.ctx.textures.get(res.gbuffer2);
+                auto *g0    = gpu.ctx.textures.get(res.gbuffer0);
+                auto *g1    = gpu.ctx.textures.get(res.gbuffer1);
+                auto *g2    = gpu.ctx.textures.get(res.gbuffer2);
                 auto *depth = gpu.ctx.textures.get(res.depth);
 
                 g0->transition_if_not_initialised(
                         cmd, VK_IMAGE_LAYOUT_GENERAL,
-                        {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                        {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
                 g1->transition_if_not_initialised(
                         cmd, VK_IMAGE_LAYOUT_GENERAL,
-                        {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                        {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
                 g2->transition_if_not_initialised(
                         cmd, VK_IMAGE_LAYOUT_GENERAL,
-                        {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
+                        {VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT});
                 depth->transition_if_not_initialised(
                         cmd, VK_IMAGE_LAYOUT_GENERAL,
-                        {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
+                        {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
 
                 VkRenderingAttachmentInfo colors[3]{};
                 auto init_color = [&](VkRenderingAttachmentInfo &a, VkImageView view) {
-                    a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                    a.imageView = view;
+                    a.sType      = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    a.imageView  = view;
                     a.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                    a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                    a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    a.loadOp     = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    a.storeOp    = VK_ATTACHMENT_STORE_OP_STORE;
                     a.clearValue = {.color = {.float32 = {0, 0, 0, 0}}};
                 };
                 init_color(colors[0], g0->attachment_view);
@@ -528,20 +685,20 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
                 init_color(colors[2], g2->attachment_view);
 
                 VkRenderingAttachmentInfo depth_att{};
-                depth_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                depth_att.imageView = depth->attachment_view;
+                depth_att.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                depth_att.imageView   = depth->attachment_view;
                 depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // keep predepth
-                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // no need to store
-                depth_att.clearValue = {.depthStencil = {0.0f, 0}};
+                depth_att.loadOp      = VK_ATTACHMENT_LOAD_OP_LOAD;
+                depth_att.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
+                depth_att.clearValue  = {.depthStencil = {0.0f, 0}};
 
                 VkRenderingInfo ri{};
-                ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-                ri.renderArea = {.offset = {0, 0}, .extent = frame_extent};
-                ri.layerCount = 1;
+                ri.sType                = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                ri.renderArea           = {.offset = {0, 0}, .extent = frame_extent};
+                ri.layerCount           = 1;
                 ri.colorAttachmentCount = 3;
-                ri.pColorAttachments = colors;
-                ri.pDepthAttachment = &depth_att;
+                ri.pColorAttachments    = colors;
+                ri.pDepthAttachment     = &depth_att;
 
                 vkCmdBeginRendering(cmd, &ri);
 
@@ -550,64 +707,73 @@ auto run_gbuffer_pass(AppContext &ctx, const VkExtent2D frame_extent, const Draw
                 auto &&[vp, sc] = viewport_scissors(frame_extent);
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &sc);
-                vkCmdSetDepthCompareOp(cmd,
-                                       VK_COMPARE_OP_EQUAL); // matches your predepth = GEQUAL reverseZ + load depth
+                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_EQUAL);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
 
-                auto &&[indirect, verts, idx, materials] =
-                        gpu.ctx.buffers.get_multiple(res.indirect_ring.handle(), res.mesh.vertex_buffer,
-                                                     res.mesh.index_buffer, res.mesh.material_buffer);
-
-                RenderingPushConstants pc{
-                        .ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                        .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
-                        .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
-                        .materials = materials->device_address(),
-                        .base_draw_id = ranges.opaque_base,
-                        .sampler_index = pipes.linear_repeat.index(),
-                };
-
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mrt_pipeline->layout, 0, 1,
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        mrt_pipeline->layout, 0, 1,
                                         &gpu.bindless.set, 0, nullptr);
 
-                vkCmdPushConstants(cmd, mrt_pipeline->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                   0, sizeof(pc), &pc);
+                auto *indirect = gpu.ctx.buffers.get(res.indirect_ring.handle());
 
-                vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
-                VkBuffer vb = verts->buffer();
-                VkDeviceSize off = 0;
-                vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &off);
+                for (usize i = 0; i < mesh_instance_ranges.size(); ++i) {
+                    const auto &mir   = mesh_instance_ranges[i];
+                    const auto &range = ranges[i];
+                    const auto &mesh  = res.meshes[mir.mesh_index];
 
-                if (ranges.opaque_count > 0) {
-                    pc.base_draw_id = ranges.opaque_base;
-                    vkCmdPushConstants(cmd, mrt_pipeline->layout,
-                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+                    auto &&[verts, idx, materials] = gpu.ctx.buffers.get_multiple(
+                            mesh.vertex_buffer,
+                            mesh.index_buffer,
+                            mesh.material_buffer);
 
-                    VkDeviceSize indirect_offset_bytes =
-                            static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                            static_cast<VkDeviceSize>(ranges.opaque_base) * sizeof(VkDrawIndexedIndirectCommand);
+                    vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
+                    VkBuffer      vb  = verts->buffer();
+                    VkDeviceSize  off = 0;
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &vb, &off);
 
-                    vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), indirect_offset_bytes, ranges.opaque_count,
-                                             sizeof(VkDrawIndexedIndirectCommand));
-                }
+                    RenderingPushConstants pc{
+                            .ubo               = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
+                            .transforms        = res.transforms_ring.slot_device_address(bounded_frame_index),
+                            .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
+                            .materials         = materials->device_address(),
+                            .base_draw_id      = 0,
+                            .sampler_index     = pipes.linear_repeat.index(),
+                    };
 
-                if (ranges.alpha_count > 0) {
-                    pc.base_draw_id = ranges.alpha_base;
-                    vkCmdPushConstants(cmd, mrt_pipeline->layout,
-                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+                    if (range.opaque_count > 0) {
+                        pc.base_draw_id = range.opaque_base;
+                        vkCmdPushConstants(cmd, mrt_pipeline->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                           0, sizeof(pc), &pc);
 
-                    VkDeviceSize indirect_offset_bytes =
-                            static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                            static_cast<VkDeviceSize>(ranges.alpha_base) * sizeof(VkDrawIndexedIndirectCommand);
+                        const VkDeviceSize offset =
+                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                                static_cast<VkDeviceSize>(range.opaque_base) * sizeof(VkDrawIndexedIndirectCommand);
 
-                    vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), indirect_offset_bytes, ranges.alpha_count,
-                                             sizeof(VkDrawIndexedIndirectCommand));
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset,
+                                                 range.opaque_count,
+                                                 sizeof(VkDrawIndexedIndirectCommand));
+                    }
+
+                    if (range.alpha_count > 0) {
+                        pc.base_draw_id = range.alpha_base;
+                        vkCmdPushConstants(cmd, mrt_pipeline->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                           0, sizeof(pc), &pc);
+
+                        const VkDeviceSize offset =
+                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                                static_cast<VkDeviceSize>(range.alpha_base) * sizeof(VkDrawIndexedIndirectCommand);
+
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset,
+                                                 range.alpha_count,
+                                                 sizeof(VkDrawIndexedIndirectCommand));
+                    }
                 }
 
                 vkCmdEndRendering(cmd);
-
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::GbufferEnd);
                 end_query_for_index(cmd, GraphicsIndex::GBuffer, pool);
             },

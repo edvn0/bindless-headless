@@ -74,7 +74,6 @@ float3 world_pos = (local_pos * light.position_radius.w * 0.01F) + light.positio
         
 float3 view_pos = mul(pc.frame_ubo->view, float4(light.position_radius.xyz, 1.0)).xyz;
 float view_dist = -view_pos.z;
-printf("%f", view_dist);
 out_vertices[tid].color = float4(abs(view_dist) / 500.0, 0.0, 0.0, 1.0);
         
     }

@@ -194,16 +194,22 @@ struct HeatmapPushConstants {
     u32 slices_per_row;
 };
 
+struct SkyboxPushConstants{
+    const DeviceAddress frame_ubo;
+    u32 cubemap_index;
+    u32 sampler_index;
+};
+
 struct CompiledPipeline {
     VkPipeline pipeline{VK_NULL_HANDLE};
     VkPipelineLayout layout{VK_NULL_HANDLE};
 };
 
-auto create_compute_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &, std::size_t,
+auto create_compute_pipeline(VkDevice, PipelineCache*, VkDescriptorSetLayout, const std::vector<u32> &, std::size_t,
                              std::string_view) -> CompiledPipeline;
 
 template<std::size_t N>
-auto create_compute_pipelines(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout layout,
+auto create_compute_pipelines(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout layout,
                               std::optional<std::size_t> push_constant_size, std::span<std::vector<u32>, N> codes,
                               std::span<const std::string_view, N> names) -> std::array<CompiledPipeline, N> {
     std::array<CompiledPipeline, N> out{};
@@ -221,37 +227,37 @@ auto create_compute_pipelines(VkDevice device, PipelineCache &cache, VkDescripto
 }
 
 // Pipelines.hxx additions (signatures)
-auto create_gbuffer_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
+auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                              VkFormat gbuffer0_format, VkFormat gbuffer1_format, VkFormat gbuffer2_format,
                              VkFormat depth_format) -> CompiledPipeline;
 
-auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache &cache,
+auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *cache,
                                                 VkDescriptorSetLayout bindless_layout, const std::vector<u32> &frag,
                                                 VkShaderModule, std::string_view frag_entry, VkFormat color_format)
         -> CompiledPipeline;
 
-auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &, VkFormat,
+auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<uint32_t> &, VkFormat,
                               VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
-auto create_predepth_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<uint32_t> &,
+auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<uint32_t> &,
                               const std::vector<uint32_t> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)
         -> CompiledPipeline;
 
-auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache &cache,
+auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
                                             VkDescriptorSetLayout bindless_layout,
                                             const std::vector<uint32_t> &vert_code,
                                             const std::vector<uint32_t> &frag_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline;
-auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache &cache,
+auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
                                             VkDescriptorSetLayout bindless_layout,
                                             const std::vector<uint32_t> &vert_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline;
 
-auto create_tonemap_pipeline(VkDevice, PipelineCache &, VkDescriptorSetLayout, const std::vector<u32> &,
+auto create_tonemap_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &,
                              const std::vector<u32> &, const std::string_view, const std::string_view, VkFormat)
         -> CompiledPipeline;
 
-auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache &cache, VkDescriptorSetLayout bindless_layout,
+auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
                                        const std::vector<u32> &task_code, const std::vector<u32> &mesh_code,
                                        const std::vector<u32> &frag_code, VkFormat color_format, VkFormat depth_format,
                                        VkSampleCountFlagBits samples) -> CompiledPipeline;
@@ -289,7 +295,7 @@ namespace Pipeline {
 
     struct Graphics {
         VkDevice device;
-        PipelineCache &cache;
+        PipelineCache *cache;
         VkDescriptorSetLayout bindless_layout;
         std::string_view debug_name;
 
@@ -322,7 +328,7 @@ namespace Pipeline {
 
     struct Fullscreen {
         VkDevice device;
-        PipelineCache &cache;
+        PipelineCache *cache;
         VkDescriptorSetLayout bindless_layout;
 
         VkShaderModule fullscreen_vs; // This is application cached.

@@ -6,6 +6,7 @@
 
 
 #include "Buffer.hxx"
+#include "Constants.hxx"
 #include "Forward.hxx"
 #include "Types.hxx"
 

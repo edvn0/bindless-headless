@@ -88,6 +88,8 @@ struct AppPipelines {
     PipelineHandle directional_shadow_map_pipeline{};
     PipelineHandle directional_shadow_map_alpha_pipeline{};
 
+    PipelineHandle skybox_pipeline{};
+
     std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_stats_pool{};
@@ -124,10 +126,33 @@ struct Cluster {
     u32 light_count;
 };
 
+struct MeshInstanceRange {
+    u32 mesh_index;
+    u32 instance_count;
+    u32 base_instance; // offset into transforms ring
+};
+
+struct MeshInstanceRanges {
+    static auto create(u32 mesh_count, u32 instance_count) {
+        std::vector<MeshInstanceRange> ranges{};
+        ranges.reserve(mesh_count);
+        for (u32 i = 0; i < mesh_count; i++) {
+            ranges.emplace_back(i, instance_count, i* instance_count);
+        }
+        return ranges;
+    }
+};
+
+
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
 
-    LoadedObj mesh{};
+    std::vector<LoadedObj> meshes{};
+    std::vector<MeshInstanceRange> mesh_instance_ranges;
+
+    auto instance_count() const {
+        return mesh_instance_ranges.empty() ? 0 : (mesh_instance_ranges.back().base_instance + mesh_instance_ranges.back().instance_count);
+    }
 
     std::vector<PointLight> all_point_lights{};
     std::vector<PointLight> all_point_lights_zero{};
@@ -139,7 +164,6 @@ struct AppResources {
 
     static constexpr u32 mesh_count = 1;
     AlignedRingBuffer<glm::mat4x3> transforms_ring{};
-    u32 instance_count{0};
 
     AlignedRingBuffer<u32> flags{};
     AlignedRingBuffer<u32> prefix{};
@@ -162,6 +186,7 @@ struct AppResources {
     TextureHandle directional_shadow_map_depth{};
     TextureHandle tonemapped{};
 
+    TextureHandle environment_cubemap{};
     TextureHandle perlin_noise{};
 
     static constexpr u32 max_draws_per_frame = 100000U;
@@ -255,7 +280,7 @@ struct AppUI {
     ClusterDebugMode debug_mode{ClusterDebugMode::None};
 
     // graphs
-    PerformanceGraph<total_queries, 120> gpu_frame_graph{};
+    PerformanceGraph<total_queries, 256> gpu_frame_graph{};
     bool graphs_initialized{false};
 };
 

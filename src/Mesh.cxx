@@ -537,7 +537,7 @@ auto load_texture_from_file(const std::filesystem::path &texture_path, const Tex
     return packet;
 }
 
-auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::filesystem::path &obj_path)
+auto load_obj(RenderContext &ctx, const std::filesystem::path &obj_path, float scale)
         -> tl::expected<LoadedObj, Error> {
 
     tinyobj::ObjReaderConfig cfg{};
@@ -620,6 +620,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
         for (const auto &face: faces) {
             for (const auto &idx: face) {
                 Vertex v = pack_vertex_from_indices(attrib, idx);
+                v.position *= scale;
 
                 auto it = vertex_map.find(v);
                 if (it != vertex_map.end()) {
@@ -685,7 +686,7 @@ auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::file
 
     for (auto const &tex: textures) {
         auto img =
-                create_texture_image_v2(ctx.allocator, cmd_ctx, tex.width, tex.height, tex.vk_format,
+                create_texture_image_v2(ctx.allocator, *ctx.command_ctx, tex.width, tex.height, tex.vk_format,
                                         std::span<const u8>{tex.data.data(), tex.data.size()},
                                         std::span<const u32>{tex.level_offset.data(), tex.level_offset.size()},
                                         std::span<const u32>{tex.level_size.data(), tex.level_size.size()}, tex.name);

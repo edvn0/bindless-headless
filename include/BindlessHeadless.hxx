@@ -1,14 +1,13 @@
 ﻿#pragma once
 
+#include "CreateInfo.hxx"
 #include "Forward.hxx"
 #include "GlobalCommandContext.hxx"
 #include "Logger.hxx"
 #include "Types.hxx"
-#include "Logger.hxx"
-#include "CreateInfo.hxx"
 
-#include <bitset>
 #include <array>
+#include <bitset>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -20,10 +19,9 @@
 #include <vector>
 
 #include <GLFW/glfw3.h>
-#include <volk.h>
 #include <tl/expected.hpp>
 #include <vk_mem_alloc.h>
-
+#include <volk.h>
 
 
 namespace detail {
@@ -89,6 +87,7 @@ enum class Stage : u32 {
     Tonemapping,
     CubeRotation,
     DeferredLighting,
+    Skybox,
     LightClustering,
     DirectionalShadowMap,
     Count,
@@ -128,7 +127,7 @@ struct Timeline {
     }
 };
 
-using GraphicsTimeline = Timeline<4>;
+using GraphicsTimeline = Timeline<5>;
 using ComputeTimeline = Timeline<3>;
 using TransferTimeline = Timeline<1>;
 
@@ -198,6 +197,11 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::byte> data,
                                std::string_view name) -> OffscreenTarget;
+auto load_cubemap_ktx(VmaAllocator, GlobalCommandContext &,
+                      VkDevice , VkPhysicalDevice ,
+                      VkQueue transfer_queue,
+                      const std::filesystem::path &,
+                      std::string_view) -> tl::expected<OffscreenTarget, Error>;
 
 struct InstanceWithDebug {
     VkInstance instance{VK_NULL_HANDLE};
@@ -342,8 +346,19 @@ struct PhysicalDeviceChoice {
 using DeviceChoice = std::tuple<VkPhysicalDevice, u32, u32, u32>;
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice>;
 
-enum class ComputeStamp : u32 { RotateGeometryBegin, RotateGeometryEnd, RotateLightsBegin, RotateLightsEnd,  LightClusteringBegin, LightClusteringEnd, Count };
-enum class ComputeIndex : u32 { RotateGeometry, RotateLights,  LightClustering, Count };
+enum class ComputeStamp : u32 {
+    RotateGeometryBegin,
+    RotateGeometryEnd,
+    RotateLightsBegin,
+    RotateLightsEnd,
+    LightClusteringBegin,
+    LightClusteringEnd,
+    Count
+};
+enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Count };
+inline constexpr auto compute_stages =
+        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering};
+
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
 inline constexpr u32 stats_compute_count = static_cast<u32>(ComputeIndex::Count);
@@ -355,6 +370,8 @@ enum class GraphicsStamp : u32 {
     GbufferEnd,
     DeferredBegin,
     DeferredEnd,
+    SkyboxBegin,
+    SkyboxEnd,
     TonemapBegin,
     TonemapEnd,
     PresentBegin,
@@ -363,7 +380,10 @@ enum class GraphicsStamp : u32 {
     DirectionalShadowMapEnd,
     Count
 };
-enum class GraphicsIndex : u32 { PreDepth, GBuffer, Deferred, Tonemap, Present, ShadowMap, Count };
+enum class GraphicsIndex : u32 { PreDepth, GBuffer, Deferred, Skybox, Tonemap, Present, ShadowMap, Count };
+inline constexpr auto graphics_stages =
+        std::array{GraphicsIndex::PreDepth, GraphicsIndex::GBuffer, GraphicsIndex::Deferred, GraphicsIndex::Skybox,
+                   GraphicsIndex::Tonemap,  GraphicsIndex::Present, GraphicsIndex::ShadowMap};
 
 inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
 inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);
@@ -375,7 +395,8 @@ using EnabledFeatureSet = std::unordered_set<std::string, string_hash, string_eq
 auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u32 transfer_index)
         -> std::tuple<VkDevice, VkQueue, VkQueue, VkQueue, EnabledFeatureSet>;
 
-auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device) -> VmaAllocator;
+auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device, const EnabledFeatureSet *)
+        -> VmaAllocator;
 
 struct TimelineWait {
     u64 value{0};

@@ -74,8 +74,10 @@ endif()
 # ------------------------------------------------------------
 add_library(BindlessEngine STATIC
   "src/BindlessHeadless.cxx"
+  "src/BindlessSet.cxx"
   "src/RenderContext.cxx"
   "src/Types.cxx"
+  "src/TypesString.cxx"
   "src/Profiler.cxx"
   "src/Pipelines.cxx"
   "src/ResizeableGraph.cxx"

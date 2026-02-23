@@ -11,6 +11,7 @@ auto OffscreenTarget::is_stencil() const -> bool {
 }
 
 
+
 auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
 #if defined(_MSC_VER)
     // MSVC: use _dupenv_s

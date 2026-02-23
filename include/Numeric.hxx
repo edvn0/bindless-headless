@@ -7,3 +7,4 @@ using i32 = std::int32_t;
 using u8 = std::uint8_t;
 using i8 = std::int8_t;
 using f32 = float;
+using usize = std::size_t;

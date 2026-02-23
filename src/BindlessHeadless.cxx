@@ -18,6 +18,10 @@
 #include <optional>
 #include <source_location>
 
+#include <ktx.h>
+#include <ktxvulkan.h>
+#include <vulkan/vulkan_core.h>
+
 namespace {
     auto mip_extent(u32 base_w, u32 base_h, u32 level) -> VkExtent3D {
         return VkExtent3D{
@@ -265,7 +269,18 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
 
     VkImageCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    ici.imageType = VK_IMAGE_TYPE_2D;
+    switch (config.dims.view_type) {
+        case VK_IMAGE_VIEW_TYPE_2D:
+        case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
+        case VK_IMAGE_VIEW_TYPE_CUBE:
+            ici.imageType = VK_IMAGE_TYPE_2D;
+            break;
+        case VK_IMAGE_VIEW_TYPE_3D:
+            ici.imageType = VK_IMAGE_TYPE_3D;
+            break;
+        default:
+            throw std::runtime_error("Unsupported view type in TargetSamplerConfiguration");
+    }
     ici.format = format;
     ici.extent = {width, height, 1};
     ici.mipLevels = mip_levels;
@@ -276,9 +291,12 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    if (array_layers > 1) {
+    if (array_layers > 1 && (config.dims.view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
         // Not strictly required for basic 2D array views, but it’s a helpful “this is an array image” hint.
         ici.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
+    }
+    if (config.dims.view_type == VK_IMAGE_VIEW_TYPE_CUBE) {
+        ici.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     }
 
     VmaAllocationCreateInfo aci{};
@@ -325,16 +343,16 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
 }
 
 
-auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
-                               std::uint32_t height, VkFormat format, std::span<const std::byte> data,
-                               std::string_view name) -> OffscreenTarget {
+auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const std::byte> data, std::string_view name)
+        -> OffscreenTarget {
     std::span<const u8> data_as_u8 = std::span(std::bit_cast<const u8 *>(data.data()), data.size());
     return create_image_from_span_v2(alloc, cmd_ctx, width, height, format, data_as_u8, name);
 }
 
-auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
-                               std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
-                               std::string_view name) -> OffscreenTarget {
+auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const std::uint8_t> data, std::string_view name)
+        -> OffscreenTarget {
     auto t = create_offscreen_target(alloc, width, height, format, VK_SAMPLE_COUNT_1_BIT, {}, name);
 
     if (data.empty()) {
@@ -864,6 +882,143 @@ auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
     return t;
 }
 
+auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevice device,
+                      VkPhysicalDevice physical_device, VkQueue, const std::filesystem::path &path,
+                      std::string_view name) -> tl::expected<OffscreenTarget, Error> {
+
+    ktxTexture2 *ktx{};
+    if (ktxTexture2_CreateFromNamedFile(path.string().c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, &ktx) != KTX_SUCCESS) {
+        return tl::make_unexpected(Error::make_error(Error::Type::FileNotFoundError,
+                                                     std::format("Could not find file at {}", path.string())));
+    }
+
+    // Ensure we are dealing with a cubemap
+    u32 num_layers = ktx->numLayers * (ktx->isCubemap ? 6 : 1);
+    VkFormat vkFormat = ktxTexture2_GetVkFormat(ktx);
+
+    // 2. Create Target Image using VMA
+    auto ici = create_info<VkImageCreateInfo>();
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = vkFormat;
+    ici.extent = {ktx->baseWidth, ktx->baseHeight, 1};
+    ici.mipLevels = ktx->numLevels;
+    ici.arrayLayers = num_layers;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (ktx->isCubemap)
+        ici.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+
+    VkImage image;
+    VmaAllocation allocation;
+    vmaCreateImage(alloc, &ici, &aci, &image, &allocation, nullptr);
+
+    VkBuffer staging_buffer;
+    VmaAllocation staging_allocation;
+    auto bci = create_info<VkBufferCreateInfo>();
+    bci.size = ktxTexture_GetDataSizeUncompressed(ktxTexture(ktx));
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+    VmaAllocationCreateInfo staging_aci{};
+    staging_aci.usage = VMA_MEMORY_USAGE_AUTO;
+    staging_aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    VmaAllocationInfo staging_info;
+    vmaCreateBuffer(alloc, &bci, &staging_aci, &staging_buffer, &staging_allocation, &staging_info);
+
+    [[maybe_unused]] ktx_error_code_e result =
+            ktxTexture_LoadImageData(ktxTexture(ktx), static_cast<ktx_uint8_t *>(staging_info.pMappedData),
+                                     static_cast<ktx_size_t>(staging_info.size));
+
+    std::vector<VkBufferImageCopy> regions;
+    for (u32 level = 0; level < ktx->numLevels; ++level) {
+        ktx_size_t offset;
+        ktxTexture_GetImageOffset(ktxTexture(ktx), level, 0, 0, &offset);
+
+        VkBufferImageCopy region{};
+        region.bufferOffset = offset;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, num_layers};
+        region.imageExtent = {std::max(1u, ktx->baseWidth >> level), std::max(1u, ktx->baseHeight >> level), 1};
+        regions.push_back(region);
+    }
+
+    submit_one_time_cmd(
+            cmd_ctx,
+            [&](VkCommandBuffer cb) {
+                auto b1 = create_info<VkImageMemoryBarrier2>();
+                b1.image = image;
+                b1.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, num_layers};
+                b1.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                b1.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b1.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                b1.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                b1.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+
+                auto dep = create_info<VkDependencyInfo>();
+                dep.imageMemoryBarrierCount = 1;
+                dep.pImageMemoryBarriers = &b1;
+                vkCmdPipelineBarrier2(cb, &dep);
+
+                vkCmdCopyBufferToImage(cb, staging_buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                       static_cast<u32>(regions.size()), regions.data());
+
+                b1.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b1.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b1.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                b1.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                b1.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                b1.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                vkCmdPipelineBarrier2(cb, &dep);
+            },
+            true);
+
+    vmaDestroyBuffer(alloc, staging_buffer, staging_allocation);
+    ktxTexture_Destroy(ktxTexture(ktx));
+
+    OffscreenTarget t{};
+    t.width = ktx->baseWidth;
+    t.height = ktx->baseHeight;
+    t.format = vkFormat;
+    t.image = image;
+    t.allocation = allocation;
+    t.initialized = true;
+
+    auto srv_ci = create_info<VkImageViewCreateInfo>();
+    srv_ci.image = image;
+    srv_ci.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    srv_ci.format = vkFormat;
+    srv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, 6};
+    vk_check(vkCreateImageView(device, &srv_ci, nullptr, &t.sampled_view));
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
+
+    if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
+        auto uav_ci = create_info<VkImageViewCreateInfo>();
+        uav_ci.image = image;
+        uav_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        uav_ci.format = vkFormat;
+        uav_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, 6};
+        vk_check(vkCreateImageView(device, &uav_ci, nullptr, &t.storage_view));
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
+    }
+
+    auto rtv_ci = create_info<VkImageViewCreateInfo>();
+    rtv_ci.image = image;
+    rtv_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    rtv_ci.format = vkFormat;
+    rtv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, 6};
+    vk_check(vkCreateImageView(device, &rtv_ci, nullptr, &t.attachment_view));
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
+
+    vmaSetAllocationName(alloc, t.allocation, name.data());
+
+    return t;
+}
+
 auto pick_physical_device(VkInstance instance) -> tl::expected<DeviceChoice, PhysicalDeviceChoice> {
     u32 count{};
     vkEnumeratePhysicalDevices(instance, &count, nullptr);
@@ -1036,6 +1191,7 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
             VK_KHR_MAINTENANCE_9_EXTENSION_NAME,
             VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
             VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+            VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME,
     };
 
 
@@ -1043,9 +1199,13 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
 
     add_if_supported(VK_NV_SHADER_SUBGROUP_PARTITIONED_EXTENSION_NAME, enabled_exts, enabled_features);
 
+    VkPhysicalDeviceMemoryPriorityFeaturesEXT mem_priority_features{};
+    mem_priority_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PRIORITY_FEATURES_EXT;
+    mem_priority_features.pNext = nullptr;
+
     VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features_khr{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR,
-            .pNext = nullptr,
+            .pNext = &mem_priority_features,
             .pipelineFragmentShadingRate = VK_TRUE,
             .primitiveFragmentShadingRate = VK_TRUE,
             .attachmentFragmentShadingRate = VK_TRUE};
@@ -1075,6 +1235,17 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
 
     vkGetPhysicalDeviceFeatures2(pd, &features2);
     features2.features.robustBufferAccess = VK_TRUE;
+
+    if (enabled_features.contains(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME) && mem_priority_features.memoryPriority) {
+        mem_priority_features.memoryPriority = VK_TRUE; // keep VK_TRUE (it was already set by the query)
+    } else {
+        enabled_features.erase(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+        mem_priority_features.memoryPriority = VK_FALSE;
+    }
+    if (!(enabled_features.contains(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME) && mem_priority_features.memoryPriority)) {
+        enabled_features.erase(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+        shading_rate_features_khr.pNext = nullptr; // sever the tail
+    }
 
     features11.storageBuffer16BitAccess = VK_TRUE;
     features11.uniformAndStorageBuffer16BitAccess = VK_TRUE;
@@ -1180,12 +1351,16 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
     return {device, gq, cq, tq, enabled_features};
 }
 
-auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device) -> VmaAllocator {
+auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device,
+                      const EnabledFeatureSet *enabled_features) -> VmaAllocator {
     VmaAllocatorCreateInfo info{};
     info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     info.physicalDevice = pd;
     info.device = device;
     info.instance = instance;
+    if (enabled_features && enabled_features->contains(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME)) {
+        info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
+    }
 
     VmaVulkanFunctions vma_vulkan_func{};
     vma_vulkan_func.vkGetInstanceProcAddr = vkGetInstanceProcAddr;

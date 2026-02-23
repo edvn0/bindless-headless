@@ -41,13 +41,11 @@ public:
         std::vector<std::string_view> dyn_entries(entries.begin(), entries.end());
         std::vector<ReflectionData> dyn_refl(N);
 
-        auto result = compile_from_file(path, dyn_entries, dyn_refl);
-        if (!result)
-            return tl::make_unexpected(result.error());
+        TRY_PROPAGATE(result, compile_from_file(path, dyn_entries, dyn_refl), "Could not compile");
 
-        std::array<std::vector<u32>, N> out_spirv;
+        std::array<std::vector<u32>, N> out_spirv{};
         for (std::size_t i = 0; i < N; ++i) {
-            out_spirv[i] = std::move((*result)[i]);
+            out_spirv[i] = std::move(result[i]);
             reflection_data[i] = std::move(dyn_refl[i]);
         }
         return out_spirv;

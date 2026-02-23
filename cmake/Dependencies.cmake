@@ -238,12 +238,14 @@ if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR)
     ${ImGui_SOURCE_DIR}/imgui_widgets.cpp
     ${ImGui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${ImGui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+    ${ImGui_SOURCE_DIR}/misc/freetype/imgui_freetype.cpp
   )
 
   set(IMPLOT_SRCS
     ${ImPlot_SOURCE_DIR}/implot.cpp
     ${ImPlot_SOURCE_DIR}/implot_items.cpp
   )
+  find_package(Freetype REQUIRED SHARED)
 
   add_library(imgui STATIC ${IMGUI_SRCS} ${IMPLOT_SRCS})
 
@@ -258,13 +260,21 @@ if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR)
     volk
     volk::volk_headers
     X11::X11
+    Freetype::Freetype
+    PRIVATE
+    ZLIB::ZLIB
+    PNG::PNG
+    brotlidec
+    bz2
+    harfbuzz
   )
+
 
   target_compile_definitions(imgui
     PUBLIC
       GLFW_INCLUDE_NONE
       IMGUI_IMPL_VULKAN_USE_VOLK
-      IMGUI_USER_CONFIG="imconfig.h"
+      IMGUI_ENABLE_FREETYPE
     PRIVATE
       # These must be PRIVATE (affect .cpp compilation) not PUBLIC
       GLFW_HAS_X11=1

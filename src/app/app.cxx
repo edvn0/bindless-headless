@@ -19,11 +19,16 @@
 #include <ranges>
 #include <thread>
 #include <unordered_map>
-#include <vulkan/vulkan_core.h>
+
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <imgui.h>
+
 
 #include "Constants.hxx"
 #include "Logger.hxx"
 #include "Pipelines.hxx"
+#include "Types.hxx"
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
 
@@ -33,19 +38,116 @@ extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 static volatile sig_atomic_t keep_running = 1;
 static void sig_handler(int) { keep_running = 0; }
 
-#include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-#include <imgui.h>
+namespace {
+    /*auto generate_sky_cubemap(RenderContext &ctx, VmaAllocator alloc,
+                          VkDevice device, VkDescriptorSetLayout bindless_layout,
+                          VkDescriptorSet bindless_set,
+                          GlobalCommandContext &cmd_ctx,
+                          Compiler &compiler,
+                          glm::vec3 sun_direction, float sun_intensity,
+                          u32 face_size) -> tl::expected<TextureHandle, Error> {
+
+    struct AtmospherePushConstants {
+        glm::vec3 sun_direction;
+        float     sun_intensity;
+        u32       output_cubemap_face;
+        u32       output_image_index;
+        u32       face_size;
+    };
+
+    // Compile shader
+    constexpr std::array names = {std::string_view{"generate_sky_cs"}};
+    std::array<ReflectionData, names.size()> reflection_data{};
+    TRY_PROPAGATE(sky_code,
+                            compiler.compile_from_file("shaders/atmosphere_equirect.slang",
+                                                       std::span(names),
+                                                       std::span(reflection_data)),
+                            "Failed to compile sky generation shader");
+
+    // Create transient pipeline
+    auto [pipeline, layout] = create_compute_pipeline(
+            device, nullptr, bindless_layout,
+            sky_code.at(0),
+            sizeof(AtmospherePushConstants),
+            "generate_sky_cs");
+
+    // Create the cubemap storage target
+    OffscreenTarget sky_target = create_offscreen_target(
+            alloc, face_size, face_size,
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            VK_SAMPLE_COUNT_1_BIT,
+            TargetSamplerConfiguration{
+                .sampled_storage_transfer = {0b111},
+                .dims = {
+                    .mip_levels   = 1,
+                    .array_layers = 6,
+                    .view_type    = VK_IMAGE_VIEW_TYPE_CUBE,
+                },
+            },
+            "sky_cubemap");
+
+        auto sky_handle         = ctx.textures.create(std::move(sky_target));
+    auto *sky_tex           = ctx.textures.get(sky_handle);
+    const u32 storage_index = sky_handle.index();
+
+    for (u32 face = 0; face < 6; ++face) {
+        submit_one_time_cmd(cmd_ctx, [&](VkCommandBuffer cmd) {
+            AtmospherePushConstants pc{
+                .sun_direction       = glm::normalize(sun_direction),
+                .sun_intensity       = sun_intensity,
+                .output_cubemap_face = face,
+                .output_image_index  = storage_index,
+                .face_size           = face_size,
+            };
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    layout, 0, 1, &bindless_set, 0, nullptr);
+            vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                               0, sizeof(pc), &pc);
+
+            const u32 groups = (face_size + 7) / 8;
+            vkCmdDispatch(cmd, groups, groups, 1);
+        }, true);
+    }
+
+    submit_one_time_cmd(cmd_ctx, [&](VkCommandBuffer cmd) {
+        auto barrier = create_info<VkImageMemoryBarrier2>();
+        barrier.srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT;
+        barrier.dstStageMask        = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        barrier.dstAccessMask       = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        barrier.oldLayout           = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout           = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image               = sky_tex->image;
+        barrier.subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+
+        auto dep = create_info<VkDependencyInfo>();
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers    = &barrier;
+        vkCmdPipelineBarrier2(cmd, &dep);
+    }, true);
+
+    vkDestroyPipeline(device, pipeline, nullptr);
+    vkDestroyPipelineLayout(device, layout, nullptr);
+
+    OffscreenTarget& result = *sky_tex;
+    result.initialized     = true;
+    return sky_handle;
+}*/
+} // namespace
 
 
 namespace {
-    static GLFWkeyfun imgui_key_callback = nullptr;
-    static GLFWcharfun imgui_char_callback = nullptr;
-    static GLFWmousebuttonfun imgui_mouse_button_callback = nullptr;
-    static GLFWcursorposfun imgui_cursor_pos_callback = nullptr;
-    static GLFWscrollfun imgui_scroll_callback = nullptr;
+     GLFWkeyfun imgui_key_callback = nullptr;
+     GLFWcharfun imgui_char_callback = nullptr;
+     GLFWmousebuttonfun imgui_mouse_button_callback = nullptr;
+     GLFWcursorposfun imgui_cursor_pos_callback = nullptr;
+     GLFWscrollfun imgui_scroll_callback = nullptr;
 
-    static auto update_mouse_delta(AppState &app, glm::vec2 pos) -> glm::vec2 {
+     auto update_mouse_delta(AppState &app, glm::vec2 pos) -> glm::vec2 {
         glm::vec2 delta{0.0f};
 
         if (!app.mouse_inited) {
@@ -61,15 +163,15 @@ namespace {
 
     auto vi(const AppState &app) -> const auto & { return app.viewport_input; }
 
-    static auto route_keyboard_to_app(AppState const &app) -> bool {
+     auto route_keyboard_to_app(AppState const &app) -> bool {
         return vi(app).focused && !vi(app).imgui_blocks_keyboard;
     }
 
-    static auto route_text_to_app(AppState const &app) -> bool {
+     auto route_text_to_app(AppState const &app) -> bool {
         return vi(app).focused && !vi(app).imgui_blocks_keyboard;
     }
 
-    static auto route_mouse_to_app(AppState const &app) -> bool {
+     auto route_mouse_to_app(AppState const &app) -> bool {
         return vi(app).hovered && !vi(app).imgui_blocks_mouse;
     }
 
@@ -250,6 +352,37 @@ namespace {
         });
     }
 
+    auto poll_gamepad(AppState &app) -> void {
+        GLFWgamepadstate pad{};
+        if (!glfwGetGamepadState(GLFW_JOYSTICK_1, &pad)) {
+            return;
+        }
+
+        // B button: toggle orbit/fly (edge detect to avoid spamming)
+        if (pad.buttons[GLFW_GAMEPAD_BUTTON_B] == GLFW_PRESS && !app.cam_in.gamepad_b_prev) {
+            auto e = std::make_unique<GamepadButtonPressedEvent>();
+            e->button = GLFW_GAMEPAD_BUTTON_B;
+            app.event_system.push_event(std::move(e));
+        }
+        app.cam_in.gamepad_b_prev = pad.buttons[GLFW_GAMEPAD_BUTTON_B] == GLFW_PRESS;
+
+        // Axes go straight into cam_in — no events needed, same as mouse_delta
+        auto deadzone = [](float v, float dz) -> float {
+            if (std::abs(v) < dz)
+                return 0.0f;
+            return (v - std::copysign(dz, v)) / (1.0f - dz);
+        };
+
+        constexpr float dz = 0.15f;
+        app.cam_in.gamepad_left = {deadzone(pad.axes[GLFW_GAMEPAD_AXIS_LEFT_X], dz),
+                                   deadzone(pad.axes[GLFW_GAMEPAD_AXIS_LEFT_Y], dz)};
+        app.cam_in.gamepad_right = {deadzone(pad.axes[GLFW_GAMEPAD_AXIS_RIGHT_X], dz),
+                                    deadzone(pad.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y], dz)};
+        app.cam_in.gamepad_rt = (pad.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
+        app.cam_in.gamepad_lb = pad.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER] == GLFW_PRESS;
+        app.cam_in.gamepad_rb = pad.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER] == GLFW_PRESS;
+    }
+
 } // namespace
 
 
@@ -398,9 +531,28 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             int code = glfwGetError(&description);
 
             if (description) {
-                error("GLFW Error ({}): {}",code, description);
+                error("GLFW Error ({}): {}", code, description);
                 std::abort();
             }
+        }
+
+        std::array<GLFWimage, 2> icons{};
+        std::array<i32, 2> sizes{16, 48};
+        i32 channels{4};
+        icons.at(0) = {sizes.at(0), sizes.at(0),
+                       stbi_load("assets/editor/icons/icon_small.png", &sizes.at(0), &sizes.at(0), &channels, 4)};
+        icons.at(1) = {sizes.at(1), sizes.at(1),
+                       stbi_load("assets/editor/icons/icon_large.png", &sizes.at(1), &sizes.at(1), &channels, 4)};
+        glfwSetWindowIcon(gpu.window, icons.size(), icons.data());
+        stbi_image_free(icons.at(0).pixels);
+        stbi_image_free(icons.at(1).pixels);
+
+        std::ifstream f("assets/editor/gamecontrollerdb.txt");
+        if (f) {
+            std::stringstream buf;
+            buf << f.rdbuf();
+            ensure(glfwUpdateGamepadMappings(buf.str().c_str()), "Could not initialise gamepad inputs.");
+            info("Initialised gamepad mappings.");
         }
     }
 
@@ -421,7 +573,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     }
 
     // --- Command context + allocator + timelines ---
-    gpu.allocator = create_allocator(instance.instance, gpu.physical_device, gpu.device);
+    gpu.allocator = create_allocator(instance.instance, gpu.physical_device, gpu.device, &gpu.enabled_features);
 
     gpu.tl_compute = create_compute_timeline(gpu.device, gpu.compute_queue, gpu.compute_index);
     gpu.tl_graphics = create_graphics_timeline(gpu.device, gpu.graphics_queue, gpu.graphics_index);
@@ -639,9 +791,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Load meshes ---
     {
-        TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, *gpu.ctx.command_ctx, "assets/meshes/Sponza-master/sponza.obj"),
+        TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, "assets/meshes/Sponza-master/sponza.obj", 0.01f),
                       "Failed to load cube mesh");
-        res.mesh = std::move(loaded_mesh);
+        res.meshes.emplace_back(std::move(loaded_mesh));
+
+        TRY_PROPAGATE(loaded_capsule, load_obj(gpu.ctx, "assets/meshes/capsule.obj"), "Failed to load capsule mesh");
+        res.meshes.emplace_back(std::move(loaded_capsule));
     }
 
     // --- Lights + buffers ---
@@ -650,7 +805,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.all_point_lights_zero = std::vector<PointLight>(opts.light_count);
         res.light_count = static_cast<u32>(res.all_point_lights.size());
 
-        const auto mesh_aabb = res.mesh.mesh_aabb;
+        const auto mesh_aabb = res.meshes.at(0).mesh_aabb;
         info("Mesh AABB: min({}, {}, {}) max({}, {}, {})", mesh_aabb.min.x, mesh_aabb.min.y, mesh_aabb.min.z,
              mesh_aabb.max.x, mesh_aabb.max.y, mesh_aabb.max.z);
 
@@ -667,12 +822,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.point_lights_ring.write_all_slots(gpu.ctx, res.all_point_lights);
 
 
-        auto transforms =
-                AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, res.mesh_count, VkBufferUsageFlags{}, "transforms");
-        res.transforms_ring = std::move(*transforms);
+        const u32 sponza_instances = 1;
+        const u32 capsule_instances = 1;
+        const u32 total_instances = sponza_instances + capsule_instances;
+
+        res.transforms_ring =
+                AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, total_instances, {}, "transforms").value();
         res.transforms_ring.write_all_slots(gpu.ctx, glm::identity<glm::mat4x3>());
 
-        res.instance_count = static_cast<u32>(res.mesh_count);
+        res.mesh_instance_ranges = MeshInstanceRanges::create(2, 1);
 
         res.prefix = AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                     "light_prefix")
@@ -694,7 +852,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Clustering buffers ---
     {
-        res.clustering_config = cluster_config(16, 9, 24, z_near, z_far);
+        res.clustering_config = cluster_config(16, 9, 16, z_near, z_far);
 
         res.max_light_indices = res.clustering_config.cluster_count * max_lights_per_cluster;
 
@@ -823,45 +981,53 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(debug_point_light_reflection)),
                                             "Failed to compile point light mesh debug");
 
-                    auto &&[fp, cp] = create_compute_pipelines(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                    std::array<const std::string_view, 2> cubemap_names = {"cubemap_vs", "cubemap_fs"};
+                    std::array<ReflectionData, cubemap_names.size()> cubemap_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(cubemap_code,
+                                            gpu.compiler->compile_from_file("shaders/cubemap.slang",
+                                                                            std::span(cubemap_names),
+                                                                            std::span(cubemap_reflection)),
+                                            "Failed to compile cubemap shader");
+
+                    auto &&[fp, cp] = create_compute_pipelines(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
                                                                {}, std::span(culling_code), std::span(names));
 
                     auto &&[crp, lrp] = create_compute_pipelines(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, sizeof(RotatePushConstant),
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, sizeof(RotatePushConstant),
                             std::span(rotate_cubes_code), std::span(rotate_cubes_names));
 
                     auto &&[cl_groups, finalise_cl] = create_compute_pipelines(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
                             sizeof(ClusteredLightCullingPushConstants), std::span(clustered_culling_code),
                             std::span(clustered_culling_names));
 
                     auto gbuffer_pipeline = create_gbuffer_pipeline(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
                             gbuffer_mrt_and_lighting_code.at(0), gbuffer_mrt_and_lighting_code.at(1),
                             VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
                             VK_FORMAT_D32_SFLOAT);
 
                     auto gbuf_light = create_deferred_lighting_graphics_pipeline(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
                             gbuffer_mrt_and_lighting_code.at(2), *gpu.ctx.shaders.get(pipes.fullscreen_vs),
                             "fs_fullscreen_main", VK_FORMAT_R16G16B16A16_SFLOAT);
 
-                    auto pp = create_predepth_pipeline(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                    auto pp = create_predepth_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
                                                        predepth_code.at(0), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
-                    auto pp_alpha = create_predepth_pipeline(gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout,
+                    auto pp_alpha = create_predepth_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
                                                              predepth_code.at(0), predepth_code.at(1),
                                                              VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
                     auto shadow_map_alpha = create_directional_shadow_map_pipeline(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, directional_shadow_map_code.at(0),
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, directional_shadow_map_code.at(0),
                             directional_shadow_map_code.at(1), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
                     auto shadow_map = create_directional_shadow_map_pipeline(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, directional_shadow_map_code.at(0),
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, directional_shadow_map_code.at(0),
                             VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
                     auto tp = create_fullscreen_pipeline(Pipeline::Fullscreen{
                             .device = gpu.device,
-                            .cache = *gpu.ctx.pipeline_cache,
+                            .cache = gpu.ctx.pipeline_cache.get(),
                             .bindless_layout = gpu.bindless.layout,
                             .fullscreen_vs = *gpu.ctx.shaders.get(pipes.fullscreen_vs),
                             .frag_code = tonemap_code.at(1),
@@ -873,7 +1039,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     auto present_pipe = create_fullscreen_pipeline(Pipeline::Fullscreen{
                             .device = gpu.device,
-                            .cache = *gpu.ctx.pipeline_cache,
+                            .cache = gpu.ctx.pipeline_cache.get(),
                             .bindless_layout = gpu.bindless.layout,
                             .fullscreen_vs = *gpu.ctx.shaders.get(pipes.fullscreen_vs),
                             .frag_code = present_code.at(0),
@@ -884,13 +1050,47 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     });
 
                     auto debug_pipeline = create_light_volume_mesh_pipeline(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, debug_point_light_code.at(0),
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, debug_point_light_code.at(0),
                             debug_point_light_code.at(1), debug_point_light_code.at(2), VK_FORMAT_R16G16B16A16_SFLOAT,
                             VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
                     auto debug_clustering_pipeline = create_compute_pipeline(
-                            gpu.device, *gpu.ctx.pipeline_cache, gpu.bindless.layout, debug_clustering_code.at(0),
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, debug_clustering_code.at(0),
                             sizeof(HeatmapPushConstants), "ClusterHeatmapCS");
+
+                    {
+                        const std::array skybox_stages{
+                                Pipeline::ShaderStageInfo{cubemap_code.at(0), "cubemap_vs", VK_SHADER_STAGE_VERTEX_BIT},
+                                Pipeline::ShaderStageInfo{cubemap_code.at(1), "cubemap_fs",
+                                                          VK_SHADER_STAGE_FRAGMENT_BIT},
+                        };
+                        const std::array skybox_color_attachments{
+                                Pipeline::ColorAttachmentInfo{.format = VK_FORMAT_R16G16B16A16_SFLOAT},
+                        };
+                        const std::array skybox_extra_dynamic_states{
+                                VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+                                VK_DYNAMIC_STATE_DEPTH_BOUNDS,
+                                VK_DYNAMIC_STATE_CULL_MODE,
+                                VK_DYNAMIC_STATE_FRONT_FACE,
+                        };
+                        auto cubemap_pipeline = Pipeline::create_graphics_pipeline(Pipeline::Graphics{
+                                .device = gpu.device,
+                                .cache = gpu.ctx.pipeline_cache.get(),
+                                .bindless_layout = gpu.bindless.layout,
+                                .debug_name = "skybox",
+                                .stages = skybox_stages,
+                                .push_constant_size = sizeof(SkyboxPushConstants),
+                                .push_constant_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                .color_attachments = skybox_color_attachments,
+                                .depth_format = VK_FORMAT_D32_SFLOAT,
+                                .depth_mode = Pipeline::DepthMode::test_greater_equal,
+                                .cull_mode = Pipeline::CullMode::none,
+                                .vertex_input = Pipeline::VertexInputInfo{},
+                                .samples = gpu.msaa_samples,
+                                .extra_dynamic_states = skybox_extra_dynamic_states,
+                        });
+                        hot_swap(pipes.skybox_pipeline, std::move(cubemap_pipeline), gpu.ctx, rc.retire_value);
+                    }
 
                     hot_swap(pipes.gbuffer_pipeline_lighting, std::move(gbuf_light), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.cube_rotation_pipeline, std::move(crp), gpu.ctx, rc.retire_value);
@@ -915,53 +1115,49 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     }
 
     {
-        const auto offscreen_node = gpu.scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
-                                                                                             const ResizeContext &rc) {
-            const auto old_g0 = res.gbuffer0;
-            const auto old_g1 = res.gbuffer1;
-            const auto old_g2 = res.gbuffer2;
-            const auto old_culling = res.debug_culling;
-            const auto old_hdr = res.lit_hdr;
-            const auto old_depth = res.depth;
+        const auto offscreen_node =
+                gpu.scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e, const ResizeContext &rc) {
+                    hot_swap(res.gbuffer0,
+                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {},
+                                                     "gbuffer0_albedo_ao"),
+                             gpu.ctx, rc.retire_value);
 
-            res.gbuffer0 = gpu.ctx.create_texture(create_offscreen_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {}, "gbuffer0_albedo_ao"));
+                    hot_swap(res.gbuffer1,
+                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                     {}, "gbuffer1_normal_rough_metal"),
+                             gpu.ctx, rc.retire_value);
 
-            res.gbuffer1 = gpu.ctx.create_texture(create_offscreen_target(gpu.allocator, e.width, e.height,
-                                                                          VK_FORMAT_R16G16B16A16_SFLOAT, {},
-                                                                          "gbuffer1_normal_rough_metal"));
+                    hot_swap(res.gbuffer2,
+                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                     {}, "gbuffer2_emissive"),
+                             gpu.ctx, rc.retire_value);
 
-            res.gbuffer2 = gpu.ctx.create_texture(create_offscreen_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "gbuffer2_emissive"));
+                    const u32 cell_size = 16;
+                    const u32 slices_per_row = 4;
+                    const u32 hm_w = res.clustering_config.tiles_x * slices_per_row * cell_size;
+                    const u32 hm_h = res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) *
+                                     cell_size;
+                    hot_swap(res.debug_culling,
+                             create_offscreen_target(gpu.allocator, hm_w, hm_h, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                                     "debug_culling"),
+                             gpu.ctx, rc.retire_value);
 
-            const u32 cell_size = 16;
-            const u32 slices_per_row = 4; // arrange Z slices into a 4x4 grid
-            const u32 hm_w = res.clustering_config.tiles_x * slices_per_row * cell_size; // 16*4*16 = 1024
-            const u32 hm_h = res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) *
-                             cell_size; // 9*4*16 = 576
-            res.debug_culling = gpu.ctx.create_texture(create_offscreen_target(
-                    gpu.allocator, hm_w, hm_h, VK_FORMAT_R16G16B16A16_SFLOAT, {}, "debug_culling"));
+                    hot_swap(res.depth,
+                             create_depth_target(gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT,
+                                                 VK_SAMPLE_COUNT_1_BIT, true, "depth"),
+                             gpu.ctx, rc.retire_value);
 
-            res.depth = gpu.ctx.create_texture(create_depth_target(
-                    gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "depth"));
+                    if (res.directional_shadow_map_depth.empty()) {
+                        res.directional_shadow_map_depth = gpu.ctx.create_texture(create_depth_target(
+                                gpu.allocator, ui.shadow_map_resolution.peek(), ui.shadow_map_resolution.peek(),
+                                VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
+                    }
 
-            if (res.directional_shadow_map_depth.empty()) {
-                res.directional_shadow_map_depth = gpu.ctx.create_texture(create_depth_target(
-                        gpu.allocator, ui.shadow_map_resolution.peek(), ui.shadow_map_resolution.peek(),
-                        VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
-            }
-
-            hot_swap(res.lit_hdr,
-                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {},
-                                             "lit_hdr"),
-                     gpu.ctx);
-            destroy(gpu.ctx, old_g0, rc.retire_value);
-            destroy(gpu.ctx, old_g1, rc.retire_value);
-            destroy(gpu.ctx, old_g2, rc.retire_value);
-            destroy(gpu.ctx, old_hdr, rc.retire_value);
-            destroy(gpu.ctx, old_depth, rc.retire_value);
-            destroy(gpu.ctx, old_culling, rc.retire_value);
-        });
+                    hot_swap(res.lit_hdr,
+                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                     {}, "lit_hdr"),
+                             gpu.ctx, rc.retire_value);
+                });
 
         const auto tonemapped_node = gpu.scene_resize_graph.add_node(
                 "tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
@@ -995,6 +1191,21 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         gpu.scene_resize_graph.add_dependency(tonemapped_node, offscreen_node);
     }
 
+    /*{
+        res.environment_cubemap = 
+    generate_sky_cubemap(gpu.ctx, gpu.allocator, gpu.device,
+                         gpu.bindless.layout, gpu.bindless.set,
+                         *gpu.ctx.command_ctx, *gpu.compiler,
+                         glm::vec3(0.0f, 0.3f, -1.0f), 22.0f, 512).value();
+gpu.bindless.need_repopulate = true;
+    }*/
+    {
+        res.environment_cubemap = gpu.ctx.create_texture(load_cubemap_ktx(
+                gpu.allocator, *gpu.ctx.command_ctx, gpu.device, gpu.physical_device, gpu.graphics_queue,
+                std::filesystem::path("assets/editor/cubemaps/nasa/sky.ktx2"), "environment_cubemap").value());
+    }
+
+
     auto last_window_extent = sanitize_window_extent(current_extent(gpu.window), gpu.physical_device, gpu.surface);
     auto last_scene_extent = VkExtent2D{opts.width, opts.height};
 
@@ -1005,8 +1216,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     ui.last_viewport_extent = last_scene_extent;
 
-    ui.gui = std::make_unique<ImGuiRenderer>(gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx,
-                                             *gpu.compiler);
+    ui.gui = std::make_unique<ImGuiRenderer>(
+            gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx, *gpu.compiler,
+            FontChoice{
+                    .font_path = "assets/editor/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf",
+                    .size = 18.0f,
+            });
 
     auto gui_pipeline_node = gpu.window_resize_graph.add_node(
             "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },
@@ -1028,6 +1243,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         ui.gpu_frame_graph.add_line("Pre-Depth");
         ui.gpu_frame_graph.add_line("GBuffer");
         ui.gpu_frame_graph.add_line("Deferred");
+        ui.gpu_frame_graph.add_line("Skybox");
         ui.gpu_frame_graph.add_line("Tonemap");
         ui.gpu_frame_graph.add_line("Present");
         ui.gpu_frame_graph.add_line("Directional SM");
@@ -1065,6 +1281,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.draw_stream.begin_frame();
 
         // camera update + frame ubo write
+        poll_gamepad(ui.app_state);
         ui.app_state.cam.update(gpu.window, ui.dt, ui.app_state.cam_in);
 
         write_camera_to_frame_ubo(gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam,
@@ -1098,8 +1315,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             light_view;
             }*/
             {
-                glm::vec3 scene_center = res.mesh.mesh_aabb.center();
-                glm::vec3 scene_extents = (res.mesh.mesh_aabb.max - res.mesh.mesh_aabb.min) * 0.5f;
+                glm::vec3 scene_center = res.meshes.at(0).mesh_aabb.center();
+                glm::vec3 scene_extents = (res.meshes.at(0).mesh_aabb.max - res.meshes.at(0).mesh_aabb.min) * 0.5f;
                 float scene_radius = glm::length(scene_extents);
                 float light_distance = scene_radius * 2.0f + 50.0f;
                 glm::vec3 light_pos = scene_center - sun_dir * light_distance;
@@ -1108,7 +1325,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 glm::mat4 light_view = glm::lookAt(light_pos, scene_center, up_vector);
 
                 // Transform AABB to light space
-                auto [ls_min, ls_max] = res.mesh.mesh_aabb.transform(light_view);
+                auto [ls_min, ls_max] = res.meshes.at(0).mesh_aabb.transform(light_view);
                 // Calculate bounds with padding
                 const float padding = 20.0f;
                 float ortho_size = glm::max(ls_max.x - ls_min.x, ls_max.y - ls_min.y) + padding;
@@ -1122,9 +1339,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             }
         }
 
-        const auto mesh_ranges =
-                write_mesh_indirect(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring,
-                                    res.draw_material_id_ring, res.mesh.mesh, res.instance_count, 0u);
+        std::vector<DrawRanges> all_mesh_ranges;
+        all_mesh_ranges.reserve(res.mesh_instance_ranges.size());
+        for (const auto &mir: res.mesh_instance_ranges) {
+            all_mesh_ranges.push_back(write_mesh_indirect(
+                    gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring, res.draw_material_id_ring,
+                    res.meshes.at(mir.mesh_index).mesh, mir.instance_count, mir.base_instance));
+        }
+
         const u32 light_slot = reserve_light_volumes(gpu.ctx, bounded_frame_index, res.draw_stream.writer,
                                                      res.mesh_indirect_ring, res.draw_material_id_ring, 0u);
 
@@ -1184,8 +1406,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             }};
 
             fs.timeline_values[stage_index(Stage::Predepth)] =
-                    run_predepth_pass(app_context, render_scene_extent, mesh_ranges, bounded_frame_index,
-                                      SubmitSynchronisation{.timeline_waits = cube_rotate_waits});
+                    run_predepth_pass(app_context, render_scene_extent, res.mesh_instance_ranges, all_mesh_ranges,
+                                      bounded_frame_index, SubmitSynchronisation{.timeline_waits = cube_rotate_waits});
         }
 
         {
@@ -1196,7 +1418,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             }};
 
             fs.timeline_values[stage_index(Stage::DirectionalShadowMap)] = run_directional_shadow_map_pass(
-                    app_context, mesh_ranges, bounded_frame_index,
+                    app_context, res.mesh_instance_ranges, all_mesh_ranges, bounded_frame_index,
                     SubmitSynchronisation{.timeline_waits = directional_shadow_map_waits});
         }
 
@@ -1224,8 +1446,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     },
             };
             fs.timeline_values[stage_index(Stage::GBuffer)] =
-                    run_gbuffer_pass(app_context, render_scene_extent, mesh_ranges, bounded_frame_index,
-                                     SubmitSynchronisation{.timeline_waits = gbuffer_waits});
+                    run_gbuffer_pass(app_context, render_scene_extent, res.mesh_instance_ranges, all_mesh_ranges,
+                                     bounded_frame_index, SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         }
 
         {
@@ -1244,6 +1466,19 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             fs.timeline_values[stage_index(Stage::DeferredLighting)] =
                     run_deferred_lighting_pass(app_context, render_scene_extent, light_slot, bounded_frame_index,
                                                SubmitSynchronisation{.timeline_waits = deferred_waits});
+        }
+
+        {
+            const std::array skybox_waits{
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::DeferredLighting)],
+                            .semaphore = gpu.tl_graphics.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    },
+            };
+            fs.timeline_values[stage_index(Stage::Skybox)] =
+                    run_environment_skybox_pass(app_context, render_scene_extent, bounded_frame_index,
+                                                SubmitSynchronisation{.timeline_waits = skybox_waits});
         }
 
         {

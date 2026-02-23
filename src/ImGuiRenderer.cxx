@@ -9,6 +9,8 @@
 #include "Types.hxx"
 
 #include <backends/imgui_impl_glfw.h>
+#include <misc/freetype/imgui_freetype.h>
+
 #include <filesystem>
 #include <imgui.h>
 #include <implot.h>
@@ -384,7 +386,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
             clipMax.y = std::min(clipMax.y, fb_height);
 
             if (clipMax.x <= clipMin.x || clipMax.y <= clipMin.y) {
-                continue;
+                continue;   
             }
 
             struct VulkanImguiBindData {
@@ -779,23 +781,29 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
             .pipeline = new_pipeline,
             .layout = pipeline_layout,
     };
-}
+}       
 
 auto ImGuiRenderer::update_font(FontChoice f) -> void {
     ImGuiIO &io = ImGui::GetIO();
-    ImFontConfig cfg = ImFontConfig();
+    ImFontConfig cfg{};
     cfg.FontDataOwnedByAtlas = false;
     cfg.RasterizerMultiply = 1.5f;
     cfg.SizePixels = std::ceilf(f.size);
     cfg.PixelSnapH = true;
-    cfg.OversampleH = 4;
-    cfg.OversampleV = 4;
+    cfg.OversampleH = 2;
+    cfg.OversampleV = 1;
+    cfg.FontLoaderFlags = ImGuiFreeTypeLoaderFlags_ForceAutoHint
+                        | ImGuiFreeTypeLoaderFlags_LightHinting;
+
     ImFont *font = nullptr;
     if (std::filesystem::exists(f.font_path)) {
         auto path = f.font_path.string();
         font = io.Fonts->AddFontFromFileTTF(path.c_str(), cfg.SizePixels, &cfg);
     }
+
     io.Fonts->Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
+    // IMGUI_ENABLE_FREETYPE makes freetype the default loader, no need to set it manually
+
     unsigned char *pixels;
     int width, height;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
@@ -805,14 +813,15 @@ auto ImGuiRenderer::update_font(FontChoice f) -> void {
                                                std::span(pixels, width * height * 4), "imgui_fonts")));
     io.Fonts->TexID = font_texture.index();
     io.FontDefault = font;
+
     auto ci = create_info<VkSamplerCreateInfo>();
     ci.magFilter = VK_FILTER_LINEAR;
     ci.minFilter = VK_FILTER_LINEAR;
     ci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, // Change;
-            ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, // Change;
-            ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, // Change;
-            ci.compareOp = VK_COMPARE_OP_ALWAYS;
+    ci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ci.compareOp = VK_COMPARE_OP_ALWAYS;
     ci.maxLod = VK_LOD_CLAMP_NONE;
     ci.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 

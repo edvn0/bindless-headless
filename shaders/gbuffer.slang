@@ -225,17 +225,18 @@ float3 evaluate_point_light_pbr(
 
     float3 L = L_unnorm / dist;
 
-    float inv_sq    = 1.0 / max(dist_sq, 0.01 * 0.01);
-float radius_sq = radius * radius;
-float window    = saturate(1.0 - (dist_sq * dist_sq) / (radius_sq * radius_sq));
-window         *= window;
+    // Physical 1/r² with a normalisation reference so intensity=1 means
+    // "1 unit of brightness at sqrt(ref_dist_sq) units away"
+    static const float ref_dist_sq = 1.0;
+    float inv_sq = ref_dist_sq / max(dist_sq, 0.01);
 
-// ref_dist is "at what distance does intensity=1 mean full brightness"
-// For a 4000-unit world with radii in [30,600], something like 1.0–5.0 works.
-// Essentially converts intensity from "power" to "brightness at ref_dist".
-static const float ref_dist_sq = 100000.0; // tune this one constant
-float3 radiance = light_col * intensity * (inv_sq * ref_dist_sq) * window;
+    // UE4-style window: guaranteed zero at dist==radius, smooth derivative
+    float radius_sq  = radius * radius;
+    float ratio_sq   = dist_sq / radius_sq;
+    float window     = saturate(1.0 - ratio_sq * ratio_sq);
+    window          *= window;
 
+    float3 radiance = light_col * intensity * inv_sq * window;
     return calculate_direct_lighting(L, V, N, albedo, roughness, metallic, radiance);
 }
 
@@ -255,8 +256,9 @@ float3 evaluate_point_light_fixed_v4(
     float dist = length(L);
     if (dist > radius) return 0.0.xxx;
     
-    float t = 1.0 - (dist / radius);
-    float attenuation = t*t;
+float norm_dist = saturate(dist / (radius * 0.85));
+float attenuation = (1.0 - norm_dist * norm_dist);
+attenuation = attenuation * attenuation;
     float3 radiance = light_col * intensity * attenuation;
     return calculate_direct_lighting(safe_normalize(L), V, N, albedo, roughness, metallic, radiance);
     }

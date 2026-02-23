@@ -1,4 +1,5 @@
 #include <tl/expected.hpp>
+#include <vulkan/vulkan_core.h>
 #include "BindlessHeadless.hxx"
 #include "BindlessSet.hxx"
 #include "Pool.hxx"

@@ -38,6 +38,7 @@ struct UBO {
     float4x4 view_projection;
     float4x4 inv_projection;
     float4x4 inv_view_projection;
+    float4x4 inv_view_projection_no_translation;
     float4 camera_position;
     float4 frustum_planes[6];
     float4 sun_direction_intensity;
@@ -143,6 +144,12 @@ RWTexture2D<float4> storage_images[];
 [[vk::binding(3, 0)]] 
 SamplerComparisonState comparison_samplers[];
 
+[[vk::binding(4, 0)]]
+TextureCube<float4> sampled_cubemaps[];
+
+[[vk::binding(5, 0)]]
+Texture3D<float4> sampled_3d_images[];
+
 float4 sample_texture_lod(float2 uv, uint image_index,  float lod, uint sampler_index = 0)
 {
     uint tex_idx = NonUniformResourceIndex(image_index);
@@ -161,6 +168,10 @@ float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0)
 
 RWTexture2D<float4> get_storage_image(uint image_index) {
     return storage_images[NonUniformResourceIndex(image_index)];
+}
+
+Texture2D<float4> get_image(uint image_index) {
+    return sampled_images[NonUniformResourceIndex(image_index)];
 }
 
 float3 reconstruct_world_position_from_depth(float2 uv, float depth, Ptr<UBO, Access.Read, AddressSpace.Device> ubo)

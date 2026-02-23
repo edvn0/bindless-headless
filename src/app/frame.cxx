@@ -26,6 +26,7 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     ubo.view_projection = ubo.projection * ubo.view;
     ubo.camera_position = glm::vec4(cam.camera_position(), 1.0f);
     ubo.inv_view_projection = glm::inverse(ubo.view_projection);
+    ubo.inv_view_projection_no_translation = glm::inverse(ubo.projection * glm::mat4(glm::mat3(ubo.view)));
     ubo.viewport_size = glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
 
     const auto planes = extract_frustum_planes(ubo.projection);
@@ -46,6 +47,7 @@ auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &
     write(ubo.view_projection, offsetof(FrameUBO, view_projection));
     write(ubo.inv_view_projection, offsetof(FrameUBO, inv_view_projection));
     write(ubo.inv_projection, offsetof(FrameUBO, inv_projection));
+    write(ubo.inv_view_projection_no_translation, offsetof(FrameUBO, inv_view_projection_no_translation));
     write(ubo.camera_position, offsetof(FrameUBO, camera_position));
     write(ubo.frustum_planes, offsetof(FrameUBO, frustum_planes));
 }

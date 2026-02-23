@@ -140,5 +140,6 @@ struct LoadedObj {
     BufferHandle aabb_buffer;
 };
 
-auto load_obj(RenderContext &ctx, GlobalCommandContext &cmd_ctx, const std::filesystem::path &obj_path)
+
+auto load_obj(RenderContext &ctx, const std::filesystem::path &obj_path, float scale = static_cast<float>(meters_per_unit_engine))
         -> tl::expected<LoadedObj, Error>;

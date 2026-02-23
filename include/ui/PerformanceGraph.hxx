@@ -107,8 +107,8 @@ public:
                     ImPlot::SetupAxisLimits(ImAxis_X1, 0, MaxSamples, ImGuiCond_Always);
                     ImPlot::SetupAxisLimits(ImAxis_Y1, 0, y_max, ImGuiCond_Always);
 
-                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 
-                 1.0, 0.0);
+                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 1.0,
+                                     0.0);
 
                     ImPlot::EndPlot();
                 }
@@ -144,7 +144,12 @@ public:
         if (line_count == 0)
             return;
 
+        if (size.x <= 0.0f) {
+            size.x = ImGui::GetContentRegionAvail().x;
+        }
+ 
         if (ImPlot::BeginPlot(title.data(), size, ImPlotFlags_NoTitle)) {
+            ImPlot::SetupLegend(ImPlotLocation_South, ImPlotLegendFlags_Outside | ImPlotLegendFlags_Horizontal);
             ZoneScopedNC("ImPlot::render_combined", 0x8B5CF6);
 
             ImPlot::SetupAxes("Frame", "Time (ms)", ImPlotAxisFlags_NoTickLabels, 0);
@@ -160,8 +165,8 @@ public:
                     continue;
 
                 if (ImPlot::BeginItem(line.name.data())) {
-                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 
-                 1.0, 0.0);
+                    ImPlot::PlotLine(line.name.data(), line.samples.data(), static_cast<int>(line.sample_count), 1.0,
+                                     0.0);
 
                     for (std::size_t j = 0; j < line.sample_count; ++j) {
                         new_max = std::max(new_max, line.samples[j]);
@@ -188,7 +193,7 @@ public:
     }
 
 private:
-    std::array<Line, MaxLines> graph_lines;
+    std::array<Line, MaxLines> graph_lines{};
     std::size_t line_count = 0;
     float auto_scale_max = 1.0f;
 };

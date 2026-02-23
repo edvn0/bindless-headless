@@ -95,6 +95,12 @@ auto EditorCamera::update_fly_move(GLFWwindow *window, double dt, bool fast) -> 
     }
 }
 
+static auto apply_deadzone(float v, float dz) -> float {
+    if (std::abs(v) < dz)
+        return 0.0f;
+    return (v - std::copysign(dz, v)) / (1.0f - dz);
+}
+
 auto EditorCamera::update(GLFWwindow *window, double dt, CameraInput &in) -> void {
     // Determine modifiers via GLFW for robustness
     in.alt = (glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) ||
@@ -144,6 +150,52 @@ auto EditorCamera::update(GLFWwindow *window, double dt, CameraInput &in) -> voi
         if (in.scroll_delta != 0.0f) {
             const float zoom = expf(-in.scroll_delta * dolly_sensitivity);
             distance = std::clamp(distance * zoom, 0.05f, 50000.0f);
+        }
+    }
+
+    GLFWgamepadstate pad{};
+    if (glfwGetGamepadState(GLFW_JOYSTICK_1, &pad)) {
+        const float lx = apply_deadzone(pad.axes[GLFW_GAMEPAD_AXIS_LEFT_X], gamepad_deadzone);
+        const float ly = apply_deadzone(pad.axes[GLFW_GAMEPAD_AXIS_LEFT_Y], gamepad_deadzone);
+        const float rx = apply_deadzone(pad.axes[GLFW_GAMEPAD_AXIS_RIGHT_X], gamepad_deadzone);
+        const float ry = apply_deadzone(pad.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y], gamepad_deadzone);
+        // const float rt = (pad.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f; // [-1,1] -> [0,1]
+
+        const float fdt = static_cast<float>(dt);
+        const bool fast = pad.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER] == GLFW_PRESS;
+        const float speed = (fast ? fly_speed_fast : fly_speed) * fdt;
+
+        // Right stick: look (fly mode) or orbit
+        if (orbit_mode) {
+            if (rx != 0.0f || ry != 0.0f) {
+                apply_orbit({rx * gamepad_look_sensitivity * fdt, ry * gamepad_look_sensitivity * fdt});
+            }
+            // RT: dolly in/out via left stick Y
+            if (ly != 0.0f) {
+                apply_dolly(-ly * fdt * 5.0f);
+            }
+        } else {
+            if (rx != 0.0f || ry != 0.0f) {
+                apply_fly_look({rx * gamepad_look_sensitivity * fdt, ry * gamepad_look_sensitivity * fdt});
+            }
+            // Left stick: strafe/forward
+            glm::vec3 move{0.0f};
+            move += forward * (-ly);
+            move += right * lx;
+            // Bumpers: up/down
+            if (pad.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER] == GLFW_PRESS)
+                move += glm::vec3(0.0f, 1.0f, 0.0f);
+            if (pad.buttons[GLFW_GAMEPAD_BUTTON_A] == GLFW_PRESS)
+                move -= glm::vec3(0.0f, 1.0f, 0.0f);
+
+            if (glm::length2(move) > 0.0f)
+                position += glm::normalize(move) * speed;
+        }
+
+        // B button: toggle orbit/fly
+        if (pad.buttons[GLFW_GAMEPAD_BUTTON_B] == GLFW_PRESS) {
+            orbit_mode = !orbit_mode;
+            orbit_mode ? set_from_orbit() : set_from_fly();
         }
     }
 

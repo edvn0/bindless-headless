@@ -28,7 +28,6 @@ auto create_global_cmd_context(VkDevice device, VkQueue queue, u32 family_index)
 
 template<typename RecordFn>
 auto submit_one_time_cmd(GlobalCommandContext &ctx, RecordFn &&record, bool wait_immediately = false) -> u64 {
-    // Throttle if too many pending submissions
     if (ctx.current_value > ctx.completed_value + GlobalCommandContext::max_pending) {
         u64 wait_val = ctx.current_value - GlobalCommandContext::max_pending;
         VkSemaphoreWaitInfo wi{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,

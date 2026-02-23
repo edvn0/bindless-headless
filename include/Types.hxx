@@ -2,25 +2,23 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <format>
 #include <functional>
 #include <mutex>
-#include <optional>
-#include <utility>
-#include <type_traits>
 #include <numeric>
+#include <optional>
 #include <source_location>
 #include <string_view>
-#include <numeric>
-#include <cmath>
+#include <type_traits>
+#include <utility>
 #include <volk.h>
 
-#include "Logger.hxx"
 #include "Error.hxx"
+#include "Logger.hxx"
 #include "Numeric.hxx"
-#include "vulkan/vulkan.hpp"
 
 #include <vk_mem_alloc.h>
 
@@ -62,12 +60,31 @@ struct TypedDeviceAddress {
     explicit(false) operator DeviceAddress() const { return address; }
 };
 
+auto result_to_string(VkResult) -> std::string;
 inline auto vk_check(VkResult result, std::source_location err = std::source_location::current()) -> void {
     if (result != VK_SUCCESS) {
-        warn("Check {} failed from: {}:{}:{}", static_cast<i32>(result),
-                                        err.file_name(), err.line(), err.column());
+        warn("Check '{}' failed from: {}:{}:{}", result_to_string(result), err.file_name(), err.line(), err.column());
         std::abort();
     }
+}
+
+inline auto ensure(const bool predicate, const std::string_view message,
+                   std::source_location err = std::source_location::current()) {
+    if (!predicate) {
+        auto msg = std::format("Assertion was invalid. Info: {}. Trace: {}:{}:{}", message, err.file_name(), err.line(),
+                               err.column());
+#ifdef NDEBUG
+        warn("{}", std::move(msg));
+        std::abort();
+#else
+        error("{}", std::move(msg));
+#endif
+    }
+}
+
+inline auto ensure(const std::signed_integral auto predicate, const std::string_view message,
+                   std::source_location err = std::source_location::current()) {
+    ensure(predicate == 1, message, err);
 }
 
 auto pipeline_cache_path() -> std::optional<std::filesystem::path>;
@@ -313,22 +330,19 @@ public:
 };
 
 
-template <class T>
-struct UIValueLatch
-{
-    T value {};
-    bool changed {false};
+template<class T>
+struct UIValueLatch {
+    T value{};
+    bool changed{false};
 
     UIValueLatch() = default;
     UIValueLatch(T v) : value(std::move(v)) {}
 
-    [[nodiscard]] auto peek() const -> T const& { return value; }
+    [[nodiscard]] auto peek() const -> T const & { return value; }
     [[nodiscard]] auto is_changed() const -> bool { return changed; }
 
-    auto set(T v) -> void
-    {
-        if constexpr (requires { value == v; })
-        {
+    auto set(T v) -> void {
+        if constexpr (requires { value == v; }) {
             if (value == v)
                 return;
         }
@@ -336,8 +350,7 @@ struct UIValueLatch
         changed = true;
     }
 
-    auto consume() -> T
-    {
+    auto consume() -> T {
         changed = false;
         if constexpr (std::is_move_constructible_v<T>)
             return std::move(value);
@@ -345,17 +358,15 @@ struct UIValueLatch
             return value;
     }
 
-    auto consume_if_changed() -> std::optional<T>
-    {
+    auto consume_if_changed() -> std::optional<T> {
         if (!changed)
             return std::nullopt;
         return consume();
     }
 
-    operator T const&() const { return value; }
+    operator T const &() const { return value; }
 
-    auto operator=(T v) -> UIValueLatch&
-    {
+    auto operator=(T v) -> UIValueLatch & {
         set(std::move(v));
         return *this;
     }
@@ -364,7 +375,7 @@ struct UIValueLatch
 
 constexpr auto matches(const auto &needle, const auto &&...haystack) { return ((needle == haystack) || ...); }
 
-constexpr std::string_view to_string(Error::Type type) {
+constexpr std::string_view error_to_string(Error::Type type) {
     using enum Error::Type;
     switch (type) {
         case MeshLoadError:
@@ -400,7 +411,7 @@ namespace std {
     template<>
     struct formatter<Error> : formatter<string_view> {
         auto format(const Error &err, format_context &ctx) const {
-            std::string s = std::format("[{}] {} (at {}:{}:{})", to_string(err.type), err.message,
+            std::string s = std::format("[{}] {} (at {}:{}:{})", error_to_string(err.type), err.message,
                                         err.location.file_name(), err.location.line(), err.location.column());
             return std::formatter<std::string_view>::format(s, ctx);
         }

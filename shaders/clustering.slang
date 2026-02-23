@@ -42,8 +42,8 @@ bool light_intersects_cluster(PushConstants pc, uint light_index, uint cx, uint 
     float  radius   = l.position_radius.w;
 
     // Frustum cull first — cheap reject before AABB test
-    //if (!sphere_in_frustum(view_pos, radius, pc.frame_ubo->frustum_planes))
-    //    return false;
+//if (!sphere_in_frustum(view_pos, radius, pc.frame_ubo->frustum_planes))
+//        return false;
     float view_z = -view_pos.z;
 if (view_z + radius < pc.z_near || view_z - radius > pc.z_far)
     return false;
@@ -123,8 +123,6 @@ void BuildClusterCS(
         pc.cluster_light_indices[base_offset + j] = g_light_indices[j];
 }
 
-// Indirect command now just dispatches based on full light count,
-// or you can remove it entirely and dispatch directly from the CPU.
 [numthreads(1, 1, 1)]
 [shader("compute")]
 void LightFinaliseCS(uniform PushConstants pc)

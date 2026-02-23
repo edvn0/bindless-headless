@@ -9,6 +9,7 @@
 #include "Pool.hxx"
 #include "RenderContext.hxx"
 #include "imgui.h"
+#include "ui/StyleGuard.hxx"
 
 #include <algorithm>
 #include <array>
@@ -54,15 +55,17 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
     ImGui::DockSpace(dockspace_id, ImVec2(0, 0), dockspace_flags);
     ImGui::End();
 
-    constexpr ImGuiWindowFlags viewport_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-    ImGui::Begin("Viewport", nullptr, viewport_flags);
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(0, 0));
 
     {
+
+        StyleGuard viewport_guard(std::pair{ImGuiStyleVar_WindowPadding, ImVec2(0, 0)},
+                                  std::pair{ImGuiStyleVar_ItemSpacing, ImVec2(0, 0)},
+                                  std::pair{ImGuiStyleVar_FramePadding, ImVec2(0, 0)},
+                                  std::pair{ImGuiStyleVar_CellPadding, ImVec2(0, 0)});
+
+        constexpr ImGuiWindowFlags viewport_flags =
+                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+        ImGui::Begin("Viewport", nullptr, viewport_flags);
         output.viewport_input = {};
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -98,9 +101,8 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
             output.viewport_input.imgui_blocks_keyboard = other_active;
         }
     }
-
-    ImGui::PopStyleVar(4);
     ImGui::End();
+
 
     // ---- Queries / stats collection ----
     auto compute_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.compute_query_pool[frame_index]);
@@ -108,21 +110,20 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
     auto graphics_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.graphics_query_pool[frame_index]);
     auto g_stats = read_graphics_stats(ctx.gpu.ctx, ctx.pipes.graphics_stats_pool[frame_index]);
 
+    auto index = 0;
     if (compute_res.has_value()) {
         const auto &c_times = *compute_res;
-        ctx.ui.gpu_frame_graph.push_sample(0, c_times[static_cast<u32>(ComputeIndex::RotateGeometry)]);
-        ctx.ui.gpu_frame_graph.push_sample(1, c_times[static_cast<u32>(ComputeIndex::RotateLights)]);
-        ctx.ui.gpu_frame_graph.push_sample(2, c_times[static_cast<u32>(ComputeIndex::LightClustering)]);
+        for (size_t i = 0; i < compute_stages.size(); ++i) {
+            ctx.ui.gpu_frame_graph.push_sample(static_cast<int>(index++), c_times[static_cast<u32>(compute_stages[i])]);
+        }
     }
 
     if (graphics_res.has_value()) {
         const auto &g_times = *graphics_res;
-        ctx.ui.gpu_frame_graph.push_sample(3, g_times[static_cast<u32>(GraphicsIndex::PreDepth)]);
-        ctx.ui.gpu_frame_graph.push_sample(4, g_times[static_cast<u32>(GraphicsIndex::GBuffer)]);
-        ctx.ui.gpu_frame_graph.push_sample(5, g_times[static_cast<u32>(GraphicsIndex::Deferred)]);
-        ctx.ui.gpu_frame_graph.push_sample(6, g_times[static_cast<u32>(GraphicsIndex::Tonemap)]);
-        ctx.ui.gpu_frame_graph.push_sample(7, g_times[static_cast<u32>(GraphicsIndex::Present)]);
-        ctx.ui.gpu_frame_graph.push_sample(8, g_times[static_cast<u32>(GraphicsIndex::ShadowMap)]);
+        for (size_t i = 0; i < graphics_stages.size(); ++i) {
+            ctx.ui.gpu_frame_graph.push_sample(static_cast<int>(index++),
+                                               g_times[static_cast<u32>(graphics_stages[i])]);
+        }
     }
 
     widget("Performance Graphs", [&] {
@@ -140,8 +141,11 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
 
         ImGui::Separator();
 
+        StyleGuard guard(std::pair{ImGuiStyleVar_WindowPadding, ImVec2(0, 0)},
+                         std::pair{ImGuiStyleVar_FramePadding, ImVec2(0, 0)});
+
         if (view_mode == 0) {
-            ctx.ui.gpu_frame_graph.render("GPU Frame Times", ImVec2(0, 200));
+            ctx.ui.gpu_frame_graph.render("GPU Frame Times", ImVec2(-1, 200));
         } else {
             ctx.ui.gpu_frame_graph.render_split("GPU", ImVec2(-1, 80), shared_scale);
         }

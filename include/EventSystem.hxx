@@ -43,6 +43,10 @@ struct CharInputEvent : Event {
     u32 codepoint;
 };
 
+struct GamepadButtonPressedEvent:  Event {
+    i32 button;
+};
+
 class EventDispatcher {
 public:
     EventDispatcher(Event &event) : ev(event) {}

@@ -16,6 +16,7 @@ struct FrameUBO {
     glm::mat4 view_projection;
     glm::mat4 inv_projection;
     glm::mat4 inv_view_projection;
+    glm::mat4 inv_view_projection_no_translation;
     glm::vec4 camera_position;
     std::array<FrustumPlane, 6> frustum_planes; // left, right, bottom, top, near, far
     glm::vec4 sun_direction_intensity;
