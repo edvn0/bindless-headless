@@ -571,7 +571,7 @@ auto run_directional_shadow_map_pass(AppContext &ctx,
 
                     vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
                     const std::array<VkBuffer, 1>     vert_bufs = {verts->buffer()};
-                    const std::array<VkDeviceSize, 1> vert_offs = {0};
+                    constexpr std::array<VkDeviceSize, 1> vert_offs = {0};
                     const VkDeviceSize                vert_size = verts->size();
                     vkCmdBindVertexBuffers2(cmd, 0, 1,
                                            vert_bufs.data(), vert_offs.data(),

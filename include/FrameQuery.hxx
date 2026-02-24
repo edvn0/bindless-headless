@@ -6,16 +6,16 @@
 #include <volk.h>
 
 template<typename Stamp>
-static inline auto write_ts(VkCommandBuffer cmd, const QueryPoolState &qs, VkPipelineStageFlags2 stage, Stamp s)
+auto write_ts(VkCommandBuffer cmd, const QueryPoolState &qs, VkPipelineStageFlags2 stage, Stamp s)
         -> void {
     vkCmdWriteTimestamp2(cmd, stage, qs.pool, static_cast<u32>(s));
 }
 
-static inline auto begin_stats(VkCommandBuffer cmd, const QueryPoolState &qs, const auto query) -> void {
+auto begin_stats(VkCommandBuffer cmd, const QueryPoolState &qs, const auto query) -> void {
     vkCmdBeginQuery(cmd, qs.pool, static_cast<u32>(query), 0);
 }
 
-static inline auto end_stats(VkCommandBuffer cmd, const QueryPoolState &qs, const auto query) -> void {
+auto end_stats(VkCommandBuffer cmd, const QueryPoolState &qs, const auto query) -> void {
     vkCmdEndQuery(cmd, qs.pool, static_cast<u32>(query));
 }
 
