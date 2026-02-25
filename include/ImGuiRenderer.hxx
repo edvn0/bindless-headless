@@ -17,8 +17,7 @@ using ImGuiFramebuffer = std::tuple<VkExtent2D, VkFormat, VkFormat, VkColorSpace
 
 class ImGuiRenderer {
 public:
-    ImGuiRenderer(GLFWwindow *main_window, u32 initial_slot_count, RenderContext &, Compiler &,
-                  FontChoice = {});
+    ImGuiRenderer(GLFWwindow *main_window, u32 initial_slot_count, RenderContext &, Compiler &, FontChoice = {});
     ~ImGuiRenderer();
 
     ImGuiRenderer(ImGuiRenderer &&) = delete;

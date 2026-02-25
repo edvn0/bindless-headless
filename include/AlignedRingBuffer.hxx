@@ -110,8 +110,8 @@ public:
         buf->write_slice(ctx.allocator, std::span{&value, 1}, off);
     }
 
-    auto fill_zeros(VkCommandBuffer cmd,RenderContext& ctx, u32 slot_index) -> void {
-        auto* buf = ctx.buffers.get(handle());
+    auto fill_zeros(VkCommandBuffer cmd, RenderContext &ctx, u32 slot_index) -> void {
+        auto *buf = ctx.buffers.get(handle());
         vkCmdFillBuffer(cmd, buf->buffer(), slot_offset_bytes(slot_index), stride(), 0);
 
         auto barrier = create_info<VkMemoryBarrier2>();

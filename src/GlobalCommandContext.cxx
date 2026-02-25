@@ -2,7 +2,8 @@
 
 #include "BindlessHeadless.hxx"
 
-auto create_global_cmd_context(VkDevice device, VkQueue queue, u32 family_index) -> std::unique_ptr<GlobalCommandContext> {
+auto create_global_cmd_context(VkDevice device, VkQueue queue, u32 family_index)
+        -> std::unique_ptr<GlobalCommandContext> {
     GlobalCommandContext ctx{};
     ctx.device = device;
     ctx.queue = queue;

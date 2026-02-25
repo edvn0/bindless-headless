@@ -1,5 +1,4 @@
 #include <GLFW/glfw3.h>
-#include <cassert>
 #include <chrono>
 #include <deque>
 #include <efsw/efsw.hpp>
@@ -15,6 +14,7 @@
 #include <thread>
 
 #include "Logger.hxx"
+#include "SceneLoader.hxx"
 
 #include "BindlessHeadless.hxx"
 
@@ -25,7 +25,20 @@ namespace {
     auto debug_callback(const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity, VkDebugUtilsMessageTypeFlagsEXT,
                         const VkDebugUtilsMessengerCallbackDataEXT *callback_data, void *) -> VkBool32 {
         if (message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-vkCmdWriteTimestamp            error("Validation layer: {}", callback_data->pMessage);
+            auto object_info = std::string{};
+            if (callback_data->objectCount > 0) {
+                object_info += "Objects involved:\n";
+                for (uint32_t i = 0; i < callback_data->objectCount; ++i) {
+                    const auto &obj = callback_data->pObjects[i];
+                    if (obj.pObjectName) {
+                        object_info += std::format("    Name: {}\n", obj.pObjectName);
+                    }
+                    object_info += std::format("  - Object {}: Type={}, Handle=0x{:X}\n", i, static_cast<i32>(obj.objectType),
+                                               obj.objectHandle);
+                }
+            }
+
+            error("Validation layer: {}. {}", callback_data->pMessage, object_info);
         }
 
         if (message_severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
@@ -41,11 +54,11 @@ vkCmdWriteTimestamp            error("Validation layer: {}", callback_data->pMes
 auto main(int argc, char **argv) -> int {
     BindlessApp app;
 
-      if (glfwPlatformSupported(GLFW_PLATFORM_X11)) {
-    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
-  } else {
-    error("No X11 Support");
-  }
+    if (glfwPlatformSupported(GLFW_PLATFORM_X11)) {
+        glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+    } else {
+        error("No X11 Support");
+    }
 
     if (auto init = glfwInit(); init != GLFW_TRUE) {
         error("Could not initialize GLFW");
@@ -58,6 +71,11 @@ auto main(int argc, char **argv) -> int {
     }
     auto opts = std::move(maybe_opts.value());
 
+    {
+        Tooling::SceneLoader loader;
+        std::ignore = loader.convert_gltf("assets/meshes/SponzaGLTF/sponza.gltf",
+                                          "assets/meshes/SponzaGLTF/sponza_converted");
+    }
     uint32_t count{};
     const char **extensions_raw = glfwGetRequiredInstanceExtensions(&count);
     std::vector<std::string_view> extensions(extensions_raw, extensions_raw + count);

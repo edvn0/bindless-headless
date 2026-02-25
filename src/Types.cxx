@@ -1,4 +1,5 @@
 #include "Types.hxx"
+#include <GLFW/glfw3.h>
 
 auto OffscreenTarget::is_depth() const -> bool {
     return matches(format, VK_FORMAT_D16_UNORM, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM_S8_UINT,
@@ -9,7 +10,6 @@ auto OffscreenTarget::is_stencil() const -> bool {
     return matches(format, VK_FORMAT_S8_UINT, VK_FORMAT_D16_UNORM_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT,
                    VK_FORMAT_D32_SFLOAT_S8_UINT);
 }
-
 
 
 auto pipeline_cache_path() -> std::optional<std::filesystem::path> {
@@ -154,4 +154,12 @@ auto FrameStats::quantile(double p) const -> double {
     const double t = x - static_cast<double>(i);
 
     return sorted[i] * (1.0 - t) + sorted[j] * t;
+}
+
+NanoProfiler::NanoProfiler(const std::string_view n) : start_time(glfwGetTime()), scope_name(n) {}
+
+NanoProfiler::~NanoProfiler() {
+    auto end_time = glfwGetTime();
+    auto millis = (end_time - start_time) * 1000.0;
+    info("Scope [{}] took {:4.2f} ms", scope_name, millis);
 }

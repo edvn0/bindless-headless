@@ -1,5 +1,28 @@
 #include "Mesh.hxx"
 #include "CompilerGlue.hxx"
+#include "Error.hxx"
+#include "Logger.hxx"
+#include "Profiler.hxx"
+#include "RenderContext.hxx"
+#include "SceneLoader.hxx" // FileHeader, Submesh (file), GPUMaterial, Texture, BlobRange, etc.
+#include "Types.hxx"
+
+
+#include <bzlib.h>
+#include <ktx.h>
+#include <ktxvulkan.h>
+#include <volk.h>
+
+#include <bit>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <span>
+#include <string_view>
+#include <vector>
+
+#include <tl/expected.hpp>
 
 #include <glm/gtc/packing.hpp>
 #include <glm/packing.hpp>
@@ -537,8 +560,8 @@ auto load_texture_from_file(const std::filesystem::path &texture_path, const Tex
     return packet;
 }
 
-auto load_obj(RenderContext &ctx, const std::filesystem::path &obj_path, float scale)
-        -> tl::expected<LoadedObj, Error> {
+auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path, float scale)
+        -> tl::expected<StaticMesh, Error> {
 
     tinyobj::ObjReaderConfig cfg{};
     cfg.mtl_search_path = obj_path.parent_path().string();
@@ -777,9 +800,517 @@ auto load_obj(RenderContext &ctx, const std::filesystem::path &obj_path, float s
 
     indirect_cmds.reserve(mesh.submeshes.size());
 
-    return LoadedObj{
+    return StaticMesh{
             .mesh = std::move(mesh),
             .materials = std::move(materials),
+            .gpu_materials = std::move(gpu_materials),
+            .indirect_template = std::move(indirect_cmds),
+            .material_buffer = ctx.buffers.create(std::move(material_buffer)),
+            .material_ids_buffer = ctx.buffers.create(std::move(material_ids_buffer)),
+            .vertex_buffer = ctx.buffers.create(std::move(vertex_buffer)),
+            .pos_uv_buffer = ctx.buffers.create(std::move(pos_uv_buffer)),
+            .index_buffer = ctx.buffers.create(std::move(index_buffer)),
+            .draw_count = static_cast<u32>(indirect_cmds.size()),
+            .mesh_aabb = aabb_data.mesh_aabb,
+            .submesh_aabbs = std::move(aabb_data.submesh_aabbs),
+            .aabb_buffer = ctx.buffers.create(std::move(aabb_data.device_buffer)),
+    };
+}
+
+
+namespace {
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    auto read_raw(const std::filesystem::path &path) -> tl::expected<std::vector<std::byte>, Error> {
+        std::ifstream f(path, std::ios::binary);
+        if (!f)
+            return tl::unexpected(
+                    Error::make_error(Error::Type::MeshLoadError, "Cannot open scene file: " + path.string()));
+        f.seekg(0, std::ios::end);
+        const auto sz = static_cast<size_t>(f.tellg());
+        f.seekg(0, std::ios::beg);
+
+        constexpr size_t k_prefix = 16; // [magic u64][src_hash u64]
+        if (sz <= k_prefix)
+            return tl::unexpected(
+                    Error::make_error(Error::Type::MeshLoadError, "Scene file too small: " + path.string()));
+
+        f.seekg(static_cast<std::streamoff>(k_prefix), std::ios::beg);
+        const size_t payload_sz = sz - k_prefix;
+        std::vector<std::byte> buf(payload_sz);
+        f.read(std::bit_cast<char *>(buf.data()), static_cast<std::streamsize>(payload_sz));
+        if (!f)
+            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Read error: " + path.string()));
+        return buf;
+    }
+
+    auto bzip2_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
+        // We don't know the original size, so grow until it fits.
+        size_t dst_cap = src.size() * 8;
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            std::vector<std::byte> dst(dst_cap);
+            unsigned int dst_len = static_cast<unsigned int>(dst_cap);
+
+            const int rc = BZ2_bzBuffToBuffDecompress(std::bit_cast<char *>(dst.data()), &dst_len,
+                                                      const_cast<char *>(std::bit_cast<const char *>(src.data())),
+                                                      static_cast<unsigned int>(src.size()),
+                                                      /*small*/ 0, /*verbosity*/ 0);
+
+            if (rc == BZ_OK) {
+                dst.resize(dst_len);
+                return dst;
+            }
+            if (rc == BZ_OUTBUFF_FULL) {
+                dst_cap *= 4;
+                continue;
+            }
+            return tl::unexpected(
+                    Error::make_error(Error::Type::MeshLoadError, "bzip2 decompress failed: " + std::to_string(rc)));
+        }
+        return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "bzip2 output buffer never large enough"));
+    }
+
+    template<class T>
+    auto blob_span(std::span<const std::byte> file, const Tooling::BlobRange &r) -> std::span<const T> {
+        const size_t byte_off = static_cast<size_t>(r.offset);
+        const size_t byte_sz = static_cast<size_t>(r.size);
+        if (byte_off + byte_sz > file.size())
+            return {};
+        return {reinterpret_cast<const T *>(file.data() + byte_off), byte_sz / sizeof(T)};
+    }
+
+    auto string_at(std::span<const std::byte> string_blob, u32 offset) -> std::string_view {
+        if (offset >= string_blob.size())
+            return {};
+        const char *p = reinterpret_cast<const char *>(string_blob.data() + offset);
+        return std::string_view{p}; // null-terminated
+    }
+
+    // -------------------------------------------------------------------------
+    // KTX2 -> LoadedTextureCpu  (mirrors load_ktx2_cpu_bc7 in Mesh.cxx)
+    // -------------------------------------------------------------------------
+
+    auto decode_ktx2_bytes(std::span<const std::byte> ktx_bytes, TextureLoadPacket::Type type,
+                           TextureLoadPacket::Class tex_class, std::string_view debug_name) -> LoadedTextureCpu {
+
+        auto make_error_tex = [&]() -> LoadedTextureCpu {
+            LoadedTextureCpu out{};
+            out.name = std::string(debug_name);
+            out.type = type;
+            out.texture_class = tex_class;
+            out.width = out.height = 1;
+            out.levels = 1;
+            out.vk_format =
+                    (type == TextureLoadPacket::Type::SRGB) ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+            out.data = {255, 0, 255, 255};
+            out.level_offset = {0};
+            out.level_size = {4};
+            return out;
+        };
+
+        ktxTexture2 *ktx2 = nullptr;
+        KTX_error_code rc = ktxTexture_CreateFromMemory(
+                reinterpret_cast<const ktx_uint8_t *>(ktx_bytes.data()), static_cast<ktx_size_t>(ktx_bytes.size()),
+                KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, reinterpret_cast<ktxTexture **>(&ktx2));
+
+        if (rc != KTX_SUCCESS || !ktx2)
+            return make_error_tex();
+
+        // Check for normal map metadata (same lambda pattern as Mesh.cxx)
+        bool is_normal_map = false;
+        {
+            char *value = nullptr;
+            u32 length = 0;
+            if (KTX_SUCCESS ==
+                ktxHashList_FindValue(&ktx2->kvDataHead, "KTXwriterScParams", &length, (void **) &value)) {
+                std::string_view params(value, length);
+                is_normal_map = (params.find("--normal-mode") != std::string_view::npos);
+            }
+        }
+
+        if (ktxTexture2_NeedsTranscoding(ktx2)) {
+            rc = ktxTexture2_TranscodeBasis(ktx2, KTX_TTF_BC7_RGBA, 0);
+            if (rc != KTX_SUCCESS) {
+                ktxTexture2_Destroy(ktx2);
+                return make_error_tex();
+            }
+        }
+
+        LoadedTextureCpu out{};
+        out.name = std::string(debug_name);
+        out.type = type;
+        out.texture_class = tex_class;
+        out.width = static_cast<u32>(ktx2->baseWidth);
+        out.height = static_cast<u32>(ktx2->baseHeight);
+        out.levels = static_cast<u32>(ktx2->numLevels);
+
+        if (ktxTexture2_NeedsTranscoding(ktx2) == KTX_FALSE) {
+            // Already transcoded above, set format
+            if (is_normal_map) {
+                out.vk_format = VK_FORMAT_BC7_UNORM_BLOCK;
+            } else {
+                out.vk_format =
+                        (type == TextureLoadPacket::Type::SRGB) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+            }
+        } else {
+            out.vk_format = static_cast<VkFormat>(ktx2->vkFormat);
+        }
+
+        out.level_offset.resize(out.levels);
+        out.level_size.resize(out.levels);
+        u32 total = 0;
+
+        for (u32 level = 0; level < out.levels; ++level) {
+            ktx_size_t off = 0;
+            auto level_size = ktxTexture_GetImageSize(reinterpret_cast<ktxTexture *>(ktx2), level);
+            rc = ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture *>(ktx2), level, 0, 0, &off);
+
+            if (rc != KTX_SUCCESS || level_size == 0) {
+                ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
+                return make_error_tex();
+            }
+
+            out.level_offset[level] = total;
+            out.level_size[level] = static_cast<u32>(level_size);
+            total += static_cast<u32>(level_size);
+        }
+
+        out.data.resize(total);
+        const u8 *base = reinterpret_cast<const u8 *>(ktxTexture_GetData(reinterpret_cast<ktxTexture *>(ktx2)));
+
+        for (u32 level = 0; level < out.levels; ++level) {
+            ktx_size_t off = 0;
+            (void) ktxTexture_GetImageOffset(reinterpret_cast<ktxTexture *>(ktx2), level, 0, 0, &off);
+            std::memcpy(out.data.data() + out.level_offset[level], base + off, out.level_size[level]);
+        }
+
+        ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
+        return out;
+    }
+
+    // -------------------------------------------------------------------------
+    // Derive TextureLoadPacket::Type / Class from GPUMaterialData flag context.
+    // We check which map slot this texture index occupies to pick type/class.
+    // Simpler approach: pass them in from the material loop directly.
+    // -------------------------------------------------------------------------
+
+    struct TexSlot {
+        TextureLoadPacket::Type type;
+        TextureLoadPacket::Class tex_class;
+    };
+
+    constexpr TexSlot k_albedo_slot = {TextureLoadPacket::Type::SRGB, TextureLoadPacket::Class::Albedo};
+    constexpr TexSlot k_normal_slot = {TextureLoadPacket::Type::Linear, TextureLoadPacket::Class::Normal};
+    constexpr TexSlot k_rough_slot = {TextureLoadPacket::Type::Linear, TextureLoadPacket::Class::Roughness};
+    constexpr TexSlot k_metal_slot = {TextureLoadPacket::Type::Linear, TextureLoadPacket::Class::Metallic};
+    constexpr TexSlot k_occlusion_slot = {TextureLoadPacket::Type::Linear, TextureLoadPacket::Class::Occlusion};
+    constexpr TexSlot k_emissive_slot = {TextureLoadPacket::Type::SRGB, TextureLoadPacket::Class::Emissive};
+
+} // namespace
+
+// -----------------------------------------------------------------------------
+// Public entry point
+// -----------------------------------------------------------------------------
+
+auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, float scale)
+        -> tl::expected<StaticMesh, Error> {
+    ZoneScopedNC("Load scene", 0xFFAA00);
+    NanoProfiler profiler(std::format("Load scene for '{}'", scene_path.filename().string()).c_str());
+
+    using namespace std::string_view_literals;
+    const auto ext = scene_path.extension().string();
+    if (!matches(ext, ".scene.bz2"sv, ".scene"sv, ".bz2"sv, ".bzip2"sv)) {
+        return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Invalid scene file extension"));
+    }
+
+    // 1. Read compressed file bytes
+    auto compressed = read_raw(scene_path);
+    if (!compressed)
+        return tl::unexpected(compressed.error());
+
+    // 2. Bzip2 decompress
+    auto file_bytes_exp = bzip2_decompress(*compressed);
+    if (!file_bytes_exp)
+        return tl::unexpected(file_bytes_exp.error());
+
+    const std::vector<std::byte> file_bytes_owned = std::move(*file_bytes_exp);
+    const std::span<const std::byte> file(file_bytes_owned);
+
+    if (file.size() < sizeof(Tooling::FileHeader))
+        return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Scene file too small"));
+
+    // 3. Validate header
+    Tooling::FileHeader header{};
+    std::memcpy(&header, file.data(), sizeof(header));
+
+    if (header.magic != Tooling::k_magic)
+        return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Bad scene magic"));
+    if (header.version != Tooling::k_version)
+        return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
+                                                "Unsupported scene version: " + std::to_string(header.version)));
+
+    // 4. Fetch typed spans into the decompressed blob
+    const auto file_submeshes = blob_span<Tooling::Submesh>(file, header.submesh_table);
+    const auto file_vertices = blob_span<Tooling::Vertex>(file, header.vertex_blob);
+    const auto file_indices = blob_span<u32>(file, header.index_blob);
+    const auto file_materials = blob_span<Tooling::GPUMaterial>(file, header.material_table);
+    const auto file_textures = blob_span<Tooling::Texture>(file, header.texture_table);
+    const auto string_blob =
+            file.subspan(static_cast<size_t>(header.string_blob.offset), static_cast<size_t>(header.string_blob.size));
+
+    // -------------------------------------------------------------------------
+    // 5. Determine which (type, class) each texture needs.
+    //    We iterate materials once to record the first slot each texture index
+    //    appears in. Last writer wins for dedup'd textures, but in practice
+    //    the same image is never used as both albedo and normal.
+    // -------------------------------------------------------------------------
+    std::vector<TexSlot> tex_slots(header.texture_count, k_albedo_slot);
+    {
+        constexpr u32 k_none = 0xFFFFFFFFu;
+        for (const auto &m: file_materials) {
+            auto tag = [&](u32 idx, TexSlot slot) {
+                if (idx != k_none && idx < header.texture_count)
+                    tex_slots[idx] = slot;
+            };
+            tag(m.albedo_map, k_albedo_slot);
+            tag(m.normal_map, k_normal_slot);
+            tag(m.roughness_map, k_rough_slot);
+            tag(m.metallic_map, k_metal_slot);
+            tag(m.occlusion_map, k_occlusion_slot);
+            tag(m.emissive_map, k_emissive_slot);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. Decode all KTX2 textures in parallel
+    // -------------------------------------------------------------------------
+    std::vector<std::future<LoadedTextureCpu>> tex_futures;
+    tex_futures.reserve(header.texture_count);
+
+    for (u32 i = 0; i < header.texture_count; ++i) {
+        const Tooling::Texture &t = file_textures[i];
+
+        const size_t ktx_off = static_cast<size_t>(t.ktx2_offset);
+        const size_t ktx_sz = static_cast<size_t>(t.ktx2_size);
+
+        if (ktx_off + ktx_sz > file.size()) {
+            // Degenerate entry — push a placeholder future
+            tex_futures.emplace_back(std::async(std::launch::deferred, []() -> LoadedTextureCpu {
+                LoadedTextureCpu bad{};
+                bad.width = bad.height = 1;
+                bad.levels = 1;
+                bad.vk_format = VK_FORMAT_R8G8B8A8_UNORM;
+                bad.data = {255, 0, 255, 255};
+                bad.level_offset = {0};
+                bad.level_size = {4};
+                return bad;
+            }));
+            continue;
+        }
+
+        // Copy the KTX2 bytes so the async lambda owns them.
+        // (file_bytes_owned is referenced by the span but we can't safely share
+        //  ownership here without extra machinery; a small copy is simplest.)
+        std::vector<std::byte> ktx_copy(file.begin() + static_cast<ptrdiff_t>(ktx_off),
+                                        file.begin() + static_cast<ptrdiff_t>(ktx_off + ktx_sz));
+
+        const std::string debug_name = std::string(string_at(string_blob, t.name_str));
+        const TexSlot slot = tex_slots[i];
+
+        tex_futures.emplace_back(std::async(
+                std::launch::async,
+                [bytes = std::move(ktx_copy), slot, name = std::move(debug_name)]() mutable -> LoadedTextureCpu {
+                    return decode_ktx2_bytes(std::span<const std::byte>(bytes), slot.type, slot.tex_class, name);
+                }));
+    }
+
+    std::vector<LoadedTextureCpu> cpu_textures;
+    cpu_textures.reserve(header.texture_count);
+    for (auto &fut: tex_futures)
+        cpu_textures.emplace_back(fut.get());
+
+    // -------------------------------------------------------------------------
+    // 7. Upload textures to GPU, collect TextureHandles
+    // -------------------------------------------------------------------------
+    std::vector<TextureHandle> tex_handles;
+    tex_handles.reserve(cpu_textures.size());
+
+    for (const auto &cpu_tex: cpu_textures) {
+        auto img = create_texture_image_v2(ctx.allocator, *ctx.command_ctx, cpu_tex.width, cpu_tex.height,
+                                           cpu_tex.vk_format, std::span<const u8>{cpu_tex.data},
+                                           std::span<const u32>{cpu_tex.level_offset},
+                                           std::span<const u32>{cpu_tex.level_size}, cpu_tex.name);
+        tex_handles.emplace_back(ctx.textures.create(std::move(img)));
+    }
+
+    // -------------------------------------------------------------------------
+    // 8. Convert file GPUMaterial -> runtime GPUMaterialData
+    //    The file stores texture indices; we remap to bindless descriptor indices.
+    // -------------------------------------------------------------------------
+    const DefaultTextureHandles defs = get_default_texture_handles(ctx);
+    constexpr u32 k_none = 0xFFFFFFFFu;
+
+    auto remap_tex = [&](u32 file_idx, TextureHandle fallback) -> u32 {
+        if (file_idx == k_none || file_idx >= static_cast<u32>(tex_handles.size()))
+            return fallback.index();
+        return tex_handles[file_idx].index();
+    };
+
+    std::vector<GPUMaterialData> gpu_materials;
+    gpu_materials.reserve(file_materials.size());
+
+    for (const auto &fm: file_materials) {
+        GPUMaterialData out{};
+
+        out.albedo_map = remap_tex(fm.albedo_map, defs.white);
+        out.albedo_factor = {fm.albedo_factor[0], fm.albedo_factor[1], fm.albedo_factor[2], fm.albedo_factor[3]};
+        out.set_albedo_map(out.albedo_map != defs.white.index());
+
+        out.normal_map = remap_tex(fm.normal_map, defs.flat_normal);
+        out.set_normal_map(out.normal_map != defs.flat_normal.index());
+
+        out.roughness_map = remap_tex(fm.roughness_map, defs.white);
+        out.roughness_factor = fm.roughness_factor;
+        out.set_roughness_map(out.roughness_map != defs.white.index());
+
+        out.metallic_map = remap_tex(fm.metallic_map, defs.black);
+        out.metallic_factor = fm.metallic_factor;
+        out.set_metallic_map(out.metallic_map != defs.black.index());
+
+        out.occlusion_map = remap_tex(fm.occlusion_map, defs.white);
+        out.set_occlusion_map(out.occlusion_map != defs.white.index());
+
+        out.emissive_map = remap_tex(fm.emissive_map, defs.black);
+        out.emissive_factor = {fm.emissive_factor[0], fm.emissive_factor[1], fm.emissive_factor[2]};
+        out.set_emissive_map(out.emissive_map != defs.black.index());
+
+        out.set_is_alpha_tested((fm.flags & GPUMaterialData::FLAG_ALPHA_TESTED) != 0);
+
+        gpu_materials.emplace_back(out);
+    }
+
+    // -------------------------------------------------------------------------
+    // 9. Convert file Vertex -> runtime Vertex
+    //    File: float[3] position, float[2] uv0, u32 normal, u32 tangent, u32 reserved
+    //    Runtime: glm::vec3 position, glm::vec2 uvs, u32 normal, u32 tangent, u32 bitangent
+    //    Bitangent is absent in the file — we'll regenerate it below via
+    //    compute_tangent_basis (same path as OBJ loading).
+    // -------------------------------------------------------------------------
+    MeshData mesh{};
+    mesh.vertices.resize(file_vertices.size());
+
+    for (size_t i = 0; i < file_vertices.size(); ++i) {
+        const Tooling::Vertex &src = file_vertices[i];
+        Vertex &dst = mesh.vertices[i];
+
+        dst.position = {src.position[0] * scale, src.position[1] * scale, src.position[2] * scale};
+
+        dst.uvs = {src.uv0[0], src.uv0[1]};
+        dst.normal = src.normal;
+        dst.tangent = src.tangent;
+
+        const glm::vec4 t4 = glm::unpackSnorm3x10_1x2(src.tangent);
+        const glm::vec3 n = safe_normalize(glm::vec3(glm::unpackSnorm3x10_1x2(src.normal)));
+        const glm::vec3 t = safe_normalize(glm::vec3(t4));
+        const float handedness = (t4.w < 0.0f) ? -1.0f : 1.0f;
+        dst.bitangent = pack_dir(safe_normalize(glm::cross(n, t) * handedness));
+    }
+    mesh.indices.assign(file_indices.begin(), file_indices.end());
+
+    // -------------------------------------------------------------------------
+    // 10. Convert file Submesh -> runtime Submesh
+    // -------------------------------------------------------------------------
+    mesh.submeshes.reserve(file_submeshes.size());
+    std::vector<u32> submesh_material_ids;
+    submesh_material_ids.reserve(file_submeshes.size());
+
+    for (const auto &fs: file_submeshes) {
+        const u32 mat_idx = (fs.material_index < static_cast<u32>(gpu_materials.size())) ? fs.material_index : 0u;
+
+        const bool alpha = (mat_idx < static_cast<u32>(file_materials.size()))
+                                   ? ((file_materials[mat_idx].flags & GPUMaterialData::FLAG_ALPHA_TESTED) != 0)
+                                   : false;
+
+        mesh.submeshes.push_back(Submesh{
+                .index_offset = fs.index_offset,
+                .index_count = fs.index_count,
+                .material_id = mat_idx,
+                .alpha_tested = alpha,
+        });
+        submesh_material_ids.emplace_back(mat_idx);
+    }
+
+    // -------------------------------------------------------------------------
+    // 11. Regenerate bitangents
+    // Not necessary anymore since GLTF export now includes them.
+    // -------------------------------------------------------------------------
+    // compute_tangent_basis(mesh);
+
+    // -------------------------------------------------------------------------
+    // 12. AABB
+    // -------------------------------------------------------------------------
+    auto aabb_result = create_mesh_aabb_data(ctx.allocator, mesh, scene_path.filename().string());
+    if (!aabb_result)
+        return tl::unexpected(aabb_result.error());
+    auto aabb_data = std::move(aabb_result.value());
+
+    // -------------------------------------------------------------------------
+    // 13. GPU buffer uploads
+    // -------------------------------------------------------------------------
+    const std::string stem = scene_path.stem().string();
+
+    auto material_buffer = Buffer::from_slice<GPUMaterialData>(
+                                   ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                   std::span<const GPUMaterialData>{gpu_materials.data(), gpu_materials.size()},
+                                   std::format("gpu_materials_{}", stem))
+                                   .value();
+
+    auto material_ids_buffer =
+            Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    std::span<const u32>{submesh_material_ids.data(), submesh_material_ids.size()},
+                                    std::format("material_ids_buffer_{}", stem))
+                    .value();
+
+    auto vertex_buffer = Buffer::from_slice<Vertex>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                                    std::span<const Vertex>{mesh.vertices.data(), mesh.vertices.size()},
+                                                    std::format("vertex_buffer_{}", stem))
+                                 .value();
+
+    auto position_vb = mesh.vertices |
+                       std::views::transform([](const Vertex &v) { return PositionOnlyVertex{.pos = v.position}; }) |
+                       to<std::vector<PositionOnlyVertex>>();
+
+    auto pos_uv_buffer = Buffer::from_slice<PositionOnlyVertex>(
+                                 ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                 std::span<const PositionOnlyVertex>{position_vb.data(), position_vb.size()},
+                                 std::format("position_buffer_{}", stem))
+                                 .value();
+
+    auto index_buffer = Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                                std::span<const u32>{mesh.indices.data(), mesh.indices.size()},
+                                                std::format("index_buffer_{}", stem))
+                                .value();
+
+    auto indirect_cmds = mesh.submeshes | std::views::transform([](const Submesh &s) {
+                             VkDrawIndexedIndirectCommand cmd{};
+                             cmd.indexCount = s.index_count;
+                             cmd.instanceCount = 1;
+                             cmd.firstIndex = s.index_offset;
+                             cmd.vertexOffset = 0;
+                             cmd.firstInstance = 0;
+                             return cmd;
+                         }) |
+                         to<std::vector<VkDrawIndexedIndirectCommand>>();
+
+    // -------------------------------------------------------------------------
+    // 14. Assemble StaticMesh
+    // -------------------------------------------------------------------------
+    return StaticMesh{
+            .mesh = std::move(mesh),
+            .materials = {}, // no MaterialData map needed at runtime
             .gpu_materials = std::move(gpu_materials),
             .indirect_template = std::move(indirect_cmds),
             .material_buffer = ctx.buffers.create(std::move(material_buffer)),

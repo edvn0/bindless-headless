@@ -1,11 +1,11 @@
 #pragma once
 
+#include "Assert.hxx"
 #include "Buffer.hxx"
 #include "Forward.hxx"
 #include "Pipelines.hxx"
 #include "Types.hxx"
 
-#include <cassert>
 #include <deque>
 #include <functional>
 #include <limits>
@@ -57,13 +57,13 @@ public:
     [[nodiscard]] auto gen() const -> std::uint32_t { return generation; }
 
     [[nodiscard]] auto index_as_void() const -> void * {
-        return reinterpret_cast<void *>(static_cast<std::uintptr_t>(index_));
+        return std::bit_cast<void *>(static_cast<std::uintptr_t>(index_));
     }
 
     [[nodiscard]] auto handle_as_void() const -> void * {
         static_assert(sizeof(void *) >= sizeof(u64));
         auto packed = (static_cast<u64>(generation) << 32) | static_cast<u64>(index_);
-        return reinterpret_cast<void *>(static_cast<std::uintptr_t>(packed));
+        return std::bit_cast<void *>(static_cast<std::uintptr_t>(packed));
     }
 
     auto operator==(Handle const &other) const -> bool {
@@ -166,10 +166,10 @@ public:
             return;
         }
 
-        assert(object_count > 0u);
+        ASSERT(object_count > 0u, "Trying to destroy object from pool that has no live objects");
         auto const index = handle.index();
-        assert(index < entries.size());
-        assert(handle.gen() == entries[index].generation);
+        ASSERT(index < entries.size(), "Trying to destroy object with out-of-range index");
+        ASSERT(handle.gen() == entries[index].generation, "Trying to destroy object with mismatched generation");
 
         entries[index].object = ImplObjectType{};
         entries[index].live = false;
@@ -184,13 +184,13 @@ public:
             return nullptr;
         }
         auto const index = handle.index();
-        assert(index < entries.size());
+        ASSERT(index < entries.size(), "Trying to access object with out-of-range index");
 
         if (!entries.at(index).live)
             return nullptr;
 
-        assert(index < entries.size());
-        assert(handle.gen() == entries[index].generation);
+        ASSERT(index < entries.size(), "Trying to access object with out-of-range index");
+        ASSERT(handle.gen() == entries[index].generation, "Trying to access object with mismatched generation");
         return &entries[index].object;
     }
 
@@ -202,12 +202,12 @@ public:
             return nullptr;
         }
         auto const index = handle.index();
-        assert(index < entries.size());
+        ASSERT(index < entries.size(), "Trying to access object with out-of-range index");
 
         if (!entries.at(index).live)
             return nullptr;
 
-        assert(handle.gen() == entries[index].generation); // HERE!
+        ASSERT(handle.gen() == entries[index].generation, "Trying to access object with mismatched generation");
         return &entries[index].object;
     }
 
@@ -218,7 +218,7 @@ public:
         return Handle<ObjectType>(index, entries[index].generation);
     }
     [[nodiscard]] auto get_handle(std::uint32_t index) const -> Handle<ObjectType> {
-        assert(index < entries.size());
+        ASSERT(index < entries.size(), "Trying to get handle with out-of-range index");
         return maybe_get_handle(index);
     }
 
@@ -279,12 +279,8 @@ using PipelinePool = Pool<PipelineTag, CompiledPipeline>;
 using ShaderHandle = Handle<struct ShaderTag>;
 using ShaderPool = Pool<ShaderTag, VkShaderModule>;
 
-constexpr auto hot_swap = []<typename Handle, typename Value>(
-    Handle &current,
-    Value &&next,
-    RenderContext &ctx,
-    u64 retire_val = std::numeric_limits<u64>::max()
-) {
+constexpr auto hot_swap = []<typename Handle, typename Value>(Handle &current, Value &&next, RenderContext &ctx,
+                                                              u64 retire_val = std::numeric_limits<u64>::max()) {
     Handle old = current;
     current = create(ctx, std::move(next));
     destroy(ctx, old, retire_val);

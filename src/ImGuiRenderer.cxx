@@ -11,10 +11,10 @@
 #include <backends/imgui_impl_glfw.h>
 #include <misc/freetype/imgui_freetype.h>
 
+#include <bit>
 #include <filesystem>
 #include <imgui.h>
 #include <implot.h>
-#include <bit>
 #include <volk.h>
 
 #include <unordered_map>
@@ -160,7 +160,8 @@ namespace {
 
 } // namespace
 
-ImGuiRenderer::ImGuiRenderer(GLFWwindow *w, u32 initial_slot_count, RenderContext &c, Compiler &comp, FontChoice font) : ctx(c), compiler(comp) {
+ImGuiRenderer::ImGuiRenderer(GLFWwindow *w, u32 initial_slot_count, RenderContext &c, Compiler &comp, FontChoice font) :
+    ctx(c), compiler(comp) {
 
     std::ignore = ImGui::CreateContext();
     std::ignore = ImPlot::CreateContext();
@@ -274,7 +275,7 @@ auto ImGuiRenderer::end_frame() -> void {
 
 auto ImGuiRenderer::render(VkCommandBuffer cmd) -> void {
 #ifdef NDEBUG
-    assert(frame_was_ended && "Must call end_frame before render");
+    ASSERT(frame_was_ended && "Must call end_frame before render");
     frame_was_ended = false;
 #endif
 
@@ -287,7 +288,8 @@ auto ImGuiRenderer::render(VkCommandBuffer cmd) -> void {
 
 
 constexpr std::size_t next_power_of_two(std::size_t n) {
-    if (n == 0) return 1;
+    if (n == 0)
+        return 1;
     return std::bit_ceil(n);
 }
 
@@ -324,8 +326,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
         const auto size = (dd->TotalIdxCount * 4) * sizeof(ImDrawIdx);
         const auto actual_size = static_cast<std::size_t>(next_power_of_two(size));
         info("(ImGui) Reallocating index buffer to {} bytes", actual_size);
-        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                                     actual_size, "imgui_index");
+        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, actual_size, "imgui_index");
         drawable.index = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
         drawable.index_count = static_cast<u32>(actual_size / sizeof(ImDrawIdx));
     }
@@ -333,8 +334,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
         const auto size = (dd->TotalVtxCount * 4) * sizeof(ImDrawVert);
         const auto actual_size = static_cast<std::size_t>(next_power_of_two(size));
         info("(ImGui) Reallocating vertex buffer to {} bytes", actual_size);
-        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                     actual_size, "imgui_vertex");
+        auto buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, actual_size, "imgui_vertex");
         drawable.vertex = Holder{ctx, ctx.create_buffer(std::move(buffer.value()))};
         drawable.vertex_count = static_cast<u32>(actual_size / sizeof(ImDrawVert));
     }
@@ -386,7 +386,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
             clipMax.y = std::min(clipMax.y, fb_height);
 
             if (clipMax.x <= clipMin.x || clipMax.y <= clipMin.y) {
-                continue;   
+                continue;
             }
 
             struct VulkanImguiBindData {
@@ -781,7 +781,7 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
             .pipeline = new_pipeline,
             .layout = pipeline_layout,
     };
-}       
+}
 
 auto ImGuiRenderer::update_font(FontChoice f) -> void {
     ImGuiIO &io = ImGui::GetIO();
@@ -792,8 +792,7 @@ auto ImGuiRenderer::update_font(FontChoice f) -> void {
     cfg.PixelSnapH = true;
     cfg.OversampleH = 2;
     cfg.OversampleV = 1;
-    cfg.FontLoaderFlags = ImGuiFreeTypeLoaderFlags_ForceAutoHint
-                        | ImGuiFreeTypeLoaderFlags_LightHinting;
+    cfg.FontLoaderFlags = ImGuiFreeTypeLoaderFlags_ForceAutoHint | ImGuiFreeTypeLoaderFlags_LightHinting;
 
     ImFont *font = nullptr;
     if (std::filesystem::exists(f.font_path)) {

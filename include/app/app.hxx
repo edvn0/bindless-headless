@@ -137,7 +137,7 @@ struct MeshInstanceRanges {
         std::vector<MeshInstanceRange> ranges{};
         ranges.reserve(mesh_count);
         for (u32 i = 0; i < mesh_count; i++) {
-            ranges.emplace_back(i, instance_count, i* instance_count);
+            ranges.emplace_back(i, instance_count, i * instance_count);
         }
         return ranges;
     }
@@ -147,11 +147,13 @@ struct MeshInstanceRanges {
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
 
-    std::vector<LoadedObj> meshes{};
+    std::vector<StaticMesh> meshes{};
     std::vector<MeshInstanceRange> mesh_instance_ranges;
 
     auto instance_count() const {
-        return mesh_instance_ranges.empty() ? 0 : (mesh_instance_ranges.back().base_instance + mesh_instance_ranges.back().instance_count);
+        return mesh_instance_ranges.empty()
+                       ? 0
+                       : (mesh_instance_ranges.back().base_instance + mesh_instance_ranges.back().instance_count);
     }
 
     std::vector<PointLight> all_point_lights{};

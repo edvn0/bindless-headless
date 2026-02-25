@@ -82,7 +82,7 @@ private:
         if (!f)
             return {};
 
-        f.read(reinterpret_cast<char *>(buf.data()), static_cast<std::streamsize>(buf.size()));
+        f.read(std::bit_cast<char *>(buf.data()), static_cast<std::streamsize>(buf.size()));
 
         info("Read pipeline cache from {}, at {} bytes.", std::filesystem::absolute(cache_path).string(), sz);
 
@@ -114,6 +114,6 @@ private:
         if (!f)
             return;
 
-        f.write(reinterpret_cast<const char *>(buf.data()), static_cast<std::streamsize>(sz));
+        f.write(std::bit_cast<const char *>(buf.data()), static_cast<std::streamsize>(sz));
     }
 };

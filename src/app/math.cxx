@@ -36,7 +36,7 @@ auto spawn_lights_in_aabb(AABB const &aabb, std::span<PointLight> lights) -> voi
     auto y_distrib = std::uniform_real_distribution{aabb.min.y, aabb.max.y};
     auto z_distrib = std::uniform_real_distribution{aabb.min.z, aabb.max.z};
     auto radius_distrib = std::uniform_real_distribution{2.f, 6.f};
-auto intensity_distrib = std::uniform_real_distribution{0.5F,   5.0F};
+    auto intensity_distrib = std::uniform_real_distribution{0.5F, 5.0F};
 
     auto color_distribution = std::uniform_real_distribution{0.0F, 1.0F};
 
@@ -64,30 +64,31 @@ auto PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear) ->
     return m;
 }
 
-auto OrthoRH_ReverseZ(float left, float right, float bottom, float top, float z_near, float z_far) -> glm::mat4 {
+auto OrthoRH_ReverseZ(float left, float right, float bottom, float top, float near_plane, float far_plane)
+        -> glm::mat4 {
     glm::mat4 result(1.0f);
 
     result[0][0] = 2.0f / (right - left);
     result[1][1] = 2.0f / (top - bottom);
-    result[2][2] = 1.0f / (z_near - z_far); // Reversed for reverse-Z
+    result[2][2] = 1.0f / (near_plane - far_plane); // Reversed for reverse-Z
     result[3][0] = -(right + left) / (right - left);
     result[3][1] = -(top + bottom) / (top - bottom);
-    result[3][2] = z_near / (z_near - z_far); // Reversed for reverse-Z
+    result[3][2] = near_plane / (near_plane - far_plane); // Reversed for reverse-Z
 
     return result;
 }
 
-auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) -> ClusterConfig {
+auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float near_plane, float far_plane) -> ClusterConfig {
     u32 cluster_count = tiles_x * tiles_y * tiles_z;
-    float log_z_scale = static_cast<float>(tiles_z) / std::log2f(z_far / z_near);
+    float log_z_scale = static_cast<float>(tiles_z) / std::log2f(far_plane / near_plane);
 
     return ClusterConfig{
             .tiles_x = tiles_x,
             .tiles_y = tiles_y,
             .tiles_z = tiles_z,
             .cluster_count = cluster_count,
-            .z_near = z_near,
-            .z_far = z_far,
+            .z_near = near_plane,
+            .z_far = far_plane,
             .log_z_scale = log_z_scale,
     };
 }

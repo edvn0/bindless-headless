@@ -6,6 +6,6 @@
 
 auto result_to_string(VkResult r) -> std::string {
     using namespace vk;
-    Result res{ r };
+    Result res{r};
     return to_string(res);
 }

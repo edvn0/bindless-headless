@@ -6,8 +6,7 @@
 #include <volk.h>
 
 template<typename Stamp>
-auto write_ts(VkCommandBuffer cmd, const QueryPoolState &qs, VkPipelineStageFlags2 stage, Stamp s)
-        -> void {
+auto write_ts(VkCommandBuffer cmd, const QueryPoolState &qs, VkPipelineStageFlags2 stage, Stamp s) -> void {
     vkCmdWriteTimestamp2(cmd, stage, qs.pool, static_cast<u32>(s));
 }
 

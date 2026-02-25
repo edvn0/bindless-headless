@@ -19,6 +19,8 @@ CMakeUserPresets.json
 .venv
 venv
 
-assets/editor/cubemaps
+# Ignore everything in the cubemaps folder
+assets/editor/cubemaps/**
+
 assets/meshes
 scripts

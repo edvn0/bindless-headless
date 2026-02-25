@@ -2,7 +2,6 @@
 
 #include <3PP/stb_image.h>
 #include <GLFW/glfw3.h>
-#include <cassert>
 #include <chrono>
 #include <csignal>
 #include <deque>
@@ -32,6 +31,7 @@
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
 
+#include "SceneLoader.hxx"
 
 extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 
@@ -141,13 +141,13 @@ namespace {
 
 
 namespace {
-     GLFWkeyfun imgui_key_callback = nullptr;
-     GLFWcharfun imgui_char_callback = nullptr;
-     GLFWmousebuttonfun imgui_mouse_button_callback = nullptr;
-     GLFWcursorposfun imgui_cursor_pos_callback = nullptr;
-     GLFWscrollfun imgui_scroll_callback = nullptr;
+    GLFWkeyfun imgui_key_callback = nullptr;
+    GLFWcharfun imgui_char_callback = nullptr;
+    GLFWmousebuttonfun imgui_mouse_button_callback = nullptr;
+    GLFWcursorposfun imgui_cursor_pos_callback = nullptr;
+    GLFWscrollfun imgui_scroll_callback = nullptr;
 
-     auto update_mouse_delta(AppState &app, glm::vec2 pos) -> glm::vec2 {
+    auto update_mouse_delta(AppState &app, glm::vec2 pos) -> glm::vec2 {
         glm::vec2 delta{0.0f};
 
         if (!app.mouse_inited) {
@@ -163,17 +163,13 @@ namespace {
 
     auto vi(const AppState &app) -> const auto & { return app.viewport_input; }
 
-     auto route_keyboard_to_app(AppState const &app) -> bool {
+    auto route_keyboard_to_app(AppState const &app) -> bool {
         return vi(app).focused && !vi(app).imgui_blocks_keyboard;
     }
 
-     auto route_text_to_app(AppState const &app) -> bool {
-        return vi(app).focused && !vi(app).imgui_blocks_keyboard;
-    }
+    auto route_text_to_app(AppState const &app) -> bool { return vi(app).focused && !vi(app).imgui_blocks_keyboard; }
 
-     auto route_mouse_to_app(AppState const &app) -> bool {
-        return vi(app).hovered && !vi(app).imgui_blocks_mouse;
-    }
+    auto route_mouse_to_app(AppState const &app) -> bool { return vi(app).hovered && !vi(app).imgui_blocks_mouse; }
 
     auto set_window_callbacks(GLFWwindow *window, AppUI &ui) -> void {
         glfwSetWindowUserPointer(window, &ui.app_state);
@@ -524,9 +520,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             return 1;
         }
 
-        auto res = glfwCreateWindowSurface(instance.instance, gpu.window, nullptr, &gpu.surface);
+        auto glfw_res = glfwCreateWindowSurface(instance.instance, gpu.window, nullptr, &gpu.surface);
 
-        if (res != VK_SUCCESS) {
+        if (glfw_res != VK_SUCCESS) {
             const char *description;
             int code = glfwGetError(&description);
 
@@ -543,9 +539,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                        stbi_load("assets/editor/icons/icon_small.png", &sizes.at(0), &sizes.at(0), &channels, 4)};
         icons.at(1) = {sizes.at(1), sizes.at(1),
                        stbi_load("assets/editor/icons/icon_large.png", &sizes.at(1), &sizes.at(1), &channels, 4)};
-        glfwSetWindowIcon(gpu.window, icons.size(), icons.data());
-        stbi_image_free(icons.at(0).pixels);
-        stbi_image_free(icons.at(1).pixels);
+
+        if (icons.at(0).pixels != nullptr && icons.at(1).pixels != nullptr) {
+            glfwSetWindowIcon(gpu.window, static_cast<i32>(icons.size()), icons.data());
+            stbi_image_free(icons.at(0).pixels);
+            stbi_image_free(icons.at(1).pixels);
+        } else {
+            error("Failed to load one or more window icons.");
+        }
+
 
         std::ifstream f("assets/editor/gamecontrollerdb.txt");
         if (f) {
@@ -702,9 +704,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                           std::as_bytes(std::span(flat_normal)), "flat-normals-texture"));
 
 #ifndef NDEBUG
-        assert(white_handle.index() == white_texture_index);
-        assert(black_handle.index() == black_texture_index);
-        assert(flat_normal_handle.index() == normal_texture_index);
+        ASSERT(white_handle.index() == white_texture_index,
+               "White texture was not assigned the expected bindless index");
+        ASSERT(black_handle.index() == black_texture_index,
+               "Black texture was not assigned the expected bindless index");
+        ASSERT(flat_normal_handle.index() == normal_texture_index,
+               "Flat normal texture was not assigned the expected bindless index");
 #else
         (void) white_handle;
         (void) black_handle;
@@ -791,11 +796,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Load meshes ---
     {
-        TRY_PROPAGATE(loaded_mesh, load_obj(gpu.ctx, "assets/meshes/Sponza-master/sponza.obj", 0.01f),
+        TRY_PROPAGATE(loaded_mesh, load_scene(gpu.ctx, "assets/meshes/SponzaGLTF/sponza_converted.scene.bz2", 0.01f),
                       "Failed to load cube mesh");
         res.meshes.emplace_back(std::move(loaded_mesh));
 
-        TRY_PROPAGATE(loaded_capsule, load_obj(gpu.ctx, "assets/meshes/capsule.obj"), "Failed to load capsule mesh");
+        TRY_PROPAGATE(loaded_capsule, load_static_mesh(gpu.ctx, "assets/meshes/capsule.obj"),
+                      "Failed to load capsule mesh");
         res.meshes.emplace_back(std::move(loaded_capsule));
     }
 
@@ -881,9 +887,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     set_window_callbacks(gpu.window, ui);
     wire_event_dispatch(ui);
-
-    glfwShowWindow(gpu.window);
-    glfwFocusWindow(gpu.window);
 
     u32 pipelines_node{};
     {
@@ -989,8 +992,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(cubemap_reflection)),
                                             "Failed to compile cubemap shader");
 
-                    auto &&[fp, cp] = create_compute_pipelines(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
-                                                               {}, std::span(culling_code), std::span(names));
+                    auto &&[fp, cp] =
+                            create_compute_pipelines(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, {},
+                                                     std::span(culling_code), std::span(names));
 
                     auto &&[crp, lrp] = create_compute_pipelines(
                             gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, sizeof(RotatePushConstant),
@@ -1014,16 +1018,17 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
                     auto pp = create_predepth_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
                                                        predepth_code.at(0), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
-                    auto pp_alpha = create_predepth_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
-                                                             predepth_code.at(0), predepth_code.at(1),
-                                                             VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
+                    auto pp_alpha = create_predepth_pipeline(
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, predepth_code.at(0),
+                            predepth_code.at(1), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
                     auto shadow_map_alpha = create_directional_shadow_map_pipeline(
-                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, directional_shadow_map_code.at(0),
-                            directional_shadow_map_code.at(1), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
+                            directional_shadow_map_code.at(0), directional_shadow_map_code.at(1), VK_FORMAT_D32_SFLOAT,
+                            gpu.msaa_samples);
                     auto shadow_map = create_directional_shadow_map_pipeline(
-                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, directional_shadow_map_code.at(0),
-                            VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
+                            directional_shadow_map_code.at(0), VK_FORMAT_D32_SFLOAT, gpu.msaa_samples);
 
                     auto tp = create_fullscreen_pipeline(Pipeline::Fullscreen{
                             .device = gpu.device,
@@ -1192,7 +1197,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     }
 
     /*{
-        res.environment_cubemap = 
+        res.environment_cubemap =
     generate_sky_cubemap(gpu.ctx, gpu.allocator, gpu.device,
                          gpu.bindless.layout, gpu.bindless.set,
                          *gpu.ctx.command_ctx, *gpu.compiler,
@@ -1200,9 +1205,11 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 gpu.bindless.need_repopulate = true;
     }*/
     {
-        res.environment_cubemap = gpu.ctx.create_texture(load_cubemap_ktx(
-                gpu.allocator, *gpu.ctx.command_ctx, gpu.device, gpu.physical_device, gpu.graphics_queue,
-                std::filesystem::path("assets/editor/cubemaps/nasa/sky.ktx2"), "environment_cubemap").value());
+        res.environment_cubemap = gpu.ctx.create_texture(
+                load_cubemap_ktx(gpu.allocator, *gpu.ctx.command_ctx, gpu.device, gpu.physical_device,
+                                 gpu.graphics_queue, std::filesystem::path("assets/editor/cubemaps/nasa/sky.ktx2"),
+                                 "environment_cubemap")
+                        .value());
     }
 
 
@@ -1220,7 +1227,7 @@ gpu.bindless.need_repopulate = true;
             gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx, *gpu.compiler,
             FontChoice{
                     .font_path = "assets/editor/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf",
-                    .size = 18.0f,
+                    .size = 13.0f,
             });
 
     auto gui_pipeline_node = gpu.window_resize_graph.add_node(
@@ -1253,6 +1260,10 @@ gpu.bindless.need_repopulate = true;
     ui.last_frame_time = std::chrono::high_resolution_clock::now();
 
     auto stats = FrameStats{};
+
+    glfwShowWindow(gpu.window);
+    glfwFocusWindow(gpu.window);
+
 
     while (!glfwWindowShouldClose(gpu.window) && keep_running) {
         glfwPollEvents();

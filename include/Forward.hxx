@@ -9,7 +9,7 @@ struct GlobalCommandContext;
 struct MeshData;
 struct ResizeGraph;
 struct AABB;
-struct LoadedObj;
+struct StaticMesh;
 
 class Compiler;
 class Swapchain;

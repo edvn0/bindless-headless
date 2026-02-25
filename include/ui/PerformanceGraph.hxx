@@ -147,7 +147,7 @@ public:
         if (size.x <= 0.0f) {
             size.x = ImGui::GetContentRegionAvail().x;
         }
- 
+
         if (ImPlot::BeginPlot(title.data(), size, ImPlotFlags_NoTitle)) {
             ImPlot::SetupLegend(ImPlotLocation_South, ImPlotLegendFlags_Outside | ImPlotLegendFlags_Horizontal);
             ZoneScopedNC("ImPlot::render_combined", 0x8B5CF6);

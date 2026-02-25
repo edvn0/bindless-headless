@@ -43,7 +43,7 @@ struct CharInputEvent : Event {
     u32 codepoint;
 };
 
-struct GamepadButtonPressedEvent:  Event {
+struct GamepadButtonPressedEvent : Event {
     i32 button;
 };
 

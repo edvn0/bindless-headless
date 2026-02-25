@@ -72,13 +72,13 @@ namespace detail {
 template<typename T>
     requires std::is_pointer_v<T>
 auto set_debug_name(VmaAllocator &alloc, VkObjectType t, const T &obj, std::string_view name) -> void {
-    detail::set_debug_name_impl(alloc, t, reinterpret_cast<u64>(obj), name);
+    detail::set_debug_name_impl(alloc, t, std::bit_cast<u64>(obj), name);
 }
 
 template<typename T>
     requires std::is_pointer_v<T>
 auto set_debug_name(VkDevice dev, VkObjectType t, const T &obj, std::string_view name) -> void {
-    detail::set_debug_name_impl(dev, t, reinterpret_cast<u64>(obj), name);
+    detail::set_debug_name_impl(dev, t, std::bit_cast<u64>(obj), name);
 }
 
 enum class Stage : u32 {
@@ -197,11 +197,8 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
                                std::uint32_t height, VkFormat format, std::span<const std::byte> data,
                                std::string_view name) -> OffscreenTarget;
-auto load_cubemap_ktx(VmaAllocator, GlobalCommandContext &,
-                      VkDevice , VkPhysicalDevice ,
-                      VkQueue transfer_queue,
-                      const std::filesystem::path &,
-                      std::string_view) -> tl::expected<OffscreenTarget, Error>;
+auto load_cubemap_ktx(VmaAllocator, GlobalCommandContext &, VkDevice, VkPhysicalDevice, VkQueue transfer_queue,
+                      const std::filesystem::path &, std::string_view) -> tl::expected<OffscreenTarget, Error>;
 
 struct InstanceWithDebug {
     VkInstance instance{VK_NULL_HANDLE};

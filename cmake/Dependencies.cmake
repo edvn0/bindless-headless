@@ -24,12 +24,18 @@ CPMAddPackage(
   GIT_SHALLOW YES
 )
 
+set(GLFW_CPM_OPTIONS "")
+if(UNIX AND NOT APPLE)
+  list(APPEND GLFW_CPM_OPTIONS
+    "GLFW_BUILD_WAYLAND OFF"
+    "GLFW_BUILD_X11 ON"
+  )
+endif()
+
 CPMAddPackage(
   URI "gh:glfw/glfw#3.4"
   GIT_SHALLOW YES
-  OPTIONS 
-  "GLFW_BUILD_WAYLAND OFF"
-  "GLFW_BUILD_X11 ON"
+  OPTIONS ${GLFW_CPM_OPTIONS}
 )
 
 CPMAddPackage(
@@ -85,6 +91,12 @@ CPMAddPackage(
   URI "gh:KhronosGroup/KTX-Software@4.4.2"
   GIT_SHALLOW YES
   OPTIONS "KTX_FEATURE_TESTS OFF KTX_FEATURE_JS OFF BUILD_SHARED_LIBS OFF KTX_FEATURE_TOOLS OFF KTX_FEATURE_TESTS OFF KTX_FEATURE_LOADTEST_APPS OFF"
+)
+
+CPMAddPackage(
+  URI "gh:spnda/fastgltf@0.9.0"
+  GIT_SHALLOW YES
+  OPTIONS "FASTGLTF_COMPILE_AS_CPP20 ON FASTGLTF_USE_CUSTOM_SMALLVECTOR ON"
 )
 
 if(HAS_IMAGE_WRITERS)
@@ -245,7 +257,22 @@ if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR)
     ${ImPlot_SOURCE_DIR}/implot.cpp
     ${ImPlot_SOURCE_DIR}/implot_items.cpp
   )
-  find_package(Freetype REQUIRED SHARED)
+  list(PREPEND CMAKE_PREFIX_PATH "C:/D/Builds")
+
+# HarfBuzz package name is often lowercase on disk (harfbuzzConfig.cmake)
+find_package(harfbuzz CONFIG REQUIRED)
+
+# Bridge target-name mismatch for FreeType exports
+if(NOT TARGET HarfBuzz::HarfBuzz)
+  if(TARGET harfbuzz::harfbuzz)
+    add_library(HarfBuzz::HarfBuzz ALIAS harfbuzz::harfbuzz)
+  elseif(TARGET harfbuzz)
+    add_library(HarfBuzz::HarfBuzz ALIAS harfbuzz)
+  else()
+    message(FATAL_ERROR "Found harfbuzz package, but no known harfbuzz target was exported.")
+  endif()
+endif()
+  find_package(Freetype CONFIG REQUIRED)
 
   add_library(imgui STATIC ${IMGUI_SRCS} ${IMPLOT_SRCS})
 
@@ -255,29 +282,18 @@ if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR)
     ${ImPlot_SOURCE_DIR}
   )
 
-  target_link_libraries(imgui PUBLIC
-    glfw
-    volk
-    volk::volk_headers
-    X11::X11
-    Freetype::Freetype
-    PRIVATE
-    ZLIB::ZLIB
-    PNG::PNG
-    brotlidec
-    bz2
-    harfbuzz
-  )
+target_link_libraries(imgui PUBLIC
+  glfw
+  volk
+  volk::volk_headers
+  platform_wsi
+  Freetype::Freetype
+)
 
-
-  target_compile_definitions(imgui
-    PUBLIC
-      GLFW_INCLUDE_NONE
-      IMGUI_IMPL_VULKAN_USE_VOLK
-      IMGUI_ENABLE_FREETYPE
-    PRIVATE
-      # These must be PRIVATE (affect .cpp compilation) not PUBLIC
-      GLFW_HAS_X11=1
-      GLFW_HAS_WAYLAND=0
-  )
+target_compile_definitions(imgui
+  PUBLIC
+    GLFW_INCLUDE_NONE
+    IMGUI_IMPL_VULKAN_USE_VOLK
+    IMGUI_ENABLE_FREETYPE
+)
 endif()

@@ -26,7 +26,7 @@ struct ResizeContext {
 
 namespace detail {
     constexpr auto bit(std::unsigned_integral auto const x) -> u32 { return 1 << x; }
-}
+} // namespace detail
 
 enum class ResizeTrigger : u32 {
     None = 0,

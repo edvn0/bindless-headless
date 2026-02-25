@@ -17,6 +17,7 @@ struct Error {
         CouldNotCreateBuffer,
         FileNotFoundError,
         InvalidSize,
+        SceneLoaderError,
         UnknownError
     };
 

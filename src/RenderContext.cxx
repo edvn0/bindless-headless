@@ -118,7 +118,7 @@ auto RenderContext::clear_all() -> void {
 
 namespace {
     template<std::size_t N>
-    auto destroy_unique_image_views(VkDevice device, std::array<VkImageView, N> views) -> void {
+    auto destroy_unique_image_views(VkDevice device, std::array<VkImageView, N> &&views) -> void {
         std::ranges::sort(views);
         VkImageView last = VK_NULL_HANDLE;
         for (VkImageView v: views) {

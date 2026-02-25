@@ -30,13 +30,14 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     ubo.viewport_size = glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
 
     const auto planes = extract_frustum_planes(ubo.projection);
-    
+
     ubo.frustum_planes = planes;
     std::swap(ubo.frustum_planes[4], ubo.frustum_planes[5]);
 }
 
 auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
-                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float near_plane, float far_plane) -> void {
+                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float near_plane,
+                               float far_plane) -> void {
     FrameUBO ubo{};
     fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, near_plane, far_plane);
 

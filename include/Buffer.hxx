@@ -6,6 +6,7 @@
 #include <tl/expected.hpp>
 #include <type_traits>
 
+#include "Assert.hxx"
 #include "CreateInfo.hxx"
 #include "Logger.hxx"
 #include "Types.hxx"
@@ -121,7 +122,8 @@ public:
         dba_info.buffer = buffer.vk_buffer;
 
         buffer.dev_address = static_cast<DeviceAddress>(vkGetBufferDeviceAddress(alloc_info.device, &dba_info));
-        assert(buffer.dev_address != DeviceAddress::Invalid);
+        ASSERT(buffer.dev_address != DeviceAddress::Invalid,
+               "Buffer device address is invalid. Does the device support buffer device addresses?");
 
         const auto pointer = buffer.allocation_info.pMappedData;
         if (!pointer) {
@@ -197,7 +199,7 @@ public:
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     auto memset(VmaAllocator &allocator, const T &value) -> tl::expected<void, Error> {
-        assert(size() % sizeof(T) == 0 && "Value is not aligned with the size of this buffer.");
+        ASSERT(size() % sizeof(T) == 0, "Value is not aligned with the size of this buffer.");
 
         const auto pointer = data_pointer();
         if (!pointer) {

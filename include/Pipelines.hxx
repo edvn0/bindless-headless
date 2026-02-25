@@ -51,17 +51,16 @@ struct ClusteredLightCullingPushConstants {
     const DeviceAddress mesh_indirect;
     const DeviceAddress clusters;
     const DeviceAddress cluster_light_indices;
-    
+
     float z_near;
     float z_far;
     float log_z_scale;
-    
+
     u32 light_count;
     u32 tiles_x;
     u32 tiles_y;
     u32 tiles_z;
     u32 cluster_count;
-
 };
 
 struct PredepthPushConstants {
@@ -143,7 +142,7 @@ struct DeferredLightingPushConstants {
     const DeviceAddress cluster_light_indices;
     const glm::mat4 shadow_matrix;
     float log_z_scale;
-    f32 near_plane {z_near};
+    f32 near_plane{z_near};
 
     u32 tiles_x;
     u32 tiles_y;
@@ -194,7 +193,7 @@ struct HeatmapPushConstants {
     u32 slices_per_row;
 };
 
-struct SkyboxPushConstants{
+struct SkyboxPushConstants {
     const DeviceAddress frame_ubo;
     u32 cubemap_index;
     u32 sampler_index;
@@ -205,7 +204,7 @@ struct CompiledPipeline {
     VkPipelineLayout layout{VK_NULL_HANDLE};
 };
 
-auto create_compute_pipeline(VkDevice, PipelineCache*, VkDescriptorSetLayout, const std::vector<u32> &, std::size_t,
+auto create_compute_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &, std::size_t,
                              std::string_view) -> CompiledPipeline;
 
 template<std::size_t N>

@@ -6,7 +6,30 @@ include(CMakePushCheckState)
 include(CheckCXXCompilerFlag)
 include(CheckCCompilerFlag)
 
-find_package(X11 REQUIRED)
+find_package(BZip2 REQUIRED)
+
+set(HAS_X11 OFF)
+if(UNIX AND NOT APPLE)
+  find_package(X11 QUIET)
+  if(X11_FOUND)
+    set(HAS_X11 ON)
+  endif()
+endif()
+
+add_library(platform_wsi INTERFACE)
+
+if(HAS_X11)
+  target_link_libraries(platform_wsi INTERFACE X11::X11)
+  target_compile_definitions(platform_wsi INTERFACE
+    VK_USE_PLATFORM_XLIB_KHR
+    GLFW_HAS_X11=1
+    GLFW_HAS_WAYLAND=0
+  )
+elseif(WIN32)
+  target_compile_definitions(platform_wsi INTERFACE
+    VK_USE_PLATFORM_WIN32_KHR
+  )
+endif()
 
 # ------------------------------------------------------------
 # Core libs you already have
@@ -23,7 +46,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(BindlessHeadlessAllocator PUBLIC -Wno-nullability-completeness -Wno-nullability-extension)
 endif()
 
-target_compile_definitions(ThirdPartySTB PRIVATE STB_IMAGE_IMPLEMENTATION)
+target_compile_definitions(ThirdPartySTB PRIVATE STB_IMAGE_IMPLEMENTATION STB_IMAGE_RESIZE_IMPLEMENTATION)
 target_include_directories(ThirdPartySTB PUBLIC "3PP")
 
 target_compile_definitions(BindlessHeadlessAllocator PUBLIC VK_NO_PROTOTYPES)
@@ -102,7 +125,7 @@ target_include_directories(BindlessEngine PUBLIC
 
 target_link_libraries(BindlessEngine PUBLIC
   volk
-  X11::X11
+  platform_wsi
   BindlessHeadlessAllocator
   ktx
   spdlog::spdlog
@@ -113,6 +136,7 @@ target_link_libraries(BindlessEngine PUBLIC
   expected
   tinyobjloader
   imgui
+    BZip2::BZip2
   $<$<BOOL:${HAS_IMAGE_WRITERS}>:ImageOperations>
 )
 
@@ -179,7 +203,7 @@ target_include_directories(BindlessApp PUBLIC
 target_link_libraries(BindlessApp PUBLIC
   BindlessEngine
   PRIVATE
-    X11::X11
+    platform_wsi
 )
 
 if(HAS_TRACY)
@@ -207,10 +231,33 @@ target_include_directories(BindlessHeadless PRIVATE
 target_link_libraries(BindlessHeadless PRIVATE
   BindlessApp
   CLI11::CLI11
-  X11::X11
+  platform_wsi
+  SceneLoader
 )
 
 DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
+
+# Tooling - SceneLoader.
+add_library(SceneLoader STATIC
+  "src/SceneLoader.cxx"
+)
+
+target_include_directories(SceneLoader PUBLIC
+  ${CMAKE_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(SceneLoader PUBLIC
+  glm::glm
+  ktx
+  expected
+  fastgltf::fastgltf
+  ThirdPartySTB
+  volk::volk_headers
+  BZip2::BZip2
+)
+
+DEFAULT_COMPILE_OPTIONS(SceneLoader)
 
 # If you still want LTO on the exe explicitly:
 # if(MINGW)

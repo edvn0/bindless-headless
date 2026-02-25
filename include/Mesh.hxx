@@ -121,7 +121,7 @@ struct LoadedTextureTable {
     std::unordered_map<std::string, TextureHandle> by_stem;
 };
 
-struct LoadedObj {
+struct StaticMesh {
     MeshData mesh;
     std::unordered_map<std::string, MaterialData> materials;
     std::vector<GPUMaterialData> gpu_materials;
@@ -141,5 +141,9 @@ struct LoadedObj {
 };
 
 
-auto load_obj(RenderContext &ctx, const std::filesystem::path &obj_path, float scale = static_cast<float>(meters_per_unit_engine))
-        -> tl::expected<LoadedObj, Error>;
+auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
+                      float scale = static_cast<float>(meters_per_unit_engine)) -> tl::expected<StaticMesh, Error>;
+
+/// Loads a .scene/.scene.bz2 file.
+auto load_scene(RenderContext &, const std::filesystem::path &,
+                float scale = static_cast<float>(meters_per_unit_engine)) -> tl::expected<StaticMesh, Error>;

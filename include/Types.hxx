@@ -36,9 +36,11 @@ struct Deleter {
 struct string_hash {
     using is_transparent = void;
 
-    auto operator()(const std::string_view v) const noexcept -> std::size_t { return std::hash<std::string_view>{}(v); }
-    auto operator()(std::string const &s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
-    auto operator()(char const *s) const noexcept -> std::size_t { return (*this)(std::string_view{s}); }
+    static constexpr auto hasher = std::hash<std::string_view>{};
+
+    auto operator()(const std::string_view v) const noexcept -> std::size_t { return hasher(v); }
+    auto operator()(std::string const &s) const noexcept -> std::size_t { return hasher(s); }
+    auto operator()(char const *s) const noexcept -> std::size_t { return hasher(s); }
 };
 
 struct string_eq {
@@ -100,6 +102,10 @@ struct OffscreenTarget {
     u32 height{};
     bool initialized{false};
 
+    VkImageViewType sampled_view_type{VK_IMAGE_VIEW_TYPE_2D};
+    VkImageViewType storage_view_type{VK_IMAGE_VIEW_TYPE_2D};
+    VkImageViewType attachment_view_type{VK_IMAGE_VIEW_TYPE_2D};
+
     [[nodiscard]] auto is_depth() const -> bool;
     [[nodiscard]] auto is_stencil() const -> bool;
     [[nodiscard]] auto extent() const {
@@ -144,6 +150,10 @@ private:
         };
     }
 };
+inline auto is_cubemap_view(VkImageViewType t) -> bool {
+    return t == VK_IMAGE_VIEW_TYPE_CUBE || t == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+}
+inline auto is_3d_view(VkImageViewType t) -> bool { return t == VK_IMAGE_VIEW_TYPE_3D; }
 
 struct FrameStats {
     std::vector<double> samples;
@@ -372,6 +382,14 @@ struct UIValueLatch {
     }
 };
 
+struct NanoProfiler {
+    double start_time;
+    std::string scope_name;
+
+    explicit NanoProfiler(std::string_view);
+
+    ~NanoProfiler();
+};
 
 constexpr auto matches(const auto &needle, const auto &&...haystack) { return ((needle == haystack) || ...); }
 

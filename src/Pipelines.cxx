@@ -190,7 +190,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
     ci.basePipelineIndex = -1;
 
     VkPipeline pipeline;
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "predepth");
 
@@ -325,7 +325,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
     ci.basePipelineIndex = -1;
 
     VkPipeline pipeline;
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
 
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "predepth_alpha_tested");
@@ -467,7 +467,7 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
     ci.basePipelineIndex = -1;
 
     VkPipeline pipeline;
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "directional_shadow_map");
 
@@ -596,7 +596,7 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
     ci.basePipelineIndex = -1;
 
     VkPipeline pipeline;
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
 
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "directional_shadow_map");
@@ -746,7 +746,7 @@ auto create_tonemap_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     pipeline_info.basePipelineIndex = -1;
 
     VkPipeline pipeline{};
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
     vk_check(vkCreateGraphicsPipelines(device, cache_handle, 1, &pipeline_info, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "tonemap");
 
@@ -926,7 +926,7 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     gpci.basePipelineIndex = -1;
 
     VkPipeline pipeline{};
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
 
     vk_check(vkCreateGraphicsPipelines(device, cache_handle, 1, &gpci, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "gbuffer_mrt");
@@ -1079,7 +1079,7 @@ auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *
     gpci.basePipelineIndex = -1;
 
     VkPipeline pipeline{};
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
 
     vk_check(vkCreateGraphicsPipelines(device, cache_handle, 1, &gpci, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "deferred_lighting_fs");
@@ -1558,7 +1558,7 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
     ci.layout = layout;
 
     VkPipeline pipeline;
-        VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
+    VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
 
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "light_volume_mesh_pass");

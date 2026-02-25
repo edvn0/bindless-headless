@@ -17,7 +17,7 @@
 
 #include <glm/glm.hpp>
 
-#include "Types.hxx"
+#include "Numeric.hxx"
 
 struct MaterialData {
     std::string name{};

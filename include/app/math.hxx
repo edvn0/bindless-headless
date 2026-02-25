@@ -81,10 +81,10 @@ constexpr auto extract_frustum_planes = [](const glm::mat4 &proj) -> std::array<
     // Row 0: proj[0][0], proj[1][0], proj[2][0], proj[3][0]
     // Row 3: proj[0][3], proj[1][3], proj[2][3], proj[3][3]
 
-    glm::vec4 row0 = { proj[0][0], proj[1][0], proj[2][0], proj[3][0] };
-    glm::vec4 row1 = { proj[0][1], proj[1][1], proj[2][1], proj[3][1] };
-    glm::vec4 row2 = { proj[0][2], proj[1][2], proj[2][2], proj[3][2] };
-    glm::vec4 row3 = { proj[0][3], proj[1][3], proj[2][3], proj[3][3] };
+    glm::vec4 row0 = {proj[0][0], proj[1][0], proj[2][0], proj[3][0]};
+    glm::vec4 row1 = {proj[0][1], proj[1][1], proj[2][1], proj[3][1]};
+    glm::vec4 row2 = {proj[0][2], proj[1][2], proj[2][2], proj[3][2]};
+    glm::vec4 row3 = {proj[0][3], proj[1][3], proj[2][3], proj[3][3]};
 
     planes[0].plane = row3 + row0; // left
     planes[1].plane = row3 - row0; // right
@@ -94,7 +94,7 @@ constexpr auto extract_frustum_planes = [](const glm::mat4 &proj) -> std::array<
     planes[5].plane = row3 - row2; // far   (reverse-Z: this becomes near in NDC)
 
 
-    for (auto &p : planes) {
+    for (auto &p: planes) {
         float len = glm::length(glm::vec3(p.plane));
         p.plane /= len;
     }

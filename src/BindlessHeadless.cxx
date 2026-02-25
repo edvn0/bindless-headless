@@ -11,6 +11,7 @@
 #include "Swapchain.hxx"
 
 #include "3PP/PerlinNoise.hpp"
+#include "Types.hxx"
 
 #include <chrono>
 #include <cstdlib>
@@ -273,13 +274,16 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
         case VK_IMAGE_VIEW_TYPE_2D:
         case VK_IMAGE_VIEW_TYPE_2D_ARRAY:
         case VK_IMAGE_VIEW_TYPE_CUBE:
+        case VK_IMAGE_VIEW_TYPE_CUBE_ARRAY:
             ici.imageType = VK_IMAGE_TYPE_2D;
             break;
         case VK_IMAGE_VIEW_TYPE_3D:
             ici.imageType = VK_IMAGE_TYPE_3D;
             break;
-        default:
-            throw std::runtime_error("Unsupported view type in TargetSamplerConfiguration");
+        default: {
+            error("Unsupported image view type {}", static_cast<i32>(config.dims.view_type));
+            std::abort();
+        }
     }
     ici.format = format;
     ici.extent = {width, height, 1};
@@ -291,10 +295,6 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-    if (array_layers > 1 && (config.dims.view_type == VK_IMAGE_VIEW_TYPE_2D_ARRAY)) {
-        // Not strictly required for basic 2D array views, but it’s a helpful “this is an array image” hint.
-        ici.flags |= VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
-    }
     if (config.dims.view_type == VK_IMAGE_VIEW_TYPE_CUBE) {
         ici.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     }
@@ -306,11 +306,14 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
     VkImageViewCreateInfo vci{};
     vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vci.image = t.image;
-    vci.viewType = (array_layers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+
+    // Default view type decision
+    VkImageViewType base_view_type = (array_layers > 1) ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     if (config.dims.view_type != VK_IMAGE_VIEW_TYPE_2D) {
-        // Allow explicit override if you want it later.
-        vci.viewType = config.dims.view_type;
+        base_view_type = config.dims.view_type;
     }
+
+    vci.viewType = base_view_type;
     vci.format = format;
     vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                       VK_COMPONENT_SWIZZLE_IDENTITY};
@@ -322,21 +325,45 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
             .layerCount = array_layers,
     };
 
-    // Attachment view
-    vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.attachment_view));
+    // Split view types for cubemaps:
+    // - sampled as CUBE/CUBE_ARRAY
+    // - attachment/storage as 2D_ARRAY (faces/layers)
+    VkImageViewCreateInfo sampled_vci = vci;
+    VkImageViewCreateInfo other_vci = vci;
+
+    const bool is_cube = (base_view_type == VK_IMAGE_VIEW_TYPE_CUBE || base_view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY);
+    if (is_cube) {
+        sampled_vci.viewType = base_view_type;
+
+        other_vci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        // For cube views Vulkan expects layerCount to be multiple of 6; your array_layers should already be that.
+        // Keep layerCount = array_layers so 2D_ARRAY covers all faces/layers.
+    }
+
+    // Attachment view always uses "other" view type
+    vk_check(vkCreateImageView(ai.device, &other_vci, nullptr, &t.attachment_view));
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
+    t.attachment_view_type = other_vci.viewType;
 
     if ((usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0) {
-        vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.sampled_view));
+        vk_check(vkCreateImageView(ai.device, &sampled_vci, nullptr, &t.sampled_view));
         set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
+        t.sampled_view_type = sampled_vci.viewType;
+    } else {
+        t.sampled_view = VK_NULL_HANDLE;
+        t.sampled_view_type = VK_IMAGE_VIEW_TYPE_2D;
     }
 
     if ((usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0) {
-        vk_check(vkCreateImageView(ai.device, &vci, nullptr, &t.storage_view));
+        vk_check(vkCreateImageView(ai.device, &other_vci, nullptr, &t.storage_view));
         set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
+        t.storage_view_type = other_vci.viewType;
+    } else {
+        t.storage_view = VK_NULL_HANDLE;
+        t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
     }
 
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
-    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
     vmaSetAllocationName(alloc, t.allocation, name.data());
 
     return t;
@@ -522,6 +549,10 @@ auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat fo
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
     vmaSetAllocationName(alloc, t.allocation, name.data());
+
+    t.attachment_view_type = vci.viewType;
+    t.sampled_view_type = (t.sampled_view != VK_NULL_HANDLE) ? vci.viewType : VK_IMAGE_VIEW_TYPE_2D;
+    t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
 
     return t;
 }
@@ -737,6 +768,10 @@ auto create_texture_image_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, 
             vmaDestroyBuffer(alloc, staging, staging_alloc);
         }
 
+        t.sampled_view_type = vci.viewType;
+        t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
+        t.attachment_view_type = VK_IMAGE_VIEW_TYPE_2D;
+
         return t;
     } else {
         // Uncompressed format: use the standard path
@@ -885,6 +920,7 @@ auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevice device,
                       VkPhysicalDevice physical_device, VkQueue, const std::filesystem::path &path,
                       std::string_view name) -> tl::expected<OffscreenTarget, Error> {
+    NanoProfiler profiler("load_cubemap_ktx");
 
     ktxTexture2 *ktx{};
     if (ktxTexture2_CreateFromNamedFile(path.string().c_str(), KTX_TEXTURE_CREATE_NO_FLAGS, &ktx) != KTX_SUCCESS) {
@@ -905,7 +941,10 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
     ici.arrayLayers = num_layers;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
+    ici.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+}
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (ktx->isCubemap)
@@ -978,7 +1017,6 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
             true);
 
     vmaDestroyBuffer(alloc, staging_buffer, staging_allocation);
-    ktxTexture_Destroy(ktxTexture(ktx));
 
     OffscreenTarget t{};
     t.width = ktx->baseWidth;
@@ -1006,15 +1044,43 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
         set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
     }
 
+    const u32 cube_layers = std::max(1u, ktx->numLayers);
+const bool is_cubemap = ktx->isCubemap != 0;
+const u32 face_layers = is_cubemap ? (cube_layers * 6u) : cube_layers;
+
+srv_ci = create_info<VkImageViewCreateInfo>();
+srv_ci.image = image;
+srv_ci.viewType = (cube_layers > 1) ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE;
+srv_ci.format = vkFormat;
+srv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
+vk_check(vkCreateImageView(device, &srv_ci, nullptr, &t.sampled_view));
+set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
+t.sampled_view_type = srv_ci.viewType;
+
+if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
+    auto uav_ci = create_info<VkImageViewCreateInfo>();
+    uav_ci.image = image;
+    uav_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    uav_ci.format = vkFormat;
+    uav_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
+    vk_check(vkCreateImageView(device, &uav_ci, nullptr, &t.storage_view));
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
+    t.storage_view_type = uav_ci.viewType;
+} else {
+    t.storage_view = VK_NULL_HANDLE;
+    t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
+}
+
     auto rtv_ci = create_info<VkImageViewCreateInfo>();
     rtv_ci.image = image;
     rtv_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     rtv_ci.format = vkFormat;
-    rtv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, 6};
+    rtv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
     vk_check(vkCreateImageView(device, &rtv_ci, nullptr, &t.attachment_view));
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
+    t.attachment_view_type = rtv_ci.viewType;
 
-    vmaSetAllocationName(alloc, t.allocation, name.data());
+    ktxTexture_Destroy(ktxTexture(ktx));
 
     return t;
 }
