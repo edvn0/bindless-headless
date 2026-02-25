@@ -408,6 +408,52 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                                    ImGui::GetContentRegionAvail().y,
                            });
     });
+
+    widget("Cluster Configuration", [&] {
+    auto& latch = ctx.ui.clustering_config;
+    
+    // The "pending" state exists only within the UI
+    static ClusterConfig pending = latch.peek();
+    static bool is_dirty = false;
+
+    if (ImGui::CollapsingHeader("Grid Dimensions", ImGuiTreeNodeFlags_DefaultOpen)) {
+        is_dirty |= ImGui::DragScalar("Tiles X", ImGuiDataType_U32, &pending.tiles_x, 1.0f, nullptr, nullptr, "%u");
+        is_dirty |= ImGui::DragScalar("Tiles Y", ImGuiDataType_U32, &pending.tiles_y, 1.0f, nullptr, nullptr, "%u");
+        is_dirty |= ImGui::DragScalar("Tiles Z", ImGuiDataType_U32, &pending.tiles_z, 1.0f, nullptr, nullptr, "%u");
+    }
+
+    if (ImGui::CollapsingHeader("Frustum Settings")) {
+        is_dirty |= ImGui::SliderFloat("Z Near", &pending.z_near, 0.1f, 10.0f);
+        is_dirty |= ImGui::SliderFloat("Z Far", &pending.z_far, 10.0f, 10000.0f);
+    }
+
+    ImGui::Separator();
+
+    // Feedback on what the Apply button will actually do
+    const u32 total_clusters = pending.tiles_x * pending.tiles_y * pending.tiles_z;
+    ImGui::Text("Pending Clusters: %u", total_clusters);
+
+    if (is_dirty) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.2f, 1.0f));
+        if (ImGui::Button("Apply Changes")) {
+            latch = pending; // Push to the latch
+            ctx.gpu.scene_resize_graph.trigger_resize(ResizeTrigger::Clustering);
+            is_dirty = false;
+        }
+        ImGui::PopStyleColor();
+        
+        ImGui::SameLine();
+        
+        if (ImGui::Button("Clear")) {
+            pending = latch.peek(); // Reset to current engine state
+            is_dirty = false;
+        }
+    } else {
+        ImGui::BeginDisabled();
+        ImGui::Button("Up to date");
+        ImGui::EndDisabled();
+    }
+});
 }
 
 auto run_ui_frame(AppContext &ctx) -> UiFrameResult {

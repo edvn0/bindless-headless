@@ -156,11 +156,16 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 1> attribute_descriptions{VkVertexInputAttributeDescription{
+    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{VkVertexInputAttributeDescription{
             .location = 0,
             .binding = 0,
             .format = VK_FORMAT_R32G32B32_SFLOAT,
             .offset = offsetof(PositionOnlyVertex, pos),
+    }, VkVertexInputAttributeDescription{
+            .location = 1,
+            .binding = 0,
+            .format = VK_FORMAT_R32_UINT,
+            .offset = offsetof(PositionOnlyVertex, uvs),
     }};
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
@@ -289,12 +294,19 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 1> attribute_descriptions{
+    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
                     .format = VK_FORMAT_R32G32B32_SFLOAT,
                     .offset = offsetof(PositionOnlyVertex, pos),
+
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 1,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uvs),
             },
     };
 
@@ -431,13 +443,19 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 1> attribute_descriptions{
+    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
                     .format = VK_FORMAT_R32G32B32_SFLOAT,
                     .offset = offsetof(PositionOnlyVertex, pos),
             },
+                VkVertexInputAttributeDescription{
+                        .location = 1,
+                        .binding = 0,
+                        .format = VK_FORMAT_R32_UINT,
+                        .offset = offsetof(PositionOnlyVertex, uvs),
+                },
     };
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
@@ -560,13 +578,19 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 1> attribute_descriptions{
+    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
                     .format = VK_FORMAT_R32G32B32_SFLOAT,
                     .offset = offsetof(PositionOnlyVertex, pos),
             },
+                VkVertexInputAttributeDescription{
+                        .location = 1,
+                        .binding = 0,
+                        .format = VK_FORMAT_R32_UINT,
+                        .offset = offsetof(PositionOnlyVertex, uvs),
+                },
     };
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
@@ -825,7 +849,7 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
             VkVertexInputAttributeDescription{
                     .location = 1,
                     .binding = 0,
-                    .format = VK_FORMAT_R32G32_SFLOAT,
+                    .format = VK_FORMAT_R32_UINT,
                     .offset = offsetof(Vertex, uvs),
             },
             VkVertexInputAttributeDescription{

@@ -79,26 +79,26 @@ struct Submesh {
 
 struct Vertex {
     glm::vec3 position{};
-    glm::vec2 uvs{};
+    u32 uvs{};
     u32 normal{}; // packed 10_10_10_2
     u32 tangent{}; // packed 10_10_10_2 (xyz, w unused)
     u32 bitangent{}; // packed 10_10_10_2 (xyz, w unused)
 
     auto operator<=>(const Vertex &other) const {
-        return std::tie(position.x, position.y, position.z, normal, uvs.x, uvs.y, tangent, bitangent) <=>
-               std::tie(other.position.x, other.position.y, other.position.z, other.normal, other.uvs.x, other.uvs.y,
-                        other.tangent, other.bitangent);
+        return std::tie(position.x, position.y, position.z, normal, uvs, tangent, bitangent) <=>
+               std::tie(other.position.x, other.position.y, other.position.z, other.normal, other.uvs, other.tangent, other.bitangent);
     }
 
     auto operator==(const Vertex &other) const -> bool = default;
 };
+static_assert(sizeof(Vertex) == 28);
 
 struct PositionOnlyVertex {
     glm::vec3 pos;
+    u32 uvs;
 };
 
 
-static_assert(sizeof(Vertex) == 32);
 
 struct MeshData {
     std::vector<Vertex> vertices;

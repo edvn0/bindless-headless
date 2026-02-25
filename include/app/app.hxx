@@ -263,6 +263,7 @@ struct AppUI {
 
     SunConfig sun_config{};
     ShadowConfig shadow_config{};
+    UIValueLatch<ClusterConfig> clustering_config{};
 
     UIValueLatch<u32> shadow_map_resolution{2048};
 

@@ -338,7 +338,6 @@ public:
     }
 };
 
-
 template<class T>
 struct UIValueLatch {
     T value{};

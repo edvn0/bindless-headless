@@ -271,9 +271,9 @@ namespace {
             const glm::vec3 p1 = v1.position;
             const glm::vec3 p2 = v2.position;
 
-            const auto uv0 = v0.uvs;
-            const auto uv1 = v1.uvs;
-            const auto uv2 = v2.uvs;
+            const auto uv0 = glm::unpackHalf2x16(v0.uvs);
+            const auto uv1 = glm::unpackHalf2x16(v1.uvs);
+            const auto uv2 = glm::unpackHalf2x16(v2.uvs);
 
             const glm::vec3 e1 = p1 - p0;
             const glm::vec3 e2 = p2 - p0;
@@ -487,8 +487,7 @@ namespace {
             h ^= std::hash<float>()(v.position[0]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<float>()(v.position[1]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<float>()(v.position[2]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<float>()(v.uvs.x) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<float>()(v.uvs.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<u32>()(v.uvs) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.normal) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.tangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.bitangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
@@ -530,7 +529,7 @@ namespace {
             };
         }
         uv0.y = 1.0f - uv0.y;
-        v.uvs = uv0;
+        v.uvs = glm::packHalf2x16(uv0);
         return v;
     }
 } // namespace
@@ -765,10 +764,10 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
     }
     auto aabb_data = std::move(aabb_data_result.value());
 
-
     auto position_vb = mesh.vertices | std::views::transform([](const auto &v) {
                            return PositionOnlyVertex{
                                    .pos = v.position,
+                                   .uvs = v.uvs,
                            };
                        }) |
                        to<std::vector<PositionOnlyVertex>>();
@@ -1195,7 +1194,7 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     // -------------------------------------------------------------------------
     // 9. Convert file Vertex -> runtime Vertex
     //    File: float[3] position, float[2] uv0, u32 normal, u32 tangent, u32 reserved
-    //    Runtime: glm::vec3 position, glm::vec2 uvs, u32 normal, u32 tangent, u32 bitangent
+    //    Runtime: glm::vec3 position, u32 uvs, u32 normal, u32 tangent, u32 bitangent
     //    Bitangent is absent in the file — we'll regenerate it below via
     //    compute_tangent_basis (same path as OBJ loading).
     // -------------------------------------------------------------------------
@@ -1208,7 +1207,7 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
 
         dst.position = {src.position[0] * scale, src.position[1] * scale, src.position[2] * scale};
 
-        dst.uvs = {src.uv0[0], src.uv0[1]};
+        dst.uvs = src.uvs;
         dst.normal = src.normal;
         dst.tangent = src.tangent;
 
@@ -1279,8 +1278,10 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
                                                     std::format("vertex_buffer_{}", stem))
                                  .value();
 
+                                 
+
     auto position_vb = mesh.vertices |
-                       std::views::transform([](const Vertex &v) { return PositionOnlyVertex{.pos = v.position}; }) |
+                       std::views::transform([](const Vertex &v) { return PositionOnlyVertex{.pos = v.position, .uvs = v.uvs}; }) |
                        to<std::vector<PositionOnlyVertex>>();
 
     auto pos_uv_buffer = Buffer::from_slice<PositionOnlyVertex>(

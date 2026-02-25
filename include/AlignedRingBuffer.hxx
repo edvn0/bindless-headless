@@ -144,6 +144,23 @@ public:
     static auto create(RenderContext &ctx, std::string_view name) -> tl::expected<AlignedRingBuffer, Error> {
         return create(ctx, 1, VkBufferUsageFlags{0}, name);
     }
+
+    static auto recreate(RenderContext& ctx, u64 retire_value, AlignedRingBuffer& current, u64 new_element_count, std::string_view name) -> void {
+    auto old_buffer_handle = current.handle();
+
+    auto new_buffer = AlignedRingBuffer<T, N>::create(ctx, new_element_count, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, name);
+    
+    if (new_buffer) {
+        current = std::move(*new_buffer);
+    } else {
+        error("Failed to recreate AlignedRingBuffer: {}", name);
+        return;
+    }
+
+    destroy(ctx, old_buffer_handle, retire_value);
+}
 };
+
+
 
 #include "AlignedRingBufferImpl.inl"

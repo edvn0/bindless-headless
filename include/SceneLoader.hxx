@@ -135,12 +135,12 @@ namespace Tooling {
     // Keep your 10_10_10_2 packing; recommend tangent.w = handedness.
     struct Vertex {
         std::array<float, 3> position{};
-        std::array<float, 2> uv0{};
+        u32 uvs{}; // packed half2 (x = u, y = v)
         u32 normal; // packed 10_10_10_2
         u32 tangent; // packed 10_10_10_2 (xyz + sign in w or last bits)
         u32 reserved; // pad to 32 bytes
     };
-    static_assert(sizeof(Vertex) == 32);
+    static_assert(sizeof(Vertex) == 28);
     static_assert(std::is_trivially_copyable_v<Vertex>);
     static_assert(alignof(Vertex) == 4);
 

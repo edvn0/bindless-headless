@@ -630,8 +630,9 @@ namespace Tooling {
                     Vertex v{};
                     v.position = {positions[i].x, positions[i].y, positions[i].z};
 
-                    v.uv0 = (i < uvs.size()) ? std::array<float, 2>{uvs[i].x, uvs[i].y}
+                    auto uv_prior_to_packing = (i < uvs.size()) ? std::array<float, 2>{uvs[i].x, uvs[i].y}
                                              : std::array<float, 2>{0.0f, 0.0f};
+                                             v.uvs = glm::packHalf2x16(glm::vec2(uv_prior_to_packing[0], uv_prior_to_packing[1]));
 
                     const glm::vec3 n = glm::normalize((i < normals.size()) ? normals[i] : glm::vec3(0, 0, 1));
                     v.normal = glm::packSnorm3x10_1x2(glm::vec4(n, 0.0f));

@@ -339,7 +339,7 @@ float3 calculate_ambient(
 struct VertexInput
 {
     float3 position;
-    float2   uvs;
+    uint   uvs;
     uint   normal;      // 10_10_10_2 snorm-ish
     uint   tangent;     // 10_10_10_2
     uint   bitangent;   // 10_10_10_2
@@ -405,7 +405,7 @@ VertexOutput main_vs_mdi(
     o.t_ws = safe_normalize(mul(m3, t_local));
     o.b_ws = safe_normalize(mul(m3, b_local));
 
-    o.uv = input.uvs;
+    o.uv = unpackHalf2x16ToFloat(input.uvs);
     o.material = material_id;
 
     return o;

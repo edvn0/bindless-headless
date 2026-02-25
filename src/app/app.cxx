@@ -853,7 +853,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     // --- Clustering buffers ---
     {
-        res.clustering_config = cluster_config(16, 9, 16, z_near, z_far);
+        res.clustering_config = cluster_config(16, 9, 24, z_near, z_far);
 
         res.max_light_indices = res.clustering_config.cluster_count * max_lights_per_cluster;
 
@@ -863,6 +863,8 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         res.cluster_light_indices =
                 AlignedRingBuffer<u32>::create(gpu.ctx, res.max_light_indices, 0, "cluster_light_indices_ring").value();
+
+        ui.clustering_config = res.clustering_config;
     }
 
     res.frame_ubo_ring = std::move(AlignedRingBuffer<FrameUBO>::create(gpu.ctx, "aligned_frame_ubo_buffer").value());
@@ -896,20 +898,21 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 [&](VkExtent2D, const ResizeContext &rc) {
                     std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
                     std::array<ReflectionData, names.size()> reflection_data = {};
-                    TRY_UNWRAP_WITH_DISCARD(culling_code,
-                                            gpu.compiler->compile_from_file("assets/shaders/light_cull_compact_modern.slang",
-                                                                            std::span(names),
-                                                                            std::span(reflection_data)),
-                                            "Failed to compile light culling shader");
+                    TRY_UNWRAP_WITH_DISCARD(
+                            culling_code,
+                            gpu.compiler->compile_from_file("assets/shaders/light_cull_compact_modern.slang",
+                                                            std::span(names), std::span(reflection_data)),
+                            "Failed to compile light culling shader");
 
                     std::array<const std::string_view, 2> clustered_culling_names = {"BuildClusterCS",
                                                                                      "LightFinaliseCS"};
                     std::array<ReflectionData, clustered_culling_names.size()> clustered_culling_reflection_data = {};
-                    TRY_UNWRAP_WITH_DISCARD(clustered_culling_code,
-                                            gpu.compiler->compile_from_file(
-                                                    "assets/shaders/clustering.slang", std::span(clustered_culling_names),
-                                                    std::span(clustered_culling_reflection_data)),
-                                            "Failed to compile light clustering shader");
+                    TRY_UNWRAP_WITH_DISCARD(
+                            clustered_culling_code,
+                            gpu.compiler->compile_from_file("assets/shaders/clustering.slang",
+                                                            std::span(clustered_culling_names),
+                                                            std::span(clustered_culling_reflection_data)),
+                            "Failed to compile light clustering shader");
 
                     std::array<const std::string_view, 2> predepth_names{"main_vs_mdi", "fs_main"};
                     std::array<ReflectionData, predepth_names.size()> predepth_reflection{};
@@ -1187,6 +1190,38 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 },
                 ResizeTrigger::ShadowMap);
 
+        std::ignore = gpu.scene_resize_graph.add_node(
+                "clustering_update",
+                [&](VkExtent2D, const ResizeContext &rc) {
+                    auto maybe_cfg = ui.clustering_config.consume_if_changed();
+                    if (!maybe_cfg)
+                        return;
+
+                    const auto &cfg = *maybe_cfg;
+
+                    // Update the central config
+                    res.clustering_config =
+                            cluster_config(cfg.tiles_x, cfg.tiles_y, cfg.tiles_z, cfg.z_near, cfg.z_far);
+                    res.max_light_indices = res.clustering_config.cluster_count * max_lights_per_cluster;
+
+                    // Use the new recreation pattern
+                    AlignedRingBuffer<Cluster>::recreate(gpu.ctx, rc.retire_value, res.clusters,
+                                                         res.clustering_config.cluster_count, "clusters_ring");
+
+                    AlignedRingBuffer<u32>::recreate(gpu.ctx, rc.retire_value, res.cluster_light_indices,
+                                                     res.max_light_indices, "cluster_light_indices_ring");
+
+                                                     const u32 cell_size = 16;
+                    const u32 slices_per_row = 4;
+                    const u32 hm_w = res.clustering_config.tiles_x * slices_per_row * cell_size;
+                    const u32 hm_h = res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) *
+                                     cell_size;
+                    hot_swap(res.debug_culling,
+                             create_offscreen_target(gpu.allocator, hm_w, hm_h, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                                     "debug_culling"),
+                             gpu.ctx, rc.retire_value);
+                },
+                ResizeTrigger::Clustering);
 
         gpu.scene_resize_graph.add_dependency(tonemapped_node, offscreen_node);
     }
@@ -1233,7 +1268,7 @@ gpu.bindless.need_repopulate = true;
     ui.watcher = std::unique_ptr<efsw::FileWatcher, Deleter>(new efsw::FileWatcher(false), Deleter{});
     ui.listeners["update"] = std::unique_ptr<efsw::FileWatchListener, Deleter>(
             new ShaderSourceCodeChangeListener(&gpu.window_resize_graph), Deleter{});
-    std::ignore = ui.watcher->addWatch("shaders", ui.listeners["update"].get(), true,
+    std::ignore = ui.watcher->addWatch("assets/shaders", ui.listeners["update"].get(), true,
                                        {efsw::WatcherOption(efsw::Option::WinBufferSize, 128 * 1024)});
     ui.watcher->watch();
 

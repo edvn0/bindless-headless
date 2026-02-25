@@ -189,8 +189,7 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, gpu.bindless.pipeline_layout, 0, 1,
-                                        &gpu.bindless.set, 0, nullptr);
+      
 
                 auto *indirect = gpu.ctx.buffers.get(res.indirect_ring.handle());
 
@@ -221,7 +220,8 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                         pc.base_draw_id = range.opaque_base;
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
                         vkCmdPushConstants(cmd, predepth->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-
+          vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->layout, 0, 1,
+                                        &gpu.bindless.set, 0, nullptr);
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
                                 range.opaque_base * sizeof(VkDrawIndexedIndirectCommand);
@@ -236,7 +236,8 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                         vkCmdPushConstants(cmd, alpha->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                            &pc);
-
+  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->layout, 0, 1,
+                                        &gpu.bindless.set, 0, nullptr);
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
                                 range.alpha_base * sizeof(VkDrawIndexedIndirectCommand);

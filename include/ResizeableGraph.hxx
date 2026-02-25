@@ -35,6 +35,7 @@ enum class ResizeTrigger : u32 {
     Shaders = detail::bit(1u), // Hot-reloading pipelines
     Bindings = detail::bit(2u), // Descriptor set changes
     ShadowMap = detail::bit(3u), // Shadow map resolution change
+    Clustering = detail::bit(4u), // Cluster config change
     All = 0xFFFFFFFF
 };
 inline auto to_string(ResizeTrigger flags) -> std::string;
