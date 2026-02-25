@@ -20,8 +20,7 @@
 #include "Logger.hxx"
 #include "Numeric.hxx"
 
-#include <vk_mem_alloc.h>
-
+using VmaAllocation = struct VmaAllocation_T*;
 
 inline constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle
 inline constexpr u32 max_in_flight = 2; // GPU submit throttle depth

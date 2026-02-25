@@ -41,10 +41,6 @@ namespace {
             error("Validation layer: {}. {}", callback_data->pMessage, object_info);
         }
 
-        if (message_severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-            trace("Validation info: {}", callback_data->pMessage);
-        }
-
         return VK_FALSE;
     }
 
@@ -73,7 +69,7 @@ auto main(int argc, char **argv) -> int {
 
     {
         Tooling::SceneLoader loader;
-        std::ignore = loader.convert_gltf("assets/meshes/SponzaGLTF/sponza.gltf",
+        std::ignore = loader.convert_gltf("assets/meshes/SponzaGLTF/Sponza.gltf",
                                           "assets/meshes/SponzaGLTF/sponza_converted");
     }
     uint32_t count{};

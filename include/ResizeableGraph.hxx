@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
+#include <vk_mem_alloc.h>
 
 #include "Forward.hxx"
 #include "Types.hxx"
@@ -28,8 +28,9 @@ namespace detail {
     constexpr auto bit(std::unsigned_integral auto const x) -> u32 { return 1 << x; }
 } // namespace detail
 
+
 enum class ResizeTrigger : u32 {
-    None = 0,
+    Empty = 0,
     Extent = detail::bit(0u), // Window/Resolution change
     Shaders = detail::bit(1u), // Hot-reloading pipelines
     Bindings = detail::bit(2u), // Descriptor set changes
@@ -218,7 +219,7 @@ private:
 };
 
 inline auto to_string(ResizeTrigger flags) -> std::string {
-    if (flags == ResizeTrigger::None)
+    if (flags == ResizeTrigger::Empty)
         return "None";
 
     if (flags == ResizeTrigger::All)

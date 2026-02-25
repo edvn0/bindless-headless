@@ -2,8 +2,6 @@
 #include <slang.h>
 #include "ReflectionData.hxx"
 
-#if !defined(ENGINE_OFFLINE_SHADERS)
-
 #include "Logger.hxx"
 
 namespace {
@@ -254,4 +252,3 @@ auto reflect_program(Slang::ComPtr<slang::IComponentType> const &program, int ta
     return result;
 }
 
-#endif

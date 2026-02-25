@@ -173,7 +173,6 @@ if(HAS_TRACY)
   )
 endif()
 
-if(NOT ENGINE_OFFLINE_SHADERS)
   find_package(Slang CONFIG REQUIRED)
 
   # Ensure SLANG_ROOT is set if find_package didn't set it automatically
@@ -223,7 +222,6 @@ if(NOT ENGINE_OFFLINE_SHADERS)
 
   message(STATUS "Slang root: ${SLANG_ROOT}")
   message(STATUS "Slang lib dir: ${SLANG_LIB_DIR}")
-endif()
 
 
 CPMAddPackage(

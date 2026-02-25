@@ -7,6 +7,7 @@
 #include "Numeric.hxx"
 
 #include <array>
+#include <cstring>
 #include <span>
 #include <string>
 #include <string_view>
@@ -20,15 +21,15 @@ namespace Tooling {
         u64 size = 0; // bytes
     };
 
-    static inline auto align_up_u64(u64 v, u64 a) -> u64 { return (v + (a - 1)) & ~(a - 1); }
+    inline auto align_up_u64(u64 v, u64 a) -> u64 { return (v + (a - 1)) & ~(a - 1); }
 
     class BinaryWriter {
     public:
-        auto size() const -> u64 { return m_bytes.size(); }
-        auto data() const -> std::span<const std::byte> { return m_bytes; }
-        auto data() -> std::span<std::byte> { return m_bytes; }
+        [[nodiscard]] auto size() const -> u64 { return m_bytes.size(); }
+        [[nodiscard]] auto data() const -> std::span<const std::byte> { return m_bytes; }
+        [[nodiscard]] auto data() -> std::span<std::byte> { return m_bytes; }
 
-        auto align(u64 alignment) -> void {
+        auto align(const u64 alignment) -> void {
             const auto new_size = align_up_u64(size(), alignment);
             m_bytes.resize(new_size, std::byte{0});
         }

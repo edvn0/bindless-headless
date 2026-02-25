@@ -12,4 +12,3 @@ include(cmake/ToolchainHints.cmake)     # optional sanity / messages
 include(cmake/Dependencies.cmake)
 include(cmake/Targets.cmake)
 include(cmake/CompileOptions.cmake)
-include(cmake/Shaders.cmake)

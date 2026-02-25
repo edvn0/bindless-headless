@@ -21,7 +21,7 @@ add_library(platform_wsi INTERFACE)
 if(HAS_X11)
   target_link_libraries(platform_wsi INTERFACE X11::X11)
   target_compile_definitions(platform_wsi INTERFACE
-    VK_USE_PLATFORM_XLIB_KHR
+    VK_USE_PLATFORM_XCB_KHR
     GLFW_HAS_X11=1
     GLFW_HAS_WAYLAND=0
   )
@@ -141,14 +141,9 @@ target_link_libraries(BindlessEngine PUBLIC
 )
 
 # Slang runtime deps only when runtime path
-if(ENGINE_OFFLINE_SHADERS)
-  target_compile_definitions(BindlessEngine PUBLIC ENGINE_OFFLINE_SHADERS=1)
-else()
-  target_compile_definitions(BindlessEngine PUBLIC ENGINE_RUNTIME_SHADERS=1)
   target_sources(BindlessEngine PRIVATE "src/Reflection.cxx")
   target_include_directories(BindlessEngine PRIVATE ${SLANG_INCLUDE_DIR})
   target_link_libraries(BindlessEngine PRIVATE slang::slang slang-compiler slang-rt)
-endif()
 
 if(HAS_IMAGE_WRITERS)
   target_compile_definitions(BindlessEngine PUBLIC HAS_IMAGE_WRITERS)

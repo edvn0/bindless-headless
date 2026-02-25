@@ -1,4 +1,5 @@
 #include "Compiler.hxx"
+#include "Reflection.hxx"
 
 #include <array>
 #include <fstream>
@@ -6,59 +7,9 @@
 #include <tl/expected.hpp>
 
 
-#if !defined(ENGINE_OFFLINE_SHADERS)
 #include <slang-com-helper.h>
 #include <slang-com-ptr.h>
 #include <slang.h>
-#endif
-
-#if defined(ENGINE_OFFLINE_SHADERS)
-namespace {
-
-    auto read_file_bytes(std::filesystem::path const &p) -> std::vector<std::byte> {
-        std::ifstream ifs(p, std::ios::binary);
-        if (!ifs) {
-            error("Could not open file {}", p.string());
-            return {};
-        }
-
-        ifs.seekg(0, std::ios::end);
-        const auto size = static_cast<std::size_t>(ifs.tellg());
-        ifs.seekg(0, std::ios::beg);
-
-        std::vector<std::byte> data(size);
-        if (!data.empty()) {
-            ifs.read(reinterpret_cast<char *>(data.data()), static_cast<std::streamsize>(data.size()));
-        }
-        return data;
-    }
-
-    auto bytes_to_u32_words(std::vector<std::byte> const &bytes, std::filesystem::path const &p) -> std::vector<u32> {
-        if ((bytes.size() % sizeof(u32)) != 0) {
-            error("SPIR-V file size not multiple of 4: {} ({} bytes)", p.string(), bytes.size());
-            return {};
-        }
-
-        std::vector<u32> words(bytes.size() / sizeof(u32));
-        if (!words.empty()) {
-            std::memcpy(words.data(), bytes.data(), bytes.size());
-        }
-        return words;
-    }
-
-    auto module_stem(std::string_view slang_path) -> std::string {
-        std::filesystem::path p{slang_path};
-        return p.filename().replace_extension("").string();
-    }
-
-    auto offline_spv_path(std::string_view slang_path, std::string_view entry) -> std::filesystem::path {
-        // Must match CMake output naming: <module>__<entry>.spv
-        // And must match output folder copied next to the exe: shaders_spv/
-        return std::filesystem::path("shaders_spv") / (module_stem(slang_path) + "__" + std::string(entry) + ".spv");
-    }
-
-} // namespace
-#endif
 
 struct detail::Impl {
     virtual ~Impl() = default;
@@ -68,38 +19,6 @@ struct detail::Impl {
             -> tl::expected<std::vector<std::vector<u32>>, Error> = 0;
 };
 
-#if defined(ENGINE_OFFLINE_SHADERS)
-
-struct OfflineSpvCompiler final : detail::Impl {
-    auto compile_from_file(std::string_view path, std::span<const std::string_view> entries,
-                           std::span<ReflectionData> reflection_data) -> std::vector<std::vector<u32>> override {
-        std::vector<std::vector<u32>> result;
-        result.resize(entries.size());
-
-        // No reflection yet (later: SPIRV-Reflect)
-        for (std::size_t i = 0; i < std::min(entries.size(), reflection_data.size()); ++i) {
-            reflection_data[i] = ReflectionData{};
-        }
-
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            auto spv = offline_spv_path(path, entries[i]);
-            auto bytes = read_file_bytes(spv);
-            if (bytes.empty()) {
-                error("Missing/empty SPIR-V for {} entry {} (expected {})", path, entries[i], spv.string());
-                result[i] = {};
-                continue;
-            }
-            result[i] = bytes_to_u32_words(bytes, spv);
-        }
-
-        return result;
-    }
-};
-
-#else
-
-// Your existing reflection helper
-#include "Reflection.hxx"
 
 struct RuntimeSlangCompiler final : detail::Impl {
     Slang::ComPtr<slang::IGlobalSession> global;
@@ -298,14 +217,8 @@ struct RuntimeSlangCompiler final : detail::Impl {
     }
 };
 
-#endif
-
 Compiler::Compiler() {
-#if defined(ENGINE_OFFLINE_SHADERS)
-    impl = std::make_unique<OfflineSpvCompiler>();
-#else
     impl = std::make_unique<RuntimeSlangCompiler>();
-#endif
 }
 
 Compiler::~Compiler() = default;

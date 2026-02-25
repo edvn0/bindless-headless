@@ -630,7 +630,7 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
 
     constexpr std::array<const std::string_view, 2> entry_points{"vs_main", "fs_main"};
     std::array<ReflectionData, entry_points.size()> reflection{};
-    TRY_PROPAGATE(shaders, compiler.compile_from_file("shaders/gui.slang", entry_points, reflection),
+    TRY_PROPAGATE(shaders, compiler.compile_from_file("assets/shaders/gui.slang", entry_points, reflection),
                   "Could not compile gui shader");
 
     VkShaderModule vert_shader{};

@@ -21,7 +21,6 @@
 
 #include <ktx.h>
 #include <ktxvulkan.h>
-#include <vulkan/vulkan_core.h>
 
 namespace {
     auto mip_extent(u32 base_w, u32 base_h, u32 level) -> VkExtent3D {

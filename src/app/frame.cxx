@@ -154,7 +154,7 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
 
     const ResizeTrigger window_manual = window_resize_graph.get_and_clear_triggers();
 
-    if (window_resized || window_manual != ResizeTrigger::None) {
+    if (window_resized || window_manual != ResizeTrigger::Empty) {
         ResizeTrigger trigger = window_manual;
         if (window_resized) {
             trigger = trigger | ResizeTrigger::Extent;
@@ -190,7 +190,7 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
         target_extent = pr.desired;
     }
 
-    if (scene_trigger != ResizeTrigger::None) {
+    if (scene_trigger != ResizeTrigger::Empty) {
         scene_resize_graph.rebuild(target_extent, ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
                                    scene_trigger);
     }

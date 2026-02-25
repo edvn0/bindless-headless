@@ -18,7 +18,6 @@
 #include <string_view>
 #include <vector>
 
-#include <GLFW/glfw3.h>
 #include <tl/expected.hpp>
 #include <vk_mem_alloc.h>
 #include <volk.h>

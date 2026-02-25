@@ -1,12 +1,10 @@
 # Options
 option(HAS_TRACY "Enable Tracy integration" OFF)
 option(HAS_HOT_RELOADING "Enable MSVC hot reloading" OFF)
-option(ENGINE_OFFLINE_SHADERS "Compile shaders at build time (slangc) and load SPIR-V at runtime" OFF)
 option(HAS_IMAGE_WRITERS "Enable writing images to output" ON)
 
 message(STATUS "HAS_TRACY = ${HAS_TRACY}")
 message(STATUS "HAS_HOT_RELOADING = ${HAS_HOT_RELOADING}")
-message(STATUS "ENGINE_OFFLINE_SHADERS = ${ENGINE_OFFLINE_SHADERS}")
 message(STATUS "HAS_IMAGE_WRITERS = ${HAS_IMAGE_WRITERS}")
 
 # Enable Hot Reload for MSVC compilers if supported.

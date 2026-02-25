@@ -19,11 +19,6 @@
 #include <thread>
 #include <unordered_map>
 
-#include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-#include <imgui.h>
-
-
 #include "Constants.hxx"
 #include "Logger.hxx"
 #include "Pipelines.hxx"
@@ -59,7 +54,7 @@ namespace {
     constexpr std::array names = {std::string_view{"generate_sky_cs"}};
     std::array<ReflectionData, names.size()> reflection_data{};
     TRY_PROPAGATE(sky_code,
-                            compiler.compile_from_file("shaders/atmosphere_equirect.slang",
+                            compiler.compile_from_file("assets/shaders/atmosphere_equirect.slang",
                                                        std::span(names),
                                                        std::span(reflection_data)),
                             "Failed to compile sky generation shader");
@@ -902,7 +897,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
                     std::array<ReflectionData, names.size()> reflection_data = {};
                     TRY_UNWRAP_WITH_DISCARD(culling_code,
-                                            gpu.compiler->compile_from_file("shaders/light_cull_compact_modern.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/light_cull_compact_modern.slang",
                                                                             std::span(names),
                                                                             std::span(reflection_data)),
                                             "Failed to compile light culling shader");
@@ -912,14 +907,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<ReflectionData, clustered_culling_names.size()> clustered_culling_reflection_data = {};
                     TRY_UNWRAP_WITH_DISCARD(clustered_culling_code,
                                             gpu.compiler->compile_from_file(
-                                                    "shaders/clustering.slang", std::span(clustered_culling_names),
+                                                    "assets/shaders/clustering.slang", std::span(clustered_culling_names),
                                                     std::span(clustered_culling_reflection_data)),
                                             "Failed to compile light clustering shader");
 
                     std::array<const std::string_view, 2> predepth_names{"main_vs_mdi", "fs_main"};
                     std::array<ReflectionData, predepth_names.size()> predepth_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(predepth_code,
-                                            gpu.compiler->compile_from_file("shaders/predepth.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/predepth.slang",
                                                                             std::span(predepth_names),
                                                                             std::span(predepth_reflection)),
                                             "Failed to compile predepth shader");
@@ -929,7 +924,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<ReflectionData, directional_shadow_map_names.size()> directional_shadow_map_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(
                             directional_shadow_map_code,
-                            gpu.compiler->compile_from_file("shaders/directional_shadow_map.slang",
+                            gpu.compiler->compile_from_file("assets/shaders/directional_shadow_map.slang",
                                                             std::span(directional_shadow_map_names),
                                                             std::span(directional_shadow_map_reflection)),
                             "Failed to compile directional shadow map shader");
@@ -937,7 +932,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<const std::string_view, 2> tonemap_names{"vs_main", "fs_main"};
                     std::array<ReflectionData, tonemap_names.size()> tonemap_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(tonemap_code,
-                                            gpu.compiler->compile_from_file("shaders/tonemap.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/tonemap.slang",
                                                                             std::span(tonemap_names),
                                                                             std::span(tonemap_reflection)),
                                             "Failed to compile tonemap shader");
@@ -945,7 +940,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<const std::string_view, 2> rotate_cubes_names{"rotate_geometry_cs", "rotate_lights_cs"};
                     std::array<ReflectionData, rotate_cubes_names.size()> rotate_cubes_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(rotate_cubes_code,
-                                            gpu.compiler->compile_from_file("shaders/rotate_cubes.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/rotate_cubes.slang",
                                                                             std::span(rotate_cubes_names),
                                                                             std::span(rotate_cubes_reflection)),
                                             "Failed to compile rotate cubes shader");
@@ -954,7 +949,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                                        "fs_fullscreen_main"};
                     std::array<ReflectionData, gbuffer_entry_point_names.size()> gbuffer_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(gbuffer_mrt_and_lighting_code,
-                                            gpu.compiler->compile_from_file("shaders/gbuffer.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/gbuffer.slang",
                                                                             std::span(gbuffer_entry_point_names),
                                                                             std::span(gbuffer_reflection)),
                                             "Failed to compile gbuffer shader");
@@ -962,7 +957,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<const std::string_view, 1> present_names = {"present_fs"};
                     std::array<ReflectionData, present_names.size()> present_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(present_code,
-                                            gpu.compiler->compile_from_file("shaders/present.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/present.slang",
                                                                             std::span(present_names),
                                                                             std::span(present_reflection)),
                                             "Failed to compile present shader");
@@ -970,7 +965,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<const std::string_view, 1> debug_clustering_names = {"ClusterHeatmapCS"};
                     std::array<ReflectionData, debug_clustering_names.size()> debug_clustering_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(debug_clustering_code,
-                                            gpu.compiler->compile_from_file("shaders/debug_clustering.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/debug_clustering.slang",
                                                                             std::span(debug_clustering_names),
                                                                             std::span(debug_clustering_reflection)),
                                             "Failed to compile debug clustering shader");
@@ -979,7 +974,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                                      "main_fs_debug"};
                     std::array<ReflectionData, debug_point_light_names.size()> debug_point_light_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(debug_point_light_code,
-                                            gpu.compiler->compile_from_file("shaders/light_mesh.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/light_mesh.slang",
                                                                             std::span(debug_point_light_names),
                                                                             std::span(debug_point_light_reflection)),
                                             "Failed to compile point light mesh debug");
@@ -987,7 +982,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     std::array<const std::string_view, 2> cubemap_names = {"cubemap_vs", "cubemap_fs"};
                     std::array<ReflectionData, cubemap_names.size()> cubemap_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(cubemap_code,
-                                            gpu.compiler->compile_from_file("shaders/cubemap.slang",
+                                            gpu.compiler->compile_from_file("assets/shaders/cubemap.slang",
                                                                             std::span(cubemap_names),
                                                                             std::span(cubemap_reflection)),
                                             "Failed to compile cubemap shader");

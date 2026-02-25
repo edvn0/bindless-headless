@@ -15,6 +15,8 @@
 #include <immintrin.h>
 #endif
 
+#include <vk_mem_alloc.h>
+
 namespace image_operations {
 
     namespace {
