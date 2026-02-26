@@ -83,7 +83,7 @@ public:
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     static auto from_slice(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::span<const T> slice,
-                           const std::string_view name) -> tl::expected<Buffer, Error> {
+                           const std::string_view name, const std::span<const u32> queue_indices = {}) -> tl::expected<Buffer, Error> {
         const auto size = slice.size_bytes();
 
         // Get physical device alignment requirements
@@ -102,6 +102,12 @@ public:
         ci.flags = 0;
         ci.size = aligned_size;
         ci.usage = usage_flags | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Just for clarity here. 0 = EXCLUSIVE.
+        if (!queue_indices.empty()) {
+            ci.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            ci.queueFamilyIndexCount = static_cast<u32>(queue_indices.size());
+            ci.pQueueFamilyIndices = queue_indices.data();
+        }
 
         auto ai = create_info<VmaAllocationCreateInfo>();
         ai.usage = VMA_MEMORY_USAGE_AUTO;
@@ -143,7 +149,7 @@ public:
     }
 
     static auto zeroes(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::size_t size,
-                       const std::string_view name) -> tl::expected<Buffer, Error> {
+                       const std::string_view name, const std::span<const u32> queue_indices = {}) -> tl::expected<Buffer, Error> {
         // Get physical device alignment requirements
         VmaAllocatorInfo alloc_info{};
         vmaGetAllocatorInfo(allocator, &alloc_info);
@@ -160,6 +166,14 @@ public:
         ci.flags = 0;
         ci.size = aligned_size;
         ci.usage = usage_flags | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+        if (!queue_indices.empty()) {
+            ci.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            ci.queueFamilyIndexCount = static_cast<u32>(queue_indices.size());
+            ci.pQueueFamilyIndices = queue_indices.data();
+        } else {
+            ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
 
         VmaAllocationCreateInfo ai{};
         ai.usage = VMA_MEMORY_USAGE_AUTO;

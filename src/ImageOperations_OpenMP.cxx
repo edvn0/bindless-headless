@@ -10,11 +10,11 @@
 #include <glm/gtc/packing.hpp>
 #include <vector>
 
-
 #include "ImageWriter.hxx" // declares CpuImage, PixelLayout, IImageWriter, make_image_writer_from_filename
 #include "Profiler.hxx"
 #include "Types.hxx"
 
+#include <vk_mem_alloc.h>
 
 #ifdef __AVX2__
 #include <immintrin.h>

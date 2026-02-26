@@ -5,7 +5,7 @@
 template<typename T, std::size_t N>
     requires std::is_trivial_v<T>
 auto AlignedRingBuffer<T, N>::create(RenderContext &ctx, u64 elements_per_slot, VkBufferUsageFlags extra_usage,
-                                     std::string_view name) -> tl::expected<AlignedRingBuffer, Error> {
+                                     std::string_view name, const std::span<const u32> queue_indices) -> tl::expected<AlignedRingBuffer, Error> {
     constexpr auto align_up_pow2 = [](u64 value, u64 alignment) -> u64 {
         return (value + alignment - 1) & ~(alignment - 1);
     };
@@ -35,7 +35,7 @@ auto AlignedRingBuffer<T, N>::create(RenderContext &ctx, u64 elements_per_slot, 
 
     auto buf = Buffer::zeroes(
             ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | extra_usage,
-            static_cast<std::size_t>(total_bytes), name);
+            static_cast<std::size_t>(total_bytes), name, queue_indices);
 
     if (!buf) {
         return tl::unexpected{buf.error()};
