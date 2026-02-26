@@ -96,6 +96,7 @@ struct AppPipelines {
     PipelineHandle skybox_pipeline{};
 
     PipelineHandle ssao_pipeline{};
+    PipelineHandle ssao_blur_pipeline{};
 
     std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
@@ -195,9 +196,14 @@ struct AppResources {
     TextureHandle directional_shadow_map_depth{};
     TextureHandle tonemapped{};
     TextureHandle ssao_output{};
+    TextureHandle ssao_blurred{};
+    TextureHandle ssao_blurred_temp{};
 
     TextureHandle environment_cubemap{};
     TextureHandle perlin_noise{};
+
+    BufferHandle noise_ssao_kernel{};
+    BufferHandle ssao_hemisphere_kernel{};
 
     static constexpr u32 max_draws_per_frame = 100000U;
     AlignedRingBuffer<VkDrawIndexedIndirectCommand> indirect_ring{};

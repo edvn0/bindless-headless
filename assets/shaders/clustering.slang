@@ -15,7 +15,7 @@ struct VkDrawMeshTasksIndirectCommandEXT {
     uint groupCountZ;
 };
 
-struct PushConstants
+struct ClusteredLightCullingPushConstants
 {
     DeviceReadPtr<UBO>        frame_ubo;
     DeviceReadPtr<PointLight> all_lights;       // full unculled array
@@ -35,7 +35,7 @@ struct PushConstants
 
 };
 
-bool light_intersects_cluster(PushConstants pc, uint light_index, uint cx, uint cy, uint cz)
+bool light_intersects_cluster(ClusteredLightCullingPushConstants pc, uint light_index, uint cx, uint cy, uint cz)
 {
     var l = pc.all_lights[light_index];
     float3 view_pos = mul(pc.frame_ubo->view, float4(l.position_radius.xyz, 1.0)).xyz;
@@ -73,7 +73,7 @@ groupshared uint g_light_indices[MAX_LIGHTS_PER_CLUSTER];
 void BuildClusterCS(
     uint3 group_id    : SV_GroupID,
     uint  group_index : SV_GroupIndex,
-    uniform PushConstants pc)
+    uniform ClusteredLightCullingPushConstants pc)
 {
     uint cluster_idx = group_id.x;
     if (cluster_idx >= pc.cluster_count) return;
@@ -125,7 +125,7 @@ void BuildClusterCS(
 
 [numthreads(1, 1, 1)]
 [shader("compute")]
-void LightFinaliseCS(uniform PushConstants pc)
+void LightFinaliseCS(uniform ClusteredLightCullingPushConstants pc)
 {
     pc.indirect_command[0].groupCountX = pc.light_count;
     pc.indirect_command[0].groupCountY = 1;

@@ -725,6 +725,52 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, *gpu.ctx.command_ctx, 2048u, 2048u,
                                                                  VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
     }
+    {
+        auto ssao_hemisphere_kernel = []() -> std::array<glm::vec4, 32> {
+            std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+            std::default_random_engine rng{std::random_device{}()};
+
+            std::array<glm::vec4, 32> kernel{};
+            for (u32 i = 0; i < 32; ++i) {
+                glm::vec3 sample{
+                        dist(rng) * 2.0f - 1.0f,
+                        dist(rng) * 2.0f - 1.0f,
+                        dist(rng),
+                };
+                sample = glm::normalize(sample);
+                sample *= dist(rng);
+
+                float scale = static_cast<float>(i) / 32.0f;
+                scale = glm::mix(0.1f, 1.0f, scale * scale);
+                sample *= scale;
+
+                kernel[i] = glm::vec4(sample, 0.0f);
+            }
+            return kernel;
+        }();
+
+        auto ssao_noise_kernel = []() -> std::array<glm::vec4, 16> {
+            std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+            std::default_random_engine rng{std::random_device{}()};
+
+            std::array<glm::vec4, 16> noise{};
+            for (auto &n: noise) {
+                const float angle = dist(rng) * 2.0f * glm::pi<float>();
+                n = glm::vec4(std::cos(angle), std::sin(angle), 0.0f, 0.0f);
+            }
+            return noise;
+        }();
+
+        res.ssao_hemisphere_kernel =
+                gpu.ctx.create_buffer(Buffer::from_slice<glm::vec4>(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                                    ssao_hemisphere_kernel, "ssao_hemisphere_kernel")
+                                              .value());
+
+        res.noise_ssao_kernel =
+                gpu.ctx.create_buffer(Buffer::from_slice<glm::vec4>(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                                    ssao_noise_kernel, "noise_ssao_kernel")
+                                              .value());
+    }
 
     {
         {
@@ -1007,7 +1053,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(cubemap_reflection)),
                                             "Failed to compile cubemap shader");
 
-                    std::array<const std::string_view, 1> ssao_compute_names = {"ssao_compute"};
+                    std::array<const std::string_view, 2> ssao_compute_names = {"ssao_compute", "ssao_blur"};
                     std::array<ReflectionData, ssao_compute_names.size()> ssao_compute_reflection{};
                     TRY_UNWRAP_WITH_DISCARD(ssao_compute_code,
                                             gpu.compiler->compile_from_file("assets/shaders/ssao_compute.slang",
@@ -1121,8 +1167,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     }
 
                     auto ssao =
-                            create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
-                                                    ssao_compute_code.at(0), sizeof(SsaoPushConstants), "ssao_compute");
+                            create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, ssao_compute_code.at(0),
+                                            sizeof(SSAOPushConstants), "ssao_compute");
+                    auto ssao_blur = create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, ssao_compute_code.at(1),
+                                            sizeof(SSAOBlurPushConstants), "ssao_blur");
 
                     hot_swap(pipes.gbuffer_pipeline_lighting, std::move(gbuf_light), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.cube_rotation_pipeline, std::move(crp), gpu.ctx, rc.retire_value);
@@ -1143,6 +1191,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     hot_swap(pipes.debug_light_clustering, std::move(debug_clustering_pipeline), gpu.ctx,
                              rc.retire_value);
                     hot_swap(pipes.ssao_pipeline, std::move(ssao), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.ssao_blur_pipeline, std::move(ssao_blur), gpu.ctx, rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
     }
@@ -1179,6 +1228,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             hot_swap(res.ssao_output,
                      create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {}, "ssao_output"),
                      gpu.ctx, rc.retire_value);
+                // SSAO blur
+            hot_swap(res.ssao_blurred,
+                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {}, "ssao_blurred"),
+                     gpu.ctx, rc.retire_value);
+                    hot_swap(res.ssao_blurred_temp,
+                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {},
+                                                     "ssao_blur_temp"),
+                             gpu.ctx, rc.retire_value);
 
             hot_swap(res.depth,
                      create_depth_target(gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
@@ -1551,6 +1608,19 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
+    const std::array ssao_blur_waits{
+            TimelineWait{
+                    .value     = fs.timeline_values[stage_index(Stage::SSAO)],
+                    .semaphore = gpu.tl_compute.timeline,
+                    .stage     = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            },
+    };
+    fs.timeline_values[stage_index(Stage::SSAOBlur)] =
+            run_ssao_blur_pass(app_context, render_scene_extent, bounded_frame_index,
+                               SubmitSynchronisation{.timeline_waits = ssao_blur_waits});
+}
+
+        {
             const std::array deferred_waits{
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::GBuffer)],
@@ -1558,7 +1628,7 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     },
                     TimelineWait{
-                            .value = fs.timeline_values[stage_index(Stage::SSAO)],
+                            .value = fs.timeline_values[stage_index(Stage::SSAOBlur)],
                             .semaphore = gpu.tl_compute.timeline,
                             .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     },

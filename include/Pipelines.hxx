@@ -178,9 +178,10 @@ struct SkyboxPushConstants {
     u32 sampler_index;
 };
 
-struct SsaoPushConstants {
+struct SSAOPushConstants {
     const DeviceAddress frame_ubo;
-    u32 noise_index;
+    const DeviceAddress hemisphere_kernel; // 32 elements, xyz used, w ignored
+    const DeviceAddress noise_kernel;      // 16 elements, xy used, zw ignored
     u32 gbuffer0_index;
     u32 gbuffer1_index;
     u32 depth_index;
@@ -188,6 +189,14 @@ struct SsaoPushConstants {
     u32 sampler_index;
     f32 radius;
     f32 bias;
+};
+
+struct SSAOBlurPushConstants {
+    u32 ssao_input_index;
+    u32 ssao_output_index;
+    u32 depth_index;
+    u32 sampler_index;
+    u32 horizontal; // 1 for horizontal pass, 0 for vertical
 };
 
 struct CompiledPipeline {

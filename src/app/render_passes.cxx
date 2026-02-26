@@ -189,7 +189,6 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
-      
 
                 auto *indirect = gpu.ctx.buffers.get(res.indirect_ring.handle());
 
@@ -220,8 +219,8 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                         pc.base_draw_id = range.opaque_base;
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
                         vkCmdPushConstants(cmd, predepth->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
-          vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->layout, 0, 1,
-                                        &gpu.bindless.set, 0, nullptr);
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->layout, 0, 1,
+                                                &gpu.bindless.set, 0, nullptr);
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
                                 range.opaque_base * sizeof(VkDrawIndexedIndirectCommand);
@@ -236,8 +235,8 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                         vkCmdPushConstants(cmd, alpha->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                            &pc);
-  vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->layout, 0, 1,
-                                        &gpu.bindless.set, 0, nullptr);
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->layout, 0, 1,
+                                                &gpu.bindless.set, 0, nullptr);
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
                                 range.alpha_base * sizeof(VkDrawIndexedIndirectCommand);
@@ -754,15 +753,14 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
                 TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "SSAO");
 
                 auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
-                        pipes.compute_query_pool[bounded_frame_index],
-                        pipes.compute_stats_pool[bounded_frame_index]);
+                        pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
 
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::SsaoBegin);
                 begin_stats(cmd, *stats_pool, ComputeIndex::Ssao);
 
-                auto *ssao_tex  = gpu.ctx.textures.get(res.ssao_output);
-                auto *g0        = gpu.ctx.textures.get(res.gbuffer0);
-                auto *g1        = gpu.ctx.textures.get(res.gbuffer1);
+                auto *ssao_tex = gpu.ctx.textures.get(res.ssao_output);
+                auto *g0 = gpu.ctx.textures.get(res.gbuffer0);
+                auto *g1 = gpu.ctx.textures.get(res.gbuffer1);
                 auto *depth_tex = gpu.ctx.textures.get(res.depth);
 
                 ssao_tex->transition_if_not_initialised(
@@ -771,31 +769,151 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
 
                 const std::array acquire_barriers{
                         VkImageMemoryBarrier2{
-                                .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                                .pNext               = nullptr,
-                                .srcStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                .srcAccessMask       = VK_ACCESS_2_NONE,
-                                .dstStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                .dstAccessMask       = VK_ACCESS_2_SHADER_READ_BIT,
-                                .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
-                                .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .pNext = nullptr,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_NONE,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .image               = g0->image,
-                                .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                                .image = g0->image,
+                                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                         },
+                        VkImageMemoryBarrier2{
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .pNext = nullptr,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_NONE,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = g1->image,
+                                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                        },
+                        VkImageMemoryBarrier2{
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .pNext = nullptr,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_NONE,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = depth_tex->image,
+                                .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+                        },
+                };
+
+                VkDependencyInfo dep_acquire{};
+                dep_acquire.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_acquire.imageMemoryBarrierCount = static_cast<u32>(acquire_barriers.size());
+                dep_acquire.pImageMemoryBarriers = acquire_barriers.data();
+                vkCmdPipelineBarrier2(cmd, &dep_acquire);
+
+                auto *pipe = gpu.ctx.pipeline_pool.get(pipes.ssao_pipeline);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->layout, 0, 1, &gpu.bindless.set, 0,
+                                        nullptr);
+
+                const auto hemisphere_address = gpu.ctx.buffers.get(res.ssao_hemisphere_kernel)->device_address();
+                const auto noise_address = gpu.ctx.buffers.get(res.noise_ssao_kernel)->device_address();
+
+                const SSAOPushConstants pc{
+                        .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
+                        .hemisphere_kernel = hemisphere_address,
+                        .noise_kernel = noise_address,
+                        .gbuffer0_index = res.gbuffer0.index(),
+                        .gbuffer1_index = res.gbuffer1.index(),
+                        .depth_index = res.depth.index(),
+                        .ssao_output_index = res.ssao_output.index(),
+                        .sampler_index = pipes.linear_clamp.index(),
+                        .radius = 0.5f,
+                        .bias = 0.025f,
+                };
+
+                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+
+                const u32 group_x = (frame_extent.width + 7u) / 8u;
+                const u32 group_y = (frame_extent.height + 7u) / 8u;
+                vkCmdDispatch(cmd, group_x, group_y, 1);
+
+                // Release-side barrier: make the SSAO write visible before the timeline signal,
+                // so deferred lighting's acquire on the graphics queue sees it.
+                const VkImageMemoryBarrier2 release_barrier{
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .pNext = nullptr,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                        .dstAccessMask = VK_ACCESS_2_NONE,
+                        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image = ssao_tex->image,
+                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                };
+
+                VkDependencyInfo dep_release{};
+                dep_release.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_release.imageMemoryBarrierCount = 1;
+                dep_release.pImageMemoryBarriers = &release_barrier;
+                vkCmdPipelineBarrier2(cmd, &dep_release);
+
+                end_stats(cmd, *stats_pool, ComputeIndex::Ssao);
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::SsaoEnd);
+            },
+            sync);
+}
+
+auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
+                        const SubmitSynchronisation &sync) -> TimelineValue {
+    auto &&[gpu, pipes, res, ui] = ctx;
+
+    return submit_stage(
+            gpu.tl_compute, gpu.device,
+            [&](VkCommandBuffer cmd) {
+                TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "SSAO Blur");
+
+                auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
+                        pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
+
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::SsaoBlurBegin);
+                begin_stats(cmd, *stats_pool, ComputeIndex::SsaoBlur);
+
+                auto *ssao_in   = gpu.ctx.textures.get(res.ssao_output);
+                auto *blur_tmp  = gpu.ctx.textures.get(res.ssao_blurred_temp);
+                auto *ssao_out  = gpu.ctx.textures.get(res.ssao_blurred);
+                auto *depth_tex = gpu.ctx.textures.get(res.depth);
+
+                blur_tmp->transition_if_not_initialised(
+                        cmd, VK_IMAGE_LAYOUT_GENERAL,
+                        {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+                ssao_out->transition_if_not_initialised(
+                        cmd, VK_IMAGE_LAYOUT_GENERAL,
+                        {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+
+                const std::array acquire_barriers{
                         VkImageMemoryBarrier2{
                                 .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                                 .pNext               = nullptr,
-                                .srcStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                .srcAccessMask       = VK_ACCESS_2_NONE,
+                                .srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT,
                                 .dstStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                 .dstAccessMask       = VK_ACCESS_2_SHADER_READ_BIT,
                                 .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
                                 .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
                                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .image               = g1->image,
+                                .image               = ssao_in->image,
                                 .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                         },
                         VkImageMemoryBarrier2{
@@ -820,31 +938,58 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
                 dep_acquire.pImageMemoryBarriers    = acquire_barriers.data();
                 vkCmdPipelineBarrier2(cmd, &dep_acquire);
 
-                auto *pipe = gpu.ctx.pipeline_pool.get(pipes.ssao_pipeline);
+                auto *pipe = gpu.ctx.pipeline_pool.get(pipes.ssao_blur_pipeline);
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->layout, 0, 1,
                                         &gpu.bindless.set, 0, nullptr);
 
-                const SsaoPushConstants pc{
-                        .frame_ubo        = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                        .noise_index            = res.perlin_noise.index(),
-                        .gbuffer0_index   = res.gbuffer0.index(),
-                        .gbuffer1_index   = res.gbuffer1.index(),
-                        .depth_index      = res.depth.index(),
-                        .ssao_output_index = res.ssao_output.index(),
-                        .sampler_index    = pipes.linear_clamp.index(),
-                        .radius           = 0.5f,
-                        .bias             = 0.025f,
+                const auto group_x = (frame_extent.width  + 7u) / 8u;
+                const auto group_y = (frame_extent.height + 7u) / 8u;
+
+                // --- Horizontal pass: ssao_output -> ssao_blurred_temp ---
+                const SSAOBlurPushConstants pc_h{
+                        .ssao_input_index  = res.ssao_output.index(),
+                        .ssao_output_index = res.ssao_blurred_temp.index(),
+                        .depth_index       = res.depth.index(),
+                        .sampler_index     = pipes.linear_clamp.index(),
+                        .horizontal        = 1,
                 };
-
-                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-
-                const u32 group_x = (frame_extent.width  + 7u) / 8u;
-                const u32 group_y = (frame_extent.height + 7u) / 8u;
+                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc_h), &pc_h);
                 vkCmdDispatch(cmd, group_x, group_y, 1);
 
-                // Release-side barrier: make the SSAO write visible before the timeline signal,
-                // so deferred lighting's acquire on the graphics queue sees it.
+                // Barrier: tmp written by horizontal, read by vertical
+                const VkImageMemoryBarrier2 mid_barrier{
+                        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .pNext               = nullptr,
+                        .srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT,
+                        .dstStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .dstAccessMask       = VK_ACCESS_2_SHADER_READ_BIT,
+                        .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                        .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image               = blur_tmp->image,
+                        .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                };
+                VkDependencyInfo dep_mid{};
+                dep_mid.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_mid.imageMemoryBarrierCount = 1;
+                dep_mid.pImageMemoryBarriers    = &mid_barrier;
+                vkCmdPipelineBarrier2(cmd, &dep_mid);
+
+                // --- Vertical pass: ssao_blurred_temp -> ssao_blurred ---
+                const SSAOBlurPushConstants pc_v{
+                        .ssao_input_index  = res.ssao_blurred_temp.index(),
+                        .ssao_output_index = res.ssao_blurred.index(),
+                        .depth_index       = res.depth.index(),
+                        .sampler_index     = pipes.linear_clamp.index(),
+                        .horizontal        = 0,
+                };
+                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc_v), &pc_v);
+                vkCmdDispatch(cmd, group_x, group_y, 1);
+
+                // Release ssao_blurred to graphics queue for deferred lighting
                 const VkImageMemoryBarrier2 release_barrier{
                         .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                         .pNext               = nullptr,
@@ -854,20 +999,19 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
                         .dstAccessMask       = VK_ACCESS_2_NONE,
                         .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
                         .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image               = ssao_tex->image,
+                        .srcQueueFamilyIndex = gpu.queue_family_indices.compute,
+                        .dstQueueFamilyIndex = gpu.queue_family_indices.graphics,
+                        .image               = ssao_out->image,
                         .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                 };
-
                 VkDependencyInfo dep_release{};
                 dep_release.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                 dep_release.imageMemoryBarrierCount = 1;
                 dep_release.pImageMemoryBarriers    = &release_barrier;
                 vkCmdPipelineBarrier2(cmd, &dep_release);
 
-                end_stats(cmd, *stats_pool, ComputeIndex::Ssao);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::SsaoEnd);
+                end_stats(cmd, *stats_pool, ComputeIndex::SsaoBlur);
+                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::SsaoBlurEnd);
             },
             sync);
 }
@@ -1036,7 +1180,7 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                         .gbuffer0_index = res.gbuffer0.index(),
                         .gbuffer1_index = res.gbuffer1.index(),
                         .gbuffer2_index = res.gbuffer2.index(),
-                        .ssao_index = res.ssao_output.index(),
+                        .ssao_index = res.ssao_blurred.index(),
                         .depth_index = res.depth.index(),
                         .sampler_index = pipes.linear_clamp.index(),
                         .shadow_texture_index = res.directional_shadow_map_depth.index(),

@@ -88,6 +88,7 @@ enum class Stage : u32 {
     CubeRotation,
     DeferredLighting,
     SSAO,
+    SSAOBlur,
     Skybox,
     LightClustering,
     DirectionalShadowMap,
@@ -353,11 +354,13 @@ enum class ComputeStamp : u32 {
     LightClusteringEnd,
     SsaoBegin,
     SsaoEnd,
+    SsaoBlurBegin,
+    SsaoBlurEnd,
     Count
 };
-enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Ssao, Count };
+enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Ssao, SsaoBlur, Count };
 inline constexpr auto compute_stages =
-        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering, ComputeIndex::Ssao};
+        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering, ComputeIndex::Ssao, ComputeIndex::SsaoBlur};
 
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);

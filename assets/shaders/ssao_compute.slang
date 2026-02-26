@@ -46,10 +46,11 @@ static const float3 KERNEL[SSAO_KERNEL_SIZE] = {
     float3( 0.1812, -0.3012,  0.3012),
 };
 
-struct PushConstants
+struct SSAOPushConstants
 {
-    DeviceReadPtr<UBO> frame_ubo;
-    uint noise_index;
+    DeviceReadPtr<UBO>    frame_ubo;
+    DeviceReadPtr<float4> hemisphere_kernel; // 32 elements, xyz used, w ignored
+    DeviceReadPtr<float4> noise_kernel;      // 16 elements, xy used, zw ignored
     uint gbuffer0_index;
     uint gbuffer1_index;
     uint depth_index;
@@ -74,7 +75,7 @@ float3 reconstruct_view_pos(float2 uv, float depth, DeviceReadPtr<UBO> ubo)
 [shader("compute")]
 void ssao_compute(
     uint3 dispatch_id : SV_DispatchThreadID,
-    uniform PushConstants pc)
+    uniform SSAOPushConstants pc)
 {
     RWTexture2D<float4> ssao_out = get_storage_image(pc.ssao_output_index);
 
@@ -94,20 +95,21 @@ void ssao_compute(
     float3 normal_ws  = oct_decode(oct_u);
     float3 normal_vs  = normalize(mul((float3x3)pc.frame_ubo->view, normal_ws));
 
-    // Tile the 4x4 noise texture over the screen for per-pixel kernel rotation
-    float2 noise_uv   = float2(dispatch_id.xy) / float(SSAO_NOISE_SIZE);
-    float3 random_vec = sample_texture_lod(noise_uv, pc.noise_index, 0, pc.sampler_index).xyz * 2.0 - 1.0;
+
+uint noise_idx     = (dispatch_id.x % 4) + (dispatch_id.y % 4) * 4;
+float3 random_vec  = float3(pc.noise_kernel[noise_idx].xy, 0.0);
 
     // Gram-Schmidt orthonormalisation to build TBN aligned to the surface normal
-    float3 tangent   = normalize(random_vec - normal_vs * dot(random_vec, normal_vs));
-    float3 bitangent = cross(normal_vs, tangent);
-    float3x3 tbn     = float3x3(tangent, bitangent, normal_vs);
+float3 tangent   = normalize(random_vec - normal_vs * dot(random_vec, normal_vs));
+float3 bitangent = cross(normal_vs, tangent);
+float3x3 tbn     = float3x3(tangent, bitangent, normal_vs);
 
     float occlusion = 0.0;
 
     for (uint i = 0; i < SSAO_KERNEL_SIZE; ++i)
     {
-        float3 sample_vs  = mul(tbn, KERNEL[i]);
+float3 sample_vs = mul(tbn, pc.hemisphere_kernel[i].xyz);
+
         sample_vs         = view_pos + sample_vs * pc.radius;
 
         // Project the view-space sample back to UV
@@ -131,4 +133,53 @@ void ssao_compute(
 
     float ao = 1.0 - (occlusion / float(SSAO_KERNEL_SIZE));
     ssao_out[dispatch_id.xy] = float4(ao, ao, ao, 1.0);
+}
+
+struct SSAOBlurPushConstants
+{
+    uint ssao_input_index;
+    uint ssao_output_index;
+    uint depth_index;
+    uint sampler_index;
+    uint horizontal; // 1 for horizontal pass, 0 for vertical
+};
+
+static const int BLUR_RADIUS = 4;
+
+[numthreads(8, 8, 1)]
+[shader("compute")]
+void ssao_blur(
+    uint3 dispatch_id : SV_DispatchThreadID,
+    uniform SSAOBlurPushConstants pc)
+{
+    RWTexture2D<float4> blur_out = get_storage_image(pc.ssao_output_index);
+
+    uint2 dims;
+    blur_out.GetDimensions(dims.x, dims.y);
+
+    if (dispatch_id.x >= dims.x || dispatch_id.y >= dims.y)
+        return;
+
+    float2 uv         = (float2(dispatch_id.xy) + 0.5) / float2(dims);
+    float2 texel_size = 1.0 / float2(dims);
+    float2 direction  = pc.horizontal != 0 ? float2(1.0, 0.0) : float2(0.0, 1.0);
+
+    float center_depth = sample_texture_lod(uv, pc.depth_index, 0, pc.sampler_index).r;
+
+    float result       = 0.0;
+    float total_weight = 0.0;
+
+    for (int i = -BLUR_RADIUS; i <= BLUR_RADIUS; ++i)
+    {
+        float2 offset_uv   = uv + direction * float(i) * texel_size;
+        float sample_depth = sample_texture_lod(offset_uv, pc.depth_index, 0, pc.sampler_index).r;
+
+        float depth_diff = abs(center_depth - sample_depth);
+        float weight     = exp(-depth_diff * 50.0);
+
+        result       += sample_texture_lod(offset_uv, pc.ssao_input_index, 0, pc.sampler_index).r * weight;
+        total_weight += weight;
+    }
+
+    blur_out[dispatch_id.xy] = float4(result / max(total_weight, 0.0001), 0.0, 0.0, 1.0);
 }
