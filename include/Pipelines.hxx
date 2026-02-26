@@ -113,28 +113,6 @@ struct RotatePushConstant {
     const DeviceAddress static_point_lights;
 };
 
-/**
-struct DeferredLightingPushConstants
-{
-    DeviceReadPtr<UBO>        frame_ubo;
-    DeviceReadPtr<PointLight> point_lights;
-    DeviceReadPtr<Cluster> clusters;               // Cluster offset/count data
-    DeviceReadPtr<uint>    cluster_light_indices;  // Packed light indices
-    float4x4 shadow_matrix;
-    float log_z_scale;
-    float z_near;
-    uint tiles_x;
-    uint tiles_y;
-    uint tiles_z;
-    uint gbuffer0_index;
-    uint gbuffer1_index;
-    uint gbuffer2_index;
-    uint depth_index;
-    uint sampler_index;
-    uint shadow_texture_index;
-    uint shadow_sampler_index;
-    uint debug_mode;
-}; */
 struct DeferredLightingPushConstants {
     const DeviceAddress frame_ubo;
     const DeviceAddress point_lights; // All the lights
@@ -150,6 +128,7 @@ struct DeferredLightingPushConstants {
     u32 gbuffer0_index;
     u32 gbuffer1_index;
     u32 gbuffer2_index;
+    u32 ssao_index;
     u32 depth_index;
     u32 sampler_index;
     u32 shadow_texture_index;
@@ -197,6 +176,18 @@ struct SkyboxPushConstants {
     const DeviceAddress frame_ubo;
     u32 cubemap_index;
     u32 sampler_index;
+};
+
+struct SsaoPushConstants {
+    const DeviceAddress frame_ubo;
+    u32 noise_index;
+    u32 gbuffer0_index;
+    u32 gbuffer1_index;
+    u32 depth_index;
+    u32 ssao_output_index;
+    u32 sampler_index;
+    f32 radius;
+    f32 bias;
 };
 
 struct CompiledPipeline {

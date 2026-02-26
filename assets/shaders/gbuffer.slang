@@ -495,6 +495,7 @@ struct DeferredLightingPushConstants
     uint gbuffer0_index;
     uint gbuffer1_index;
     uint gbuffer2_index;
+    uint ssao_index;
     uint depth_index;
     uint sampler_index;
     uint shadow_texture_index;
@@ -566,11 +567,14 @@ float4 fs_fullscreen_main(VSOut i, uniform DeferredLightingPushConstants pc) : S
 );
     float3 V = safe_normalize(pc.frame_ubo->camera_position.xyz - world_pos);
 
+    float ssao = sample_texture_lod(uv, pc.ssao_index, 0, pc.sampler_index).r;
+float combined_ao = ao * ssao;
+
     // Ambient
     float3 color = calculate_ambient(
         albedo,
         metal,
-        ao,
+        combined_ao,
         float3(0.03, 0.03, 0.03),
         3
     );

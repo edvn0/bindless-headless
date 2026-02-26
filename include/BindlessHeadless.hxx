@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "CreateInfo.hxx"
+#include "FixedVector.hxx"
 #include "Forward.hxx"
 #include "GlobalCommandContext.hxx"
 #include "Logger.hxx"
@@ -86,6 +87,7 @@ enum class Stage : u32 {
     Tonemapping,
     CubeRotation,
     DeferredLighting,
+    SSAO,
     Skybox,
     LightClustering,
     DirectionalShadowMap,
@@ -349,11 +351,13 @@ enum class ComputeStamp : u32 {
     RotateLightsEnd,
     LightClusteringBegin,
     LightClusteringEnd,
+    SsaoBegin,
+    SsaoEnd,
     Count
 };
-enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Count };
+enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Ssao, Count };
 inline constexpr auto compute_stages =
-        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering};
+        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering, ComputeIndex::Ssao};
 
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
@@ -405,28 +409,34 @@ struct BinaryWait {
     VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
 };
 
+struct BinarySignal {
+    VkSemaphore semaphore{VK_NULL_HANDLE};
+    VkPipelineStageFlags2 stage{VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
+};
+
 struct SubmitSynchronisation {
-    std::span<const TimelineWait> timeline_waits{};
-    std::span<const BinaryWait> binary_waits{};
-    std::span<const VkSemaphore> binary_signals{};
+    std::span<const BinaryWait> binary_waits = {};
+    std::span<const TimelineWait> timeline_waits = {};
+    std::span<const BinarySignal> binary_signals = {};
 };
 
 inline constexpr auto no_waits = SubmitSynchronisation{{}, {}, {}};
 
 template<typename TL, typename RecordFn>
-auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisation sync = {}) -> u64 {
+auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisation sync,
+                  VkPipelineStageFlags2 timeline_signal_mask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT) -> u64 {
     const u32 index = static_cast<u32>(tl.value % TL::buffered);
     VkCommandBuffer cmd = tl.cmds[index];
 
     const u64 last = tl.slot_last_signal[index];
     if (last != 0) {
         VkSemaphoreWaitInfo wi{
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                .pNext = nullptr,
-                .flags = 0,
+                .sType          = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .pNext          = nullptr,
+                .flags          = 0,
                 .semaphoreCount = 1,
-                .pSemaphores = &tl.timeline,
-                .pValues = &last,
+                .pSemaphores    = &tl.timeline,
+                .pValues        = &last,
         };
         vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
         tl.completed = std::max(tl.completed, last);
@@ -435,9 +445,9 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     vk_check(vkResetCommandBuffer(cmd, 0));
 
     VkCommandBufferBeginInfo bi{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = nullptr,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext            = nullptr,
+            .flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
             .pInheritanceInfo = nullptr,
     };
     vk_check(vkBeginCommandBuffer(cmd, &bi));
@@ -446,78 +456,51 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
 
     const u64 signal_val = tl.value + 1;
 
-    const u32 bwc = static_cast<u32>(sync.binary_waits.size());
-    const u32 twc = static_cast<u32>(sync.timeline_waits.size());
+    constexpr usize MAX_WAITS   = 16;
+    constexpr usize MAX_SIGNALS = 12;
 
-    // Worst-case sizes (timeline waits may be filtered)
-    std::vector<VkSemaphoreSubmitInfo> wait_infos;
-    wait_infos.reserve(bwc + twc);
+    FixedVector<VkSemaphoreSubmitInfo, MAX_WAITS>   wait_infos;
+    FixedVector<VkSemaphoreSubmitInfo, MAX_SIGNALS> signal_infos;
 
-    for (const auto &w: sync.binary_waits) {
-        wait_infos.push_back(VkSemaphoreSubmitInfo{
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .pNext = nullptr,
-                .semaphore = w.semaphore,
-                .value = 0,
-                .stageMask = w.stage,
-                .deviceIndex = 0,
-        });
+    for (const auto &w : sync.binary_waits) {
+        auto info      = create_info<VkSemaphoreSubmitInfo>();
+        info.semaphore = w.semaphore;
+        info.stageMask = w.stage;
+        wait_infos.push_back(info);
     }
 
-    for (const auto &w: sync.timeline_waits) {
-        wait_infos.push_back(VkSemaphoreSubmitInfo{
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .pNext = nullptr,
-                .semaphore = w.semaphore,
-                .value = w.value,
-                .stageMask = w.stage,
-                .deviceIndex = 0,
-        });
+    for (const auto &w : sync.timeline_waits) {
+        auto info      = create_info<VkSemaphoreSubmitInfo>();
+        info.semaphore = w.semaphore;
+        info.value     = w.value;
+        info.stageMask = w.stage;
+        wait_infos.push_back(info);
     }
 
-    std::vector<VkSemaphoreSubmitInfo> signal_infos;
-    signal_infos.reserve(1u + static_cast<u32>(sync.binary_signals.size()));
+    // Always signal the timeline first
+    auto timeline_signal      = create_info<VkSemaphoreSubmitInfo>();
+    timeline_signal.semaphore = tl.timeline;
+    timeline_signal.value     = signal_val;
+    timeline_signal.stageMask = timeline_signal_mask;
+    signal_infos.push_back(timeline_signal);
 
-    // Always signal the timeline
-    signal_infos.push_back(VkSemaphoreSubmitInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .pNext = nullptr,
-            .semaphore = tl.timeline,
-            .value = signal_val,
-            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, // conservative; or tighten if you want
-            .deviceIndex = 0,
-    });
-
-    // Signal any binary semaphores
-    for (VkSemaphore s: sync.binary_signals) {
-        signal_infos.push_back(VkSemaphoreSubmitInfo{
-                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                .pNext = nullptr,
-                .semaphore = s,
-                .value = 0,
-                .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                .deviceIndex = 0,
-        });
+    for (const auto &s : sync.binary_signals) {
+        auto info      = create_info<VkSemaphoreSubmitInfo>();
+        info.semaphore = s.semaphore;
+        info.stageMask = s.stage;
+        signal_infos.push_back(info);
     }
+    
+    auto cmd_info = create_info<VkCommandBufferSubmitInfo>();
+    cmd_info.commandBuffer = cmd;
 
-    VkCommandBufferSubmitInfo cmd_info{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-            .pNext = nullptr,
-            .commandBuffer = cmd,
-            .deviceMask = 0,
-    };
-
-    VkSubmitInfo2 submit{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-            .pNext = nullptr,
-            .flags = 0,
-            .waitSemaphoreInfoCount = static_cast<u32>(wait_infos.size()),
-            .pWaitSemaphoreInfos = wait_infos.empty() ? nullptr : wait_infos.data(),
-            .commandBufferInfoCount = 1,
-            .pCommandBufferInfos = &cmd_info,
-            .signalSemaphoreInfoCount = static_cast<u32>(signal_infos.size()),
-            .pSignalSemaphoreInfos = signal_infos.empty() ? nullptr : signal_infos.data(),
-    };
+    auto submit = create_info<VkSubmitInfo2>();
+    submit.waitSemaphoreInfoCount   = static_cast<u32>(wait_infos.size());
+    submit.pWaitSemaphoreInfos      = wait_infos.empty()   ? nullptr : wait_infos.data();
+    submit.commandBufferInfoCount   = 1;
+    submit.pCommandBufferInfos      = &cmd_info;
+    submit.signalSemaphoreInfoCount = static_cast<u32>(signal_infos.size());
+    submit.pSignalSemaphoreInfos    = signal_infos.empty() ? nullptr : signal_infos.data();
 
     vk_check(vkQueueSubmit2(tl.queue, 1, &submit, VK_NULL_HANDLE));
 
@@ -525,7 +508,6 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     tl.value = signal_val;
     return signal_val;
 }
-
 
 auto throttle(GraphicsTimeline &, VkDevice device) -> void;
 auto throttle(ComputeTimeline &, VkDevice device) -> void;

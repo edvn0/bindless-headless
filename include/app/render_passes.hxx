@@ -24,6 +24,9 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
                       std::span<const DrawRanges> ranges, u32 bounded_frame_index, const SubmitSynchronisation &sync)
         -> u64;
 
+auto run_ssao_pass(AppContext &, VkExtent2D frame_extent, BoundedFrameIndex,
+        const SubmitSynchronisation &sync) -> TimelineValue;
+
 auto run_deferred_lighting_pass(AppContext &, const VkExtent2D frame_extent, u32 light_slot, BoundedFrameIndex,
                                 const SubmitSynchronisation &sync) -> TimelineValue;
 

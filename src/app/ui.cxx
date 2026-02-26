@@ -239,6 +239,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                     row_c("Rotate geometry", ComputeIndex::RotateGeometry);
                     row_c("Rotate lights", ComputeIndex::RotateLights);
                     row_c("Light Clustering", ComputeIndex::LightClustering);
+                    row_c("SSAO", ComputeIndex::Ssao);
 
                     ImGui::EndTable();
                 }

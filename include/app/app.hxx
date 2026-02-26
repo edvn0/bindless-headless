@@ -1,5 +1,6 @@
 #pragma once
 
+#include <span>
 #include <tl/expected.hpp>
 #include "ArgumentParse.hxx"
 
@@ -12,6 +13,7 @@
 #include "GlobalCommandContext.hxx"
 #include "ImGuiRenderer.hxx"
 #include "Mesh.hxx"
+#include "Numeric.hxx"
 #include "Profiler.hxx"
 #include "ResizeableGraph.hxx"
 #include "Swapchain.hxx"
@@ -29,9 +31,12 @@ struct AppGpuState {
     InstanceWithDebug *instance{nullptr};
 
     VkPhysicalDevice physical_device{VK_NULL_HANDLE};
-    u32 graphics_index{0};
-    u32 compute_index{0};
-    u32 transfer_index{0};
+   struct QueueFamilyIndices {
+        u32 graphics{0};
+        u32 compute{0};
+        u32 transfer{0};
+    } queue_family_indices{};
+
 
     VkDevice device{VK_NULL_HANDLE};
     VkQueue graphics_queue{VK_NULL_HANDLE};
@@ -89,6 +94,8 @@ struct AppPipelines {
     PipelineHandle directional_shadow_map_alpha_pipeline{};
 
     PipelineHandle skybox_pipeline{};
+
+    PipelineHandle ssao_pipeline{};
 
     std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
@@ -187,6 +194,7 @@ struct AppResources {
     TextureHandle depth{};
     TextureHandle directional_shadow_map_depth{};
     TextureHandle tonemapped{};
+    TextureHandle ssao_output{};
 
     TextureHandle environment_cubemap{};
     TextureHandle perlin_noise{};

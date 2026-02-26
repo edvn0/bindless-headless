@@ -486,12 +486,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         auto &&[physical, gfx_i, comp_i, xfer_i] = *could_choose;
         gpu.physical_device = physical;
-        gpu.graphics_index = gfx_i;
-        gpu.compute_index = comp_i;
-        gpu.transfer_index = xfer_i;
+        gpu.queue_family_indices = {
+                .graphics = gfx_i,
+                .compute = comp_i,
+                .transfer = xfer_i,
+        };
 
         auto &&[device, gfx_q, comp_q, xfer_q, enabled] =
-                create_device(gpu.physical_device, gpu.graphics_index, gpu.compute_index, gpu.transfer_index);
+                create_device(gpu.physical_device, gpu.queue_family_indices.graphics, gpu.queue_family_indices.compute,
+                              gpu.queue_family_indices.transfer);
 
         gpu.device = device;
         gpu.graphics_queue = gfx_q;
@@ -559,7 +562,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 .physical_device = gpu.physical_device,
                 .device = gpu.device,
                 .surface = gpu.surface,
-                .graphics_family = gpu.graphics_index,
+                .graphics_family = gpu.queue_family_indices.graphics,
                 .extent = VkExtent2D{opts.width, opts.height},
                 .vsync = opts.vsync,
         });
@@ -572,9 +575,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     // --- Command context + allocator + timelines ---
     gpu.allocator = create_allocator(instance.instance, gpu.physical_device, gpu.device, &gpu.enabled_features);
 
-    gpu.tl_compute = create_compute_timeline(gpu.device, gpu.compute_queue, gpu.compute_index);
-    gpu.tl_graphics = create_graphics_timeline(gpu.device, gpu.graphics_queue, gpu.graphics_index);
-    gpu.tl_transfer = create_transfer_timeline(gpu.device, gpu.transfer_queue, gpu.transfer_index);
+    gpu.tl_compute = create_compute_timeline(gpu.device, gpu.compute_queue, gpu.queue_family_indices.compute);
+    gpu.tl_graphics = create_graphics_timeline(gpu.device, gpu.graphics_queue, gpu.queue_family_indices.graphics);
+    gpu.tl_transfer = create_transfer_timeline(gpu.device, gpu.transfer_queue, gpu.queue_family_indices.transfer);
 
     gpu.bindless.init(gpu.device, query_bindless_caps(gpu.physical_device), 8u, 8u, 8u, 8u, 0u);
     gpu.bindless.grow_if_needed(300u, 40u, 32u, 8u);
@@ -588,13 +591,17 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         gpu.ctx = RenderContext{
                 .allocator = gpu.allocator,
                 .bindless_set = &gpu.bindless,
-                .command_ctx = create_global_cmd_context(gpu.device, gpu.graphics_queue, gpu.graphics_index),
+                .command_ctx =
+                        create_global_cmd_context(gpu.device, gpu.graphics_queue, gpu.queue_family_indices.graphics),
                 .pipeline_cache = std::make_unique<PipelineCache>(gpu.device, opts.pipeline_cache_dir),
                 .queues =
                         {
-                                .graphics = {.queue = gpu.graphics_queue, .family_index = gpu.graphics_index},
-                                .compute = {.queue = gpu.compute_queue, .family_index = gpu.compute_index},
-                                .transfer = {.queue = gpu.transfer_queue, .family_index = gpu.transfer_index},
+                                .graphics = {.queue = gpu.graphics_queue,
+                                             .family_index = gpu.queue_family_indices.graphics},
+                                .compute = {.queue = gpu.compute_queue,
+                                            .family_index = gpu.queue_family_indices.compute},
+                                .transfer = {.queue = gpu.transfer_queue,
+                                             .family_index = gpu.queue_family_indices.transfer},
                         },
         };
 
@@ -800,6 +807,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.meshes.emplace_back(std::move(loaded_capsule));
     }
 
+    const auto graphics_family = gpu.queue_family_indices.graphics;
+    const auto compute_family = gpu.queue_family_indices.compute;
+    std::array<const u32, 2> family_indices = {graphics_family, compute_family};
+
     // --- Lights + buffers ---
     {
         res.all_point_lights = std::vector<PointLight>(opts.light_count);
@@ -812,13 +823,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         spawn_lights_in_aabb(mesh_aabb, res.all_point_lights);
 
-        res.point_lights_base =
-                gpu.ctx.buffers.create(Buffer::from_slice<PointLight>(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                                      res.all_point_lights, "base_static_point_lights")
-                                               .value());
+
+        res.point_lights_base = gpu.ctx.buffers.create(
+                Buffer::from_slice<PointLight>(gpu.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, res.all_point_lights,
+                                               "base_static_point_lights", family_indices)
+                        .value());
 
         auto ring = AlignedRingBuffer<PointLight>::create(gpu.ctx, res.light_count, VkBufferUsageFlags{},
-                                                          "point_lights_ring");
+                                                          "point_lights_ring", family_indices);
         res.point_lights_ring = std::move(ring.value());
         res.point_lights_ring.write_all_slots(gpu.ctx, res.all_point_lights);
 
@@ -828,27 +840,29 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         const u32 total_instances = sponza_instances + capsule_instances;
 
         res.transforms_ring =
-                AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, total_instances, {}, "transforms").value();
+                AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, total_instances, {}, "transforms", family_indices)
+                        .value();
         res.transforms_ring.write_all_slots(gpu.ctx, glm::identity<glm::mat4x3>());
 
         res.mesh_instance_ranges = MeshInstanceRanges::create(2, 1);
 
         res.prefix = AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                                    "light_prefix")
+                                                    "light_prefix", family_indices)
                              .value();
 
-        res.culled_light_count =
-                AlignedRingBuffer<u32>::create(gpu.ctx, 1, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "culled_light_count_ring")
-                        .value();
+        res.culled_light_count = AlignedRingBuffer<u32>::create(gpu.ctx, 1, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                                "culled_light_count_ring", family_indices)
+                                         .value();
 
         // Replace flags/prefix with rings (element_count = res.light_count)
-        res.flags =
-                AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "flags_ring")
-                        .value();
+        res.flags = AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                   "flags_ring", family_indices)
+                            .value();
 
-        res.compact_lights = AlignedRingBuffer<PointLight>::create(
-                                     gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT, "compact_lights_ring")
-                                     .value();
+        res.compact_lights =
+                AlignedRingBuffer<PointLight>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                      "compact_lights_ring", family_indices)
+                        .value();
     }
 
     // --- Clustering buffers ---
@@ -857,30 +871,33 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
         res.max_light_indices = res.clustering_config.cluster_count * max_lights_per_cluster;
 
-        res.clusters =
-                AlignedRingBuffer<Cluster>::create(gpu.ctx, res.clustering_config.cluster_count, 0, "clusters_ring")
-                        .value();
+        res.clusters = AlignedRingBuffer<Cluster>::create(gpu.ctx, res.clustering_config.cluster_count, 0,
+                                                          "clusters_ring", family_indices)
+                               .value();
 
-        res.cluster_light_indices =
-                AlignedRingBuffer<u32>::create(gpu.ctx, res.max_light_indices, 0, "cluster_light_indices_ring").value();
+        res.cluster_light_indices = AlignedRingBuffer<u32>::create(gpu.ctx, res.max_light_indices, 0,
+                                                                   "cluster_light_indices_ring", family_indices)
+                                            .value();
 
         ui.clustering_config = res.clustering_config;
     }
 
-    res.frame_ubo_ring = std::move(AlignedRingBuffer<FrameUBO>::create(gpu.ctx, "aligned_frame_ubo_buffer").value());
+    res.frame_ubo_ring =
+            std::move(AlignedRingBuffer<FrameUBO>::create(gpu.ctx, "aligned_frame_ubo_buffer", family_indices).value());
     res.indirect_ring = std::move(AlignedRingBuffer<VkDrawIndexedIndirectCommand>::create(
                                           gpu.ctx, AppResources::max_draws_per_frame,
-                                          VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, "frame_indirect_cmds")
+                                          VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, "frame_indirect_cmds", family_indices)
                                           .value());
-    res.mesh_indirect_ring = std::move(AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT>::create(
-                                               gpu.ctx, AppResources::max_draws_per_frame,
-                                               VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, "frame_indirect_mesh_cmds")
-                                               .value());
-
-    res.draw_material_id_ring =
-            std::move(AlignedRingBuffer<u32>::create(gpu.ctx, AppResources::max_draws_per_frame,
-                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "frame_draw_material_ids")
+    res.mesh_indirect_ring =
+            std::move(AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT>::create(
+                              gpu.ctx, AppResources::max_draws_per_frame, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                              "frame_indirect_mesh_cmds", family_indices)
                               .value());
+
+    res.draw_material_id_ring = std::move(AlignedRingBuffer<u32>::create(gpu.ctx, AppResources::max_draws_per_frame,
+                                                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                                         "frame_draw_material_ids", family_indices)
+                                                  .value());
 
     set_window_callbacks(gpu.window, ui);
     wire_event_dispatch(ui);
@@ -990,6 +1007,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(cubemap_reflection)),
                                             "Failed to compile cubemap shader");
 
+                    std::array<const std::string_view, 1> ssao_compute_names = {"ssao_compute"};
+                    std::array<ReflectionData, ssao_compute_names.size()> ssao_compute_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(ssao_compute_code,
+                                            gpu.compiler->compile_from_file("assets/shaders/ssao_compute.slang",
+                                                                            std::span(ssao_compute_names),
+                                                                            std::span(ssao_compute_reflection)),
+                                            "Failed to compile ssao compute shader");
+
                     auto &&[fp, cp] =
                             create_compute_pipelines(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, {},
                                                      std::span(culling_code), std::span(names));
@@ -1095,6 +1120,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         hot_swap(pipes.skybox_pipeline, std::move(cubemap_pipeline), gpu.ctx, rc.retire_value);
                     }
 
+                    auto ssao = create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
+                                                 ssao_compute_code.at(0), sizeof(SsaoPushConstants),
+                                                 "ssao_compute");
+
                     hot_swap(pipes.gbuffer_pipeline_lighting, std::move(gbuf_light), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.cube_rotation_pipeline, std::move(crp), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.light_rotation_pipeline, std::move(lrp), gpu.ctx, rc.retire_value);
@@ -1113,6 +1142,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     hot_swap(pipes.debug_point_light_pipeline, std::move(debug_pipeline), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.debug_light_clustering, std::move(debug_clustering_pipeline), gpu.ctx,
                              rc.retire_value);
+                             hot_swap(pipes.ssao_pipeline, std::move(ssao), gpu.ctx, rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
     }
@@ -1144,6 +1174,12 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                              create_offscreen_target(gpu.allocator, hm_w, hm_h, VK_FORMAT_R16G16B16A16_SFLOAT, {},
                                                      "debug_culling"),
                              gpu.ctx, rc.retire_value);
+
+                    // SSAO output
+                        hot_swap(res.ssao_output,
+                                create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {},
+                                                        "ssao_output"),
+                                gpu.ctx, rc.retire_value);
 
                     hot_swap(res.depth,
                              create_depth_target(gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT,
@@ -1211,7 +1247,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     AlignedRingBuffer<u32>::recreate(gpu.ctx, rc.retire_value, res.cluster_light_indices,
                                                      res.max_light_indices, "cluster_light_indices_ring");
 
-                                                     const u32 cell_size = 16;
+                    const u32 cell_size = 16;
                     const u32 slices_per_row = 4;
                     const u32 hm_w = res.clustering_config.tiles_x * slices_per_row * cell_size;
                     const u32 hm_h = res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) *
@@ -1279,6 +1315,7 @@ gpu.bindless.need_repopulate = true;
         ui.gpu_frame_graph.add_line("Clustering");
         ui.gpu_frame_graph.add_line("Pre-Depth");
         ui.gpu_frame_graph.add_line("GBuffer");
+        ui.gpu_frame_graph.add_line("SSAO");
         ui.gpu_frame_graph.add_line("Deferred");
         ui.gpu_frame_graph.add_line("Skybox");
         ui.gpu_frame_graph.add_line("Tonemap");
@@ -1443,9 +1480,8 @@ gpu.bindless.need_repopulate = true;
             const std::array cube_rotate_waits{TimelineWait{
                     .value = fs.timeline_values[stage_index(Stage::CubeRotation)],
                     .semaphore = gpu.tl_compute.timeline,
-                    .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                    .stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
             }};
-
             fs.timeline_values[stage_index(Stage::Predepth)] =
                     run_predepth_pass(app_context, render_scene_extent, res.mesh_instance_ranges, all_mesh_ranges,
                                       bounded_frame_index, SubmitSynchronisation{.timeline_waits = cube_rotate_waits});
@@ -1455,9 +1491,8 @@ gpu.bindless.need_repopulate = true;
             const std::array directional_shadow_map_waits{TimelineWait{
                     .value = fs.timeline_values[stage_index(Stage::CubeRotation)],
                     .semaphore = gpu.tl_compute.timeline,
-                    .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                    .stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
             }};
-
             fs.timeline_values[stage_index(Stage::DirectionalShadowMap)] = run_directional_shadow_map_pass(
                     app_context, res.mesh_instance_ranges, all_mesh_ranges, bounded_frame_index,
                     SubmitSynchronisation{.timeline_waits = directional_shadow_map_waits});
@@ -1483,7 +1518,7 @@ gpu.bindless.need_repopulate = true;
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::DirectionalShadowMap)],
                             .semaphore = gpu.tl_graphics.timeline,
-                            .stage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     },
             };
             fs.timeline_values[stage_index(Stage::GBuffer)] =
@@ -1492,16 +1527,34 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
+            const std::array ssao_waits{
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::GBuffer)],
+                            .semaphore = gpu.tl_graphics.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    },
+            };
+            fs.timeline_values[stage_index(Stage::SSAO)] =
+                    run_ssao_pass(app_context, render_scene_extent, bounded_frame_index,
+                                  SubmitSynchronisation{.timeline_waits = ssao_waits});
+        }
+
+        {
             const std::array deferred_waits{
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::GBuffer)],
                             .semaphore = gpu.tl_graphics.timeline,
-                            .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                    },
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::SSAO)],
+                            .semaphore = gpu.tl_compute.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     },
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::LightClustering)],
                             .semaphore = gpu.tl_compute.timeline,
-                            .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     },
             };
             fs.timeline_values[stage_index(Stage::DeferredLighting)] =
@@ -1525,7 +1578,7 @@ gpu.bindless.need_repopulate = true;
         {
             const std::array tonemap_waits{
                     TimelineWait{
-                            .value = fs.timeline_values[stage_index(Stage::DeferredLighting)],
+                            .value = fs.timeline_values[stage_index(Stage::Skybox)],
                             .semaphore = gpu.tl_graphics.timeline,
                             .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     },
@@ -1536,25 +1589,29 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
-            const std::array present_timeline_waits = {
-                    TimelineWait{
-                            .value = fs.timeline_values[stage_index(Stage::Tonemapping)],
-                            .semaphore = gpu.tl_graphics.timeline,
-                    },
-            };
+            const std::array present_timeline_waits{TimelineWait{
+                    .value = fs.timeline_values[stage_index(Stage::Tonemapping)],
+                    .semaphore = gpu.tl_graphics.timeline,
+                    .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            }};
+
             const std::array present_binary_waits{BinaryWait{
                     .semaphore = frame_sync.image_available,
-                    .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             }};
-            const std::array present_binary_signals{frame_sync.render_finished};
+
+            const std::array present_binary_signals{BinarySignal{
+                    .semaphore = frame_sync.render_finished,
+                    .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            }};
+
             fs.frame_done_value = run_swapchain_pass(app_context, swap_image_index, bounded_frame_index,
                                                      SubmitSynchronisation{
-                                                             .timeline_waits = present_timeline_waits,
                                                              .binary_waits = present_binary_waits,
+                                                             .timeline_waits = present_timeline_waits,
                                                              .binary_signals = present_binary_signals,
                                                      });
         }
-
 
         const auto completed = std::min(gpu.tl_compute.completed, gpu.tl_graphics.completed);
         gpu.ctx.destroy_queue.retire(completed);
