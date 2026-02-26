@@ -1120,9 +1120,9 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         hot_swap(pipes.skybox_pipeline, std::move(cubemap_pipeline), gpu.ctx, rc.retire_value);
                     }
 
-                    auto ssao = create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
-                                                 ssao_compute_code.at(0), sizeof(SsaoPushConstants),
-                                                 "ssao_compute");
+                    auto ssao =
+                            create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
+                                                    ssao_compute_code.at(0), sizeof(SsaoPushConstants), "ssao_compute");
 
                     hot_swap(pipes.gbuffer_pipeline_lighting, std::move(gbuf_light), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.cube_rotation_pipeline, std::move(crp), gpu.ctx, rc.retire_value);
@@ -1142,61 +1142,60 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     hot_swap(pipes.debug_point_light_pipeline, std::move(debug_pipeline), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.debug_light_clustering, std::move(debug_clustering_pipeline), gpu.ctx,
                              rc.retire_value);
-                             hot_swap(pipes.ssao_pipeline, std::move(ssao), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.ssao_pipeline, std::move(ssao), gpu.ctx, rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
     }
 
     {
-        const auto offscreen_node =
-                gpu.scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e, const ResizeContext &rc) {
-                    hot_swap(res.gbuffer0,
-                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {},
-                                                     "gbuffer0_albedo_ao"),
-                             gpu.ctx, rc.retire_value);
+        const auto offscreen_node = gpu.scene_resize_graph.add_node("offscreen_targets", [&](VkExtent2D e,
+                                                                                             const ResizeContext &rc) {
+            hot_swap(res.gbuffer0,
+                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_UNORM, {},
+                                             "gbuffer0_albedo_ao"),
+                     gpu.ctx, rc.retire_value);
 
-                    hot_swap(res.gbuffer1,
-                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                     {}, "gbuffer1_normal_rough_metal"),
-                             gpu.ctx, rc.retire_value);
+            hot_swap(res.gbuffer1,
+                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                             "gbuffer1_normal_rough_metal"),
+                     gpu.ctx, rc.retire_value);
 
-                    hot_swap(res.gbuffer2,
-                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                     {}, "gbuffer2_emissive"),
-                             gpu.ctx, rc.retire_value);
+            hot_swap(res.gbuffer2,
+                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                             "gbuffer2_emissive"),
+                     gpu.ctx, rc.retire_value);
 
-                    const u32 cell_size = 16;
-                    const u32 slices_per_row = 4;
-                    const u32 hm_w = res.clustering_config.tiles_x * slices_per_row * cell_size;
-                    const u32 hm_h = res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) *
-                                     cell_size;
-                    hot_swap(res.debug_culling,
-                             create_offscreen_target(gpu.allocator, hm_w, hm_h, VK_FORMAT_R16G16B16A16_SFLOAT, {},
-                                                     "debug_culling"),
-                             gpu.ctx, rc.retire_value);
+            const u32 cell_size = 16;
+            const u32 slices_per_row = 4;
+            const u32 hm_w = res.clustering_config.tiles_x * slices_per_row * cell_size;
+            const u32 hm_h =
+                    res.clustering_config.tiles_y * (res.clustering_config.tiles_z / slices_per_row) * cell_size;
+            hot_swap(res.debug_culling,
+                     create_offscreen_target(gpu.allocator, hm_w, hm_h, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                             "debug_culling"),
+                     gpu.ctx, rc.retire_value);
 
-                    // SSAO output
-                        hot_swap(res.ssao_output,
-                                create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {},
-                                                        "ssao_output"),
-                                gpu.ctx, rc.retire_value);
+            // SSAO output
+            hot_swap(res.ssao_output,
+                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {}, "ssao_output"),
+                     gpu.ctx, rc.retire_value);
 
-                    hot_swap(res.depth,
-                             create_depth_target(gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT,
-                                                 VK_SAMPLE_COUNT_1_BIT, true, "depth"),
-                             gpu.ctx, rc.retire_value);
+            hot_swap(res.depth,
+                     create_depth_target(gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
+                                         true, "depth"),
+                     gpu.ctx, rc.retire_value);
 
-                    if (res.directional_shadow_map_depth.empty()) {
-                        res.directional_shadow_map_depth = gpu.ctx.create_texture(create_depth_target(
-                                gpu.allocator, ui.shadow_map_resolution.peek(), ui.shadow_map_resolution.peek(),
-                                VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
-                    }
+            if (res.directional_shadow_map_depth.empty()) {
+                res.directional_shadow_map_depth = gpu.ctx.create_texture(create_depth_target(
+                        gpu.allocator, ui.shadow_map_resolution.peek(), ui.shadow_map_resolution.peek(),
+                        VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, true, "directional_shadow_map"));
+            }
 
-                    hot_swap(res.lit_hdr,
-                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT,
-                                                     {}, "lit_hdr"),
-                             gpu.ctx, rc.retire_value);
-                });
+            hot_swap(res.lit_hdr,
+                     create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                             "lit_hdr"),
+                     gpu.ctx, rc.retire_value);
+        });
 
         const auto tonemapped_node = gpu.scene_resize_graph.add_node(
                 "tonemapped_image", [&](VkExtent2D e, const ResizeContext &resize_context) {
@@ -1440,6 +1439,18 @@ gpu.bindless.need_repopulate = true;
                     .pValues = &fs.frame_done_value,
             };
             vk_check(vkWaitSemaphores(gpu.device, &wi, UINT64_MAX));
+
+            if (auto r = read_timestamp_pairs_ms(gpu.ctx, pipes.compute_query_pool[bounded_frame_index]))
+                ui.last_compute_res.update(std::move(*r));
+
+            if (auto r = read_timestamp_pairs_ms(gpu.ctx, pipes.graphics_query_pool[bounded_frame_index]))
+                ui.last_graphics_res.update(std::move(*r));
+
+            if (auto r = read_graphics_stats(gpu.ctx, pipes.graphics_stats_pool[bounded_frame_index]))
+                ui.last_g_stats.update(std::move(*r));
+
+            if (auto r = read_compute_stats(gpu.ctx, pipes.compute_stats_pool[bounded_frame_index]))
+                ui.last_c_stats.update(std::move(*r));
 
             auto &&[a, b, c, d] = gpu.ctx.query_pools.get_multiple(
                     pipes.compute_query_pool[bounded_frame_index], pipes.graphics_query_pool[bounded_frame_index],

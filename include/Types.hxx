@@ -389,6 +389,26 @@ struct NanoProfiler {
     ~NanoProfiler();
 };
 
+template<typename T>
+struct LatestBuffer {
+    std::vector<T> data;
+
+    void update(std::vector<T> incoming) {
+        if (incoming.size() > data.size()) {
+            data = std::move(incoming);
+        } else {
+            std::copy(incoming.begin(), incoming.end(), data.begin());
+        }
+    }
+
+    [[nodiscard]] auto has_value() const -> bool { return !data.empty(); }
+    [[nodiscard]] auto size() const -> usize { return data.size(); }
+
+    auto operator[](usize i) const -> const T & { return data[i]; }
+    auto begin() const { return data.begin(); }
+    auto end() const { return data.end(); }
+};
+
 constexpr auto matches(const auto &needle, const auto &&...haystack) { return ((needle == haystack) || ...); }
 
 constexpr std::string_view error_to_string(Error::Type type) {

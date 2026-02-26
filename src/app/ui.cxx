@@ -30,7 +30,7 @@ static constexpr auto widget = [](const std::string_view name, auto &&func) {
     ImGui::End();
 };
 
-auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
+auto draw_ui(AppContext &ctx, AppState &output) -> void {
     // ---- Dockspace root ----
     ImGuiViewport *main_vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(main_vp->WorkPos);
@@ -104,22 +104,21 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
     ImGui::End();
 
 
-    // ---- Queries / stats collection ----
-    auto compute_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.compute_query_pool[frame_index]);
-    auto c_stats = read_compute_stats(ctx.gpu.ctx, ctx.pipes.compute_stats_pool[frame_index]);
-    auto graphics_res = read_timestamp_pairs_ms(ctx.gpu.ctx, ctx.pipes.graphics_query_pool[frame_index]);
-    auto g_stats = read_graphics_stats(ctx.gpu.ctx, ctx.pipes.graphics_stats_pool[frame_index]);
+    const auto &compute_res = ctx.ui.last_compute_res;
+    const auto &c_stats = ctx.ui.last_c_stats;
+    const auto &graphics_res = ctx.ui.last_graphics_res;
+    const auto &g_stats = ctx.ui.last_g_stats;
 
     auto index = 0;
     if (compute_res.has_value()) {
-        const auto &c_times = *compute_res;
+        const auto &c_times = compute_res;
         for (size_t i = 0; i < compute_stages.size(); ++i) {
             ctx.ui.gpu_frame_graph.push_sample(static_cast<int>(index++), c_times[static_cast<u32>(compute_stages[i])]);
         }
     }
 
     if (graphics_res.has_value()) {
-        const auto &g_times = *graphics_res;
+        const auto &g_times =graphics_res;
         for (size_t i = 0; i < graphics_stages.size(); ++i) {
             ctx.ui.gpu_frame_graph.push_sample(static_cast<int>(index++),
                                                g_times[static_cast<u32>(graphics_stages[i])]);
@@ -209,7 +208,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                     ImGui::TableSetupColumn("Time (ms)");
                     ImGui::TableHeadersRow();
 
-                    const auto &t = *compute_res;
+                    const auto &t = compute_res;
 
                     auto row_c = [&](const char *name, ComputeIndex idx) {
                         u32 i = static_cast<u32>(idx);
@@ -224,7 +223,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                         ImGui::TableNextColumn();
                         ImGui::Text("%.4f", t[i]);
 
-                        if (c_stats.has_value() && i < c_stats->size()) {
+                        if (c_stats.has_value() && i < c_stats.size()) {
                             ImGui::TableNextRow();
                             ImGui::TableNextColumn();
                             ImGui::Indent();
@@ -232,7 +231,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                             ImGui::Unindent();
 
                             ImGui::TableNextColumn();
-                            ImGui::Text("%lu", (*c_stats)[i].compute_shader_invocations);
+                            ImGui::Text("%lu", (c_stats)[i].compute_shader_invocations);
                         }
                     };
 
@@ -257,7 +256,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                     ImGui::TableSetupColumn("Time (ms)");
                     ImGui::TableHeadersRow();
 
-                    const auto &t = *graphics_res;
+                    const auto &t = graphics_res;
 
                     auto row_g = [&](const char *name, GraphicsIndex idx) {
                         u32 i = static_cast<u32>(idx);
@@ -287,7 +286,7 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
                     ImGui::Separator();
                     ImGui::Text("Geometry Totals");
 
-                    const auto &gb = (*g_stats)[static_cast<u32>(GraphicsIndex::GBuffer)];
+                    const auto &gb = (g_stats)[static_cast<u32>(GraphicsIndex::GBuffer)];
 
                     ImGui::BulletText("Vertices: %lu", gb.input_assembly_vertices);
                     ImGui::BulletText("Primitives: %lu", gb.input_assembly_primitives);
@@ -297,8 +296,8 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
         }
 
         if (compute_res.has_value() && graphics_res.has_value()) {
-            const auto &c_times = *compute_res;
-            const auto &g_times = *graphics_res;
+            const auto &c_times = compute_res;
+            const auto &g_times = graphics_res;
 
             double total_ms = 0.0;
             for (double m: c_times)
@@ -411,50 +410,50 @@ auto draw_ui(AppContext &ctx, u32 frame_index, AppState &output) -> void {
     });
 
     widget("Cluster Configuration", [&] {
-    auto& latch = ctx.ui.clustering_config;
-    
-    // The "pending" state exists only within the UI
-    static ClusterConfig pending = latch.peek();
-    static bool is_dirty = false;
+        auto &latch = ctx.ui.clustering_config;
 
-    if (ImGui::CollapsingHeader("Grid Dimensions", ImGuiTreeNodeFlags_DefaultOpen)) {
-        is_dirty |= ImGui::DragScalar("Tiles X", ImGuiDataType_U32, &pending.tiles_x, 1.0f, nullptr, nullptr, "%u");
-        is_dirty |= ImGui::DragScalar("Tiles Y", ImGuiDataType_U32, &pending.tiles_y, 1.0f, nullptr, nullptr, "%u");
-        is_dirty |= ImGui::DragScalar("Tiles Z", ImGuiDataType_U32, &pending.tiles_z, 1.0f, nullptr, nullptr, "%u");
-    }
+        // The "pending" state exists only within the UI
+        static ClusterConfig pending = latch.peek();
+        static bool is_dirty = false;
 
-    if (ImGui::CollapsingHeader("Frustum Settings")) {
-        is_dirty |= ImGui::SliderFloat("Z Near", &pending.z_near, 0.1f, 10.0f);
-        is_dirty |= ImGui::SliderFloat("Z Far", &pending.z_far, 10.0f, 10000.0f);
-    }
-
-    ImGui::Separator();
-
-    // Feedback on what the Apply button will actually do
-    const u32 total_clusters = pending.tiles_x * pending.tiles_y * pending.tiles_z;
-    ImGui::Text("Pending Clusters: %u", total_clusters);
-
-    if (is_dirty) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.2f, 1.0f));
-        if (ImGui::Button("Apply Changes")) {
-            latch = pending; // Push to the latch
-            ctx.gpu.scene_resize_graph.trigger_resize(ResizeTrigger::Clustering);
-            is_dirty = false;
+        if (ImGui::CollapsingHeader("Grid Dimensions", ImGuiTreeNodeFlags_DefaultOpen)) {
+            is_dirty |= ImGui::DragScalar("Tiles X", ImGuiDataType_U32, &pending.tiles_x, 1.0f, nullptr, nullptr, "%u");
+            is_dirty |= ImGui::DragScalar("Tiles Y", ImGuiDataType_U32, &pending.tiles_y, 1.0f, nullptr, nullptr, "%u");
+            is_dirty |= ImGui::DragScalar("Tiles Z", ImGuiDataType_U32, &pending.tiles_z, 1.0f, nullptr, nullptr, "%u");
         }
-        ImGui::PopStyleColor();
-        
-        ImGui::SameLine();
-        
-        if (ImGui::Button("Clear")) {
-            pending = latch.peek(); // Reset to current engine state
-            is_dirty = false;
+
+        if (ImGui::CollapsingHeader("Frustum Settings")) {
+            is_dirty |= ImGui::SliderFloat("Z Near", &pending.z_near, 0.1f, 10.0f);
+            is_dirty |= ImGui::SliderFloat("Z Far", &pending.z_far, 10.0f, 10000.0f);
         }
-    } else {
-        ImGui::BeginDisabled();
-        ImGui::Button("Up to date");
-        ImGui::EndDisabled();
-    }
-});
+
+        ImGui::Separator();
+
+        // Feedback on what the Apply button will actually do
+        const u32 total_clusters = pending.tiles_x * pending.tiles_y * pending.tiles_z;
+        ImGui::Text("Pending Clusters: %u", total_clusters);
+
+        if (is_dirty) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.2f, 1.0f));
+            if (ImGui::Button("Apply Changes")) {
+                latch = pending; // Push to the latch
+                ctx.gpu.scene_resize_graph.trigger_resize(ResizeTrigger::Clustering);
+                is_dirty = false;
+            }
+            ImGui::PopStyleColor();
+
+            ImGui::SameLine();
+
+            if (ImGui::Button("Clear")) {
+                pending = latch.peek(); // Reset to current engine state
+                is_dirty = false;
+            }
+        } else {
+            ImGui::BeginDisabled();
+            ImGui::Button("Up to date");
+            ImGui::EndDisabled();
+        }
+    });
 }
 
 auto run_ui_frame(AppContext &ctx) -> UiFrameResult {
@@ -476,8 +475,7 @@ auto run_ui_frame(AppContext &ctx) -> UiFrameResult {
     if (warmup_frames > 0) [[unlikely]] {
         --warmup_frames;
     } else {
-        u32 index = static_cast<u32>(ctx.ui.frame_index % frames_in_flight);
-        draw_ui(ctx, index, ctx.ui.app_state);
+        draw_ui(ctx,  ctx.ui.app_state);
     }
     ctx.ui.gui->end_frame();
 

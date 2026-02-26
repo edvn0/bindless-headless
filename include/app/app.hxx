@@ -275,6 +275,11 @@ struct AppUI {
 
     UIValueLatch<u32> shadow_map_resolution{2048};
 
+    LatestBuffer<double>           last_compute_res;
+LatestBuffer<double>           last_graphics_res;
+LatestBuffer<GraphicsGpuStats> last_g_stats;
+LatestBuffer<ComputeGpuStats>  last_c_stats;
+
     enum class ClusterDebugMode : u32 {
         None = 0,
         ClusterGrid = 1,
