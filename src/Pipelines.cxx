@@ -77,7 +77,7 @@ auto create_compute_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
 }
 
 auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
-                              const std::vector<uint32_t> &vert_code, VkFormat depth_format,
+                              const std::vector<u32> &vert_code, VkFormat depth_format,
                               VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     auto shader_ci = create_info<VkShaderModuleCreateInfo>();
@@ -180,7 +180,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
 
     auto ci = create_info<VkGraphicsPipelineCreateInfo>();
     ci.pNext = &rendering_info;
-    ci.stageCount = static_cast<uint32_t>(stages.size());
+    ci.stageCount = static_cast<u32>(stages.size());
     ci.pStages = stages.data();
     ci.pVertexInputState = &vertex_input;
     ci.pInputAssemblyState = &assembly_state;
@@ -206,7 +206,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
 }
 
 auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
-                              const std::vector<uint32_t> &vert_code, const std::vector<uint32_t> &frag_code,
+                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                               VkFormat depth_format, VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     auto shader_ci = create_info<VkShaderModuleCreateInfo>();
@@ -322,7 +322,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
 
     auto ci = create_info<VkGraphicsPipelineCreateInfo>();
     ci.pNext = &rendering_info;
-    ci.stageCount = static_cast<uint32_t>(stages.size());
+    ci.stageCount = static_cast<u32>(stages.size());
     ci.pStages = stages.data();
     ci.pVertexInputState = &vertex_input;
     ci.pInputAssemblyState = &assembly_state;
@@ -352,8 +352,8 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
 
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
                                             VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<uint32_t> &vert_code,
-                                            const std::vector<uint32_t> &frag_code, VkFormat depth_format,
+                                            const std::vector<u32> &vert_code,
+                                            const std::vector<u32> &frag_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     auto shader_ci = create_info<VkShaderModuleCreateInfo>();
@@ -470,7 +470,7 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
 
     auto ci = create_info<VkGraphicsPipelineCreateInfo>();
     ci.pNext = &rendering_info;
-    ci.stageCount = static_cast<uint32_t>(stages.size());
+    ci.stageCount = static_cast<u32>(stages.size());
     ci.pStages = stages.data();
     ci.pVertexInputState = &vertex_input;
     ci.pInputAssemblyState = &assembly_state;
@@ -496,7 +496,7 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
 }
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
                                             VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<uint32_t> &vert_code, VkFormat depth_format,
+                                            const std::vector<u32> &vert_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     auto shader_ci = create_info<VkShaderModuleCreateInfo>();
@@ -605,7 +605,7 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
 
     auto ci = create_info<VkGraphicsPipelineCreateInfo>();
     ci.pNext = &rendering_info;
-    ci.stageCount = static_cast<uint32_t>(stages.size());
+    ci.stageCount = static_cast<u32>(stages.size());
     ci.pStages = stages.data();
     ci.pVertexInputState = &vertex_input;
     ci.pInputAssemblyState = &assembly_state;

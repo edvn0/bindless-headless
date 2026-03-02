@@ -64,7 +64,7 @@ namespace {
             png_write_info(png_ptr, info_ptr);
 
             std::vector<png_bytep> rows(img.height);
-            for (uint32_t y = 0; y < img.height; ++y)
+            for (u32 y = 0; y < img.height; ++y)
                 rows[y] = const_cast<png_bytep>(img.pixels.data() + std::size_t(y) * img.stride_bytes);
 
             png_write_image(png_ptr, rows.data());

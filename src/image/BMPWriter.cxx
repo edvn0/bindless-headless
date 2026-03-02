@@ -12,25 +12,25 @@ namespace {
         const u32 pixel_bytes = row_size * height;
         const u32 file_size = 14 + 40 + pixel_bytes;
 
-        const std::uint16_t bf_type = 0x4D42;
-        const std::uint32_t bf_off_bits = 14 + 40;
+        const u32 bf_type = 0x4D42;
+        const u32 bf_off_bits = 14 + 40;
 
         output.write(reinterpret_cast<char const *>(&bf_type), 2);
         output.write(reinterpret_cast<char const *>(&file_size), 4);
 
-        std::uint32_t reserved = 0;
+        u32 reserved = 0;
         output.write(reinterpret_cast<char const *>(&reserved), 4);
         output.write(reinterpret_cast<char const *>(&bf_off_bits), 4);
 
-        std::uint32_t bi_size = 40;
-        std::int32_t bi_width = static_cast<std::int32_t>(width);
-        std::int32_t bi_height = static_cast<std::int32_t>(height); // positive => bottom-up
-        std::uint16_t bi_planes = 1;
-        std::uint16_t bi_bit_count = 24;
-        std::uint32_t bi_compression = 0;
-        std::uint32_t bi_size_image = pixel_bytes;
-        std::int32_t ppm = 0;
-        std::uint32_t clr = 0;
+        u32 bi_size = 40;
+        i32 bi_width = static_cast<i32>(width);
+        i32 bi_height = static_cast<i32>(height); // positive => bottom-up
+        u32 bi_planes = 1;
+        u32 bi_bit_count = 24;
+        u32 bi_compression = 0;
+        u32 bi_size_image = pixel_bytes;
+        i32 ppm = 0;
+        u32 clr = 0;
 
         output.write(reinterpret_cast<char const *>(&bi_size), 4);
         output.write(reinterpret_cast<char const *>(&bi_width), 4);
@@ -61,7 +61,7 @@ namespace {
 
             std::vector<u8> row(dst_stride);
 
-            for (std::int32_t y = static_cast<std::int32_t>(img.height) - 1; y >= 0; --y) {
+            for (i32 y = static_cast<i32>(img.height) - 1; y >= 0; --y) {
                 u8 const *s = img.pixels.data() + std::size_t(y) * img.stride_bytes;
                 u8 *d = row.data();
 

@@ -224,12 +224,12 @@ namespace {
         return load_with_stb(texture_path, type, texture_class);
     }
 
-    auto unpack_normal(uint32_t packed) -> glm::vec3 {
+    auto unpack_normal(u32 packed) -> glm::vec3 {
         const glm::vec4 n4 = glm::unpackSnorm3x10_1x2(packed);
         return glm::vec3{n4.x, n4.y, n4.z};
     }
 
-    auto pack_dir(glm::vec3 v) -> uint32_t { return glm::packSnorm3x10_1x2(glm::vec4{v, 0.0f}); }
+    auto pack_dir(glm::vec3 v) -> u32 { return glm::packSnorm3x10_1x2(glm::vec4{v, 0.0f}); }
 
     auto safe_normalize(glm::vec3 v, float eps = 1e-20f) -> glm::vec3 {
         const float len2 = glm::dot(v, v);

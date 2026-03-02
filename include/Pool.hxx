@@ -52,9 +52,9 @@ public:
 
     [[nodiscard]] auto valid() const -> bool { return generation != 0u; }
 
-    [[nodiscard]] auto index() const -> std::uint32_t { return index_; }
+    [[nodiscard]] auto index() const -> u32 { return index_; }
 
-    [[nodiscard]] auto gen() const -> std::uint32_t { return generation; }
+    [[nodiscard]] auto gen() const -> u32 { return generation; }
 
     [[nodiscard]] auto index_as_void() const -> void * {
         return std::bit_cast<void *>(static_cast<std::uintptr_t>(index_));
@@ -78,10 +78,10 @@ private:
     template<typename ObjectType_, typename ImplObjectType>
     friend class Pool;
 
-    Handle(std::uint32_t index, std::uint32_t gen) noexcept : index_(index), generation(gen) {}
+    Handle(u32 index, u32 gen) noexcept : index_(index), generation(gen) {}
 
-    std::uint32_t index_ = 0u;
-    std::uint32_t generation = 0u;
+    u32 index_ = 0u;
+    u32 generation = 0u;
 };
 static_assert(std::is_trivially_copyable_v<Handle<class DebugFoo>>);
 static_assert(sizeof(Handle<class DebugFoo>) == sizeof(u64));
@@ -131,7 +131,7 @@ public:
 
 template<typename ObjectType, typename ImplObjectType>
 class Pool {
-    static constexpr std::uint32_t list_end = 0xffffffffu;
+    static constexpr u32 list_end = 0xffffffffu;
 
     struct PoolEntry {
         PoolEntry() = default;
@@ -139,21 +139,21 @@ class Pool {
         explicit PoolEntry(ImplObjectType &&obj) noexcept : object(std::move(obj)) {}
 
         ImplObjectType object{};
-        std::uint32_t generation = 1u;
-        std::uint32_t next_free = list_end;
+        u32 generation = 1u;
+        u32 next_free = list_end;
         bool live{false};
     };
 
 public:
     [[nodiscard]] auto create(ImplObjectType &&obj) -> Handle<ObjectType> {
-        std::uint32_t idx{};
+        u32 idx{};
         if (free_list_head != list_end) {
             idx = free_list_head;
             free_list_head = entries[idx].next_free;
             entries[idx].object = std::move(obj);
             entries[idx].live = true;
         } else {
-            idx = static_cast<std::uint32_t>(entries.size());
+            idx = static_cast<u32>(entries.size());
             auto &object = entries.emplace_back(std::move(obj));
             object.live = true;
         }
@@ -211,13 +211,13 @@ public:
         return &entries[index].object;
     }
 
-    [[nodiscard]] auto maybe_get_handle(std::uint32_t index) const -> Handle<ObjectType> {
+    [[nodiscard]] auto maybe_get_handle(u32 index) const -> Handle<ObjectType> {
         if (index >= entries.size()) {
             return Handle<ObjectType>{};
         }
         return Handle<ObjectType>(index, entries[index].generation);
     }
-    [[nodiscard]] auto get_handle(std::uint32_t index) const -> Handle<ObjectType> {
+    [[nodiscard]] auto get_handle(u32 index) const -> Handle<ObjectType> {
         ASSERT(index < entries.size(), "Trying to get handle with out-of-range index");
         return maybe_get_handle(index);
     }
@@ -238,16 +238,16 @@ public:
         object_count = 0u;
     }
 
-    [[nodiscard]] auto num_objects() const -> std::uint32_t { return object_count; }
+    [[nodiscard]] auto num_objects() const -> u32 { return object_count; }
 
     [[nodiscard]] auto data() const -> std::span<const PoolEntry> { return std::span<const PoolEntry>{entries}; }
 
 private:
     std::vector<PoolEntry> entries{};
-    std::uint32_t free_list_head = list_end;
-    std::uint32_t object_count = 0u;
+    u32 free_list_head = list_end;
+    u32 object_count = 0u;
 
-    [[nodiscard]] auto is_free(std::uint32_t index) const -> bool {
+    [[nodiscard]] auto is_free(u32 index) const -> bool {
         auto cur = free_list_head;
         while (cur != list_end) {
             if (cur == index) {

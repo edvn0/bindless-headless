@@ -842,7 +842,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers, gpu.ctx.comparison_samplers);
 
-    // --- Load meshes ---
     {
         TRY_PROPAGATE(loaded_mesh, load_scene(gpu.ctx, "assets/meshes/SponzaGLTF/sponza_converted.scene.bz2", 0.01f),
                       "Failed to load cube mesh");
@@ -857,7 +856,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     const auto compute_family = gpu.queue_family_indices.compute;
     std::array<const u32, 2> family_indices = {graphics_family, compute_family};
 
-    // --- Lights + buffers ---
     {
         res.all_point_lights = std::vector<PointLight>(opts.light_count);
         res.all_point_lights_zero = std::vector<PointLight>(opts.light_count);
@@ -900,7 +898,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                 "culled_light_count_ring", family_indices)
                                          .value();
 
-        // Replace flags/prefix with rings (element_count = res.light_count)
         res.flags = AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                    "flags_ring", family_indices)
                             .value();
@@ -911,7 +908,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                         .value();
     }
 
-    // --- Clustering buffers ---
     {
         res.clustering_config = cluster_config(16, 9, 24, z_near, z_far);
 
@@ -1167,10 +1163,11 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     }
 
                     auto ssao =
-                            create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, ssao_compute_code.at(0),
-                                            sizeof(SSAOPushConstants), "ssao_compute");
-                    auto ssao_blur = create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, ssao_compute_code.at(1),
-                                            sizeof(SSAOBlurPushConstants), "ssao_blur");
+                            create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
+                                                    ssao_compute_code.at(0), sizeof(SSAOPushConstants), "ssao_compute");
+                    auto ssao_blur = create_compute_pipeline(gpu.device, gpu.ctx.pipeline_cache.get(),
+                                                             gpu.bindless.layout, ssao_compute_code.at(1),
+                                                             sizeof(SSAOBlurPushConstants), "ssao_blur");
 
                     hot_swap(pipes.gbuffer_pipeline_lighting, std::move(gbuf_light), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.cube_rotation_pipeline, std::move(crp), gpu.ctx, rc.retire_value);
@@ -1228,14 +1225,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             hot_swap(res.ssao_output,
                      create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {}, "ssao_output"),
                      gpu.ctx, rc.retire_value);
-                // SSAO blur
+            // SSAO blur
             hot_swap(res.ssao_blurred,
                      create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {}, "ssao_blurred"),
                      gpu.ctx, rc.retire_value);
-                    hot_swap(res.ssao_blurred_temp,
-                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {},
-                                                     "ssao_blur_temp"),
-                             gpu.ctx, rc.retire_value);
+            hot_swap(
+                    res.ssao_blurred_temp,
+                    create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R8_UNORM, {}, "ssao_blur_temp"),
+                    gpu.ctx, rc.retire_value);
 
             hot_swap(res.depth,
                      create_depth_target(gpu.allocator, e.width, e.height, VK_FORMAT_D32_SFLOAT, VK_SAMPLE_COUNT_1_BIT,
@@ -1536,6 +1533,8 @@ gpu.bindless.need_repopulate = true;
         const auto swap_image_index = acquired->image_index;
         const auto frame_sync = acquired->sync;
 
+        RP::setup_render_passes_for_frame(app_context, bounded_frame_index);
+
         // Precompute device addresses used in push constants
         const auto point_lights_base_addr = gpu.ctx.device_address(res.point_lights_base);
 
@@ -1608,17 +1607,17 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
-    const std::array ssao_blur_waits{
-            TimelineWait{
-                    .value     = fs.timeline_values[stage_index(Stage::SSAO)],
-                    .semaphore = gpu.tl_compute.timeline,
-                    .stage     = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            },
-    };
-    fs.timeline_values[stage_index(Stage::SSAOBlur)] =
-            run_ssao_blur_pass(app_context, render_scene_extent, bounded_frame_index,
-                               SubmitSynchronisation{.timeline_waits = ssao_blur_waits});
-}
+            const std::array ssao_blur_waits{
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::SSAO)],
+                            .semaphore = gpu.tl_compute.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    },
+            };
+            fs.timeline_values[stage_index(Stage::SSAOBlur)] =
+                    run_ssao_blur_pass(app_context, render_scene_extent, bounded_frame_index,
+                                       SubmitSynchronisation{.timeline_waits = ssao_blur_waits});
+        }
 
         {
             const std::array deferred_waits{

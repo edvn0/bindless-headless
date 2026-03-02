@@ -26,6 +26,93 @@ namespace {
     }
 } // namespace
 
+namespace RP {
+    namespace {
+
+        FrameMarkers g_frame{};
+
+        inline auto resolve(RenderContext &rc, QueryPoolHandle ts_h, QueryPoolHandle stats_h) -> Markers {
+            auto &&[ts, stats] = rc.query_pools.get_multiple(ts_h, stats_h);
+            return Markers{.ts = ts, .stats = stats};
+        }
+
+    } // namespace
+
+    auto setup_render_passes_for_frame(AppContext &ctx, BoundedFrameIndex frame_index) -> void {
+        g_frame.compute = resolve(ctx.gpu.ctx, ctx.pipes.compute_stats_pool[frame_index],
+                                  ctx.pipes.compute_query_pool[frame_index]);
+        g_frame.graphics = resolve(ctx.gpu.ctx, ctx.pipes.graphics_stats_pool[frame_index],
+                                   ctx.pipes.graphics_query_pool[frame_index]);
+    }
+
+    auto get_frame_markers() -> FrameMarkers const & { return g_frame; }
+
+    auto graphics_specification(GraphicsIndex idx) -> Specification {
+        switch (idx) {
+            case GraphicsIndex::PreDepth:
+                return {u32(GraphicsStamp::PreDepthBegin), u32(GraphicsStamp::PreDepthEnd), u32(idx)};
+            case GraphicsIndex::GBuffer:
+                return {u32(GraphicsStamp::GbufferBegin), u32(GraphicsStamp::GbufferEnd), u32(idx)};
+            case GraphicsIndex::Deferred:
+                return {u32(GraphicsStamp::DeferredBegin), u32(GraphicsStamp::DeferredEnd), u32(idx)};
+            case GraphicsIndex::Skybox:
+                return {u32(GraphicsStamp::SkyboxBegin), u32(GraphicsStamp::SkyboxEnd), u32(idx)};
+            case GraphicsIndex::Tonemap:
+                return {u32(GraphicsStamp::TonemapBegin), u32(GraphicsStamp::TonemapEnd), u32(idx)};
+            case GraphicsIndex::Present:
+                return {u32(GraphicsStamp::PresentBegin), u32(GraphicsStamp::PresentEnd), u32(idx)};
+            case GraphicsIndex::ShadowMap:
+                return {u32(GraphicsStamp::DirectionalShadowMapBegin), u32(GraphicsStamp::DirectionalShadowMapEnd),
+                        u32(idx)};
+            default:
+                break;
+        }
+        return {};
+    }
+
+    auto compute_specification(ComputeIndex idx) -> Specification {
+        switch (idx) {
+            case ComputeIndex::RotateGeometry:
+                return {u32(ComputeStamp::RotateGeometryBegin), u32(ComputeStamp::RotateGeometryEnd), u32(idx)};
+            case ComputeIndex::RotateLights:
+                return {u32(ComputeStamp::RotateLightsBegin), u32(ComputeStamp::RotateLightsEnd), u32(idx)};
+            case ComputeIndex::LightClustering:
+                return {u32(ComputeStamp::LightClusteringBegin), u32(ComputeStamp::LightClusteringEnd), u32(idx)};
+            case ComputeIndex::Ssao:
+                return {u32(ComputeStamp::SsaoBegin), u32(ComputeStamp::SsaoEnd), u32(idx)};
+            case ComputeIndex::SsaoBlur:
+                return {u32(ComputeStamp::SsaoBlurBegin), u32(ComputeStamp::SsaoBlurEnd), u32(idx)};
+            default:
+                break;
+        }
+        return {};
+    }
+
+    Scope::Scope(VkCommandBuffer cmd, Markers m, Specification s, VkPipelineStageFlags2 ts_begin,
+                 VkPipelineStageFlags2 ts_end) : cmd_{cmd}, m_{m}, s_{s}, ts_begin_{ts_begin}, ts_end_{ts_end} {
+
+        if (m_.ts)
+            vkCmdWriteTimestamp2(cmd_, ts_begin_, m_.ts->pool, s_.timestamp_begin);
+        if (m_.stats)
+            vkCmdBeginQuery(cmd_, m_.stats->pool, s_.stats_index, 0);
+    }
+
+    Scope::Scope(Scope &&o) noexcept :
+        cmd_{o.cmd_}, m_{o.m_}, s_{o.s_}, ts_begin_{o.ts_begin_}, ts_end_{o.ts_end_}, active_{o.active_} {
+        o.active_ = false;
+    }
+
+    Scope::~Scope() {
+        if (!active_)
+            return;
+        if (m_.stats)
+            vkCmdEndQuery(cmd_, m_.stats->pool, s_.stats_index);
+        if (m_.ts)
+            vkCmdWriteTimestamp2(cmd_, ts_end_, m_.ts->pool, s_.timestamp_end);
+    }
+
+} // namespace RP
+
 auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32 last_frame_index,
                        const DeviceAddress &point_lights_base_addr, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui] = ctx;
@@ -49,8 +136,7 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
                 auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
                         pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
 
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::RotateGeometryBegin);
-                begin_stats(cmd, *stats_pool, ComputeIndex::RotateGeometry);
+                auto _ = RP::begin_compute(cmd, ComputeIndex::RotateGeometry);
 
                 auto *pipe = gpu.ctx.pipeline_pool.get(pipes.cube_rotation_pipeline);
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
@@ -58,9 +144,6 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
 
                 const u32 groups = (res.instance_count() + 63u) / 64u;
                 vkCmdDispatch(cmd, groups, 1, 1);
-
-                end_stats(cmd, *stats_pool, ComputeIndex::RotateGeometry);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::RotateGeometryEnd);
 
                 auto *cube_buffer = gpu.ctx.buffers.get(res.transforms_ring.handle());
                 VkBufferMemoryBarrier2 barrier{};
@@ -106,8 +189,7 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
                 auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
                         pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
 
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::RotateLightsBegin);
-                begin_stats(cmd, *stats_pool, ComputeIndex::RotateLights);
+                auto _ = RP::begin_compute(cmd, ComputeIndex::RotateLights);
 
                 auto *pipe = gpu.ctx.pipeline_pool.get(pipes.light_rotation_pipeline);
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
@@ -116,9 +198,6 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
                 const u32 groups = (static_cast<u32>(res.all_point_lights.size()) + 63u) / 64u;
                 vkCmdDispatch(cmd, groups, 1, 1);
 
-
-                end_stats(cmd, *stats_pool, ComputeIndex::RotateLights);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::RotateLightsEnd);
 
                 VkBufferMemoryBarrier2 barrier{};
                 barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -272,8 +351,6 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
                 auto *lit = gpu.ctx.textures.get(res.lit_hdr);
                 auto *depth = gpu.ctx.textures.get(res.depth);
 
-                // lit_hdr was written by deferred lighting; we need it as a colour attachment again.
-                // depth was written by predepth/gbuffer; we need it as read-only for the skybox depth test.
                 const std::array<VkImageMemoryBarrier2, 2> barriers{{
                         VkImageMemoryBarrier2{
                                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -316,7 +393,7 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
                 lit_att.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                 lit_att.imageView = lit->attachment_view;
                 lit_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-                lit_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD; // preserve deferred lighting output
+                lit_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
                 lit_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
                 VkRenderingAttachmentInfo depth_att{};
@@ -324,7 +401,7 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
                 depth_att.imageView = depth->attachment_view;
                 depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_NONE; // depth is read-only here
+                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
 
                 VkRenderingInfo ri{};
                 ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -343,7 +420,7 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
                 auto &&[vp, sc] = viewport_scissors(frame_extent);
                 vkCmdSetViewport(cmd, 0, 1, &vp);
                 vkCmdSetScissor(cmd, 0, 1, &sc);
-                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL); // reverse-Z: skybox at depth 0.0
+                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
@@ -889,9 +966,9 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::SsaoBlurBegin);
                 begin_stats(cmd, *stats_pool, ComputeIndex::SsaoBlur);
 
-                auto *ssao_in   = gpu.ctx.textures.get(res.ssao_output);
-                auto *blur_tmp  = gpu.ctx.textures.get(res.ssao_blurred_temp);
-                auto *ssao_out  = gpu.ctx.textures.get(res.ssao_blurred);
+                auto *ssao_in = gpu.ctx.textures.get(res.ssao_output);
+                auto *blur_tmp = gpu.ctx.textures.get(res.ssao_blurred_temp);
+                auto *ssao_out = gpu.ctx.textures.get(res.ssao_blurred);
                 auto *depth_tex = gpu.ctx.textures.get(res.depth);
 
                 blur_tmp->transition_if_not_initialised(
@@ -903,111 +980,111 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
 
                 const std::array acquire_barriers{
                         VkImageMemoryBarrier2{
-                                .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                                .pNext               = nullptr,
-                                .srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                .srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT,
-                                .dstStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                .dstAccessMask       = VK_ACCESS_2_SHADER_READ_BIT,
-                                .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
-                                .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .pNext = nullptr,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .image               = ssao_in->image,
-                                .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                                .image = ssao_in->image,
+                                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                         },
                         VkImageMemoryBarrier2{
-                                .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                                .pNext               = nullptr,
-                                .srcStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                .srcAccessMask       = VK_ACCESS_2_NONE,
-                                .dstStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                .dstAccessMask       = VK_ACCESS_2_SHADER_READ_BIT,
-                                .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
-                                .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .pNext = nullptr,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_NONE,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                .image               = depth_tex->image,
-                                .subresourceRange    = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+                                .image = depth_tex->image,
+                                .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
                         },
                 };
 
                 VkDependencyInfo dep_acquire{};
-                dep_acquire.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_acquire.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                 dep_acquire.imageMemoryBarrierCount = static_cast<u32>(acquire_barriers.size());
-                dep_acquire.pImageMemoryBarriers    = acquire_barriers.data();
+                dep_acquire.pImageMemoryBarriers = acquire_barriers.data();
                 vkCmdPipelineBarrier2(cmd, &dep_acquire);
 
                 auto *pipe = gpu.ctx.pipeline_pool.get(pipes.ssao_blur_pipeline);
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->pipeline);
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->layout, 0, 1,
-                                        &gpu.bindless.set, 0, nullptr);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->layout, 0, 1, &gpu.bindless.set, 0,
+                                        nullptr);
 
-                const auto group_x = (frame_extent.width  + 7u) / 8u;
+                const auto group_x = (frame_extent.width + 7u) / 8u;
                 const auto group_y = (frame_extent.height + 7u) / 8u;
 
                 // --- Horizontal pass: ssao_output -> ssao_blurred_temp ---
                 const SSAOBlurPushConstants pc_h{
-                        .ssao_input_index  = res.ssao_output.index(),
+                        .ssao_input_index = res.ssao_output.index(),
                         .ssao_output_index = res.ssao_blurred_temp.index(),
-                        .depth_index       = res.depth.index(),
-                        .sampler_index     = pipes.linear_clamp.index(),
-                        .horizontal        = 1,
+                        .depth_index = res.depth.index(),
+                        .sampler_index = pipes.linear_clamp.index(),
+                        .horizontal = 1,
                 };
                 vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc_h), &pc_h);
                 vkCmdDispatch(cmd, group_x, group_y, 1);
 
                 // Barrier: tmp written by horizontal, read by vertical
                 const VkImageMemoryBarrier2 mid_barrier{
-                        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                        .pNext               = nullptr,
-                        .srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT,
-                        .dstStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .dstAccessMask       = VK_ACCESS_2_SHADER_READ_BIT,
-                        .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
-                        .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .pNext = nullptr,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image               = blur_tmp->image,
-                        .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                        .image = blur_tmp->image,
+                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                 };
                 VkDependencyInfo dep_mid{};
-                dep_mid.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_mid.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                 dep_mid.imageMemoryBarrierCount = 1;
-                dep_mid.pImageMemoryBarriers    = &mid_barrier;
+                dep_mid.pImageMemoryBarriers = &mid_barrier;
                 vkCmdPipelineBarrier2(cmd, &dep_mid);
 
                 // --- Vertical pass: ssao_blurred_temp -> ssao_blurred ---
                 const SSAOBlurPushConstants pc_v{
-                        .ssao_input_index  = res.ssao_blurred_temp.index(),
+                        .ssao_input_index = res.ssao_blurred_temp.index(),
                         .ssao_output_index = res.ssao_blurred.index(),
-                        .depth_index       = res.depth.index(),
-                        .sampler_index     = pipes.linear_clamp.index(),
-                        .horizontal        = 0,
+                        .depth_index = res.depth.index(),
+                        .sampler_index = pipes.linear_clamp.index(),
+                        .horizontal = 0,
                 };
                 vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc_v), &pc_v);
                 vkCmdDispatch(cmd, group_x, group_y, 1);
 
                 // Release ssao_blurred to graphics queue for deferred lighting
                 const VkImageMemoryBarrier2 release_barrier{
-                        .sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                        .pNext               = nullptr,
-                        .srcStageMask        = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .srcAccessMask       = VK_ACCESS_2_SHADER_WRITE_BIT,
-                        .dstStageMask        = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        .dstAccessMask       = VK_ACCESS_2_NONE,
-                        .oldLayout           = VK_IMAGE_LAYOUT_GENERAL,
-                        .newLayout           = VK_IMAGE_LAYOUT_GENERAL,
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .pNext = nullptr,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                        .dstAccessMask = VK_ACCESS_2_NONE,
+                        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
                         .srcQueueFamilyIndex = gpu.queue_family_indices.compute,
                         .dstQueueFamilyIndex = gpu.queue_family_indices.graphics,
-                        .image               = ssao_out->image,
-                        .subresourceRange    = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                        .image = ssao_out->image,
+                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
                 };
                 VkDependencyInfo dep_release{};
-                dep_release.sType                   = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_release.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                 dep_release.imageMemoryBarrierCount = 1;
-                dep_release.pImageMemoryBarriers    = &release_barrier;
+                dep_release.pImageMemoryBarriers = &release_barrier;
                 vkCmdPipelineBarrier2(cmd, &dep_release);
 
                 end_stats(cmd, *stats_pool, ComputeIndex::SsaoBlur);

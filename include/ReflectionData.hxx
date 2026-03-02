@@ -35,7 +35,7 @@ struct ReflectionData {
         std::string name;
         std::string semantic;
         std::string type_name;
-        uint32_t location = ~0u;
+        u32 location = ~0u;
         bool is_builtin = false;
     };
 

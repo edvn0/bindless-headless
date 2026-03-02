@@ -28,7 +28,7 @@ namespace {
             auto object_info = std::string{};
             if (callback_data->objectCount > 0) {
                 object_info += "Objects involved:\n";
-                for (uint32_t i = 0; i < callback_data->objectCount; ++i) {
+                for (u32 i = 0; i < callback_data->objectCount; ++i) {
                     const auto &obj = callback_data->pObjects[i];
                     if (obj.pObjectName) {
                         object_info += std::format("    Name: {}\n", obj.pObjectName);
@@ -71,8 +71,10 @@ auto main(int argc, char **argv) -> int {
         Tooling::SceneLoader loader;
         std::ignore = loader.convert_gltf("assets/meshes/SponzaGLTF/Sponza.gltf",
                                           "assets/meshes/SponzaGLTF/sponza_converted");
+        std::ignore = loader.convert_gltf("assets/meshes/DamagedHelmetGLTF/DamagedHelmet.gltf",
+                                          "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted");
     }
-    uint32_t count{};
+    u32 count{};
     const char **extensions_raw = glfwGetRequiredInstanceExtensions(&count);
     std::vector<std::string_view> extensions(extensions_raw, extensions_raw + count);
 

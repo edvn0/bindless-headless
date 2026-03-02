@@ -11,13 +11,13 @@ auto ResizeGraph::to_graphviz_dot(bool include_topo_rank) const -> std::string {
     out << "  edge [fontname=\"Consolas\", fontsize=9];\n\n";
 
     // Optional: compute topo order to display rank / detect cycles.
-    std::unordered_map<NodeId, std::uint32_t> topo_rank{};
+    std::unordered_map<NodeId, u32> topo_rank{};
     if (include_topo_rank) {
         // topo_sort_stable() aborts on cycle in your code; if you want DOT even on cycles,
         // replace this with a non-aborting variant and mark unknown ranks.
         auto topo = topo_sort_stable();
         topo_rank.reserve(topo.size());
-        for (std::uint32_t i = 0; i < topo.size(); ++i) {
+        for (u32 i = 0; i < topo.size(); ++i) {
             topo_rank[topo[i]] = i;
         }
     }

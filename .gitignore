@@ -21,6 +21,8 @@ venv
 
 # Ignore everything in the cubemaps folder
 assets/editor/cubemaps/**
-
 assets/meshes
+!assets/**/*.scene.bz2
+!assets/**/*.scene
+
 scripts

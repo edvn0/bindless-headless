@@ -31,7 +31,7 @@ struct AppGpuState {
     InstanceWithDebug *instance{nullptr};
 
     VkPhysicalDevice physical_device{VK_NULL_HANDLE};
-   struct QueueFamilyIndices {
+    struct QueueFamilyIndices {
         u32 graphics{0};
         u32 compute{0};
         u32 transfer{0};
@@ -281,10 +281,10 @@ struct AppUI {
 
     UIValueLatch<u32> shadow_map_resolution{2048};
 
-    LatestBuffer<double>           last_compute_res;
-LatestBuffer<double>           last_graphics_res;
-LatestBuffer<GraphicsGpuStats> last_g_stats;
-LatestBuffer<ComputeGpuStats>  last_c_stats;
+    LatestBuffer<double> last_compute_res;
+    LatestBuffer<double> last_graphics_res;
+    LatestBuffer<GraphicsGpuStats> last_g_stats;
+    LatestBuffer<ComputeGpuStats> last_c_stats;
 
     enum class ClusterDebugMode : u32 {
         None = 0,
@@ -302,7 +302,7 @@ LatestBuffer<ComputeGpuStats>  last_c_stats;
     ClusterDebugMode debug_mode{ClusterDebugMode::None};
 
     // graphs
-    PerformanceGraph<total_queries, 256> gpu_frame_graph{};
+    PerformanceGraph<total_queries, 120> gpu_frame_graph{};
     bool graphs_initialized{false};
 };
 

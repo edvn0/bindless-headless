@@ -236,20 +236,20 @@ auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *
                                                 VkShaderModule, std::string_view frag_entry, VkFormat color_format)
         -> CompiledPipeline;
 
-auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<uint32_t> &, VkFormat,
+auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &, VkFormat,
                               VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT) -> CompiledPipeline;
-auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<uint32_t> &,
-                              const std::vector<uint32_t> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)
+auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &,
+                              const std::vector<u32> &, VkFormat, VkSampleCountFlagBits = VK_SAMPLE_COUNT_1_BIT)
         -> CompiledPipeline;
 
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
                                             VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<uint32_t> &vert_code,
-                                            const std::vector<uint32_t> &frag_code, VkFormat depth_format,
+                                            const std::vector<u32> &vert_code,
+                                            const std::vector<u32> &frag_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline;
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
                                             VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<uint32_t> &vert_code, VkFormat depth_format,
+                                            const std::vector<u32> &vert_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline;
 
 auto create_tonemap_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &,

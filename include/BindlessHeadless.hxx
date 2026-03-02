@@ -193,11 +193,11 @@ auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
                                VkFormat format, std::span<const u8> data, std::span<const u32> mip_offsets,
                                std::span<const u32> mip_sizes, std::string_view name) -> OffscreenTarget;
-auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
-                               std::uint32_t height, VkFormat format, std::span<const std::uint8_t> data,
+auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width,
+                               u32 height, VkFormat format, std::span<const std::uint8_t> data,
                                std::string_view name) -> OffscreenTarget;
-auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, std::uint32_t width,
-                               std::uint32_t height, VkFormat format, std::span<const std::byte> data,
+auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width,
+                               u32 height, VkFormat format, std::span<const std::byte> data,
                                std::string_view name) -> OffscreenTarget;
 auto load_cubemap_ktx(VmaAllocator, GlobalCommandContext &, VkDevice, VkPhysicalDevice, VkQueue transfer_queue,
                       const std::filesystem::path &, std::string_view) -> tl::expected<OffscreenTarget, Error>;
