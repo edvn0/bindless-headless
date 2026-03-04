@@ -33,8 +33,8 @@ namespace {
                     if (obj.pObjectName) {
                         object_info += std::format("    Name: {}\n", obj.pObjectName);
                     }
-                    object_info += std::format("  - Object {}: Type={}, Handle=0x{:X}\n", i, static_cast<i32>(obj.objectType),
-                                               obj.objectHandle);
+                    object_info += std::format("  - Object {}: Type={}, Handle=0x{:X}\n", i,
+                                               static_cast<i32>(obj.objectType), obj.objectHandle);
                 }
             }
 
@@ -68,15 +68,24 @@ auto main(int argc, char **argv) -> int {
     auto opts = std::move(maybe_opts.value());
 
     {
-        Tooling::SceneLoader loader;
-        std::ignore = loader.convert_gltf("assets/meshes/SponzaGLTF/Sponza.gltf",
-                                          "assets/meshes/SponzaGLTF/sponza_converted");
-        std::ignore = loader.convert_gltf("assets/meshes/DamagedHelmetGLTF/DamagedHelmet.gltf",
-                                          "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted");
+        Tooling::SceneLoader loader{"assets/meshes"};
+
+        auto f0 = std::async(std::launch::async, [&loader] {
+            return loader.convert_gltf("SponzaGLTF/Sponza.gltf",
+                                       "SponzaGLTF/sponza_converted");
+        });
+
+        auto f1 = std::async(std::launch::async, [&loader] {
+            return loader.convert_gltf("DamagedHelmetGLTF/DamagedHelmet.gltf",
+                                       "DamagedHelmetGLTF/damaged_helmet_converted");
+        });
+
+        std::ignore = f0.get();
+        std::ignore = f1.get();
     }
-    u32 count{};
-    const char **extensions_raw = glfwGetRequiredInstanceExtensions(&count);
-    std::vector<std::string_view> extensions(extensions_raw, extensions_raw + count);
+    u32 extension_count{};
+    const char **extensions_raw = glfwGetRequiredInstanceExtensions(&extension_count);
+    std::vector<std::string_view> extensions(extensions_raw, extensions_raw + extension_count);
 
     bool enable_validation =
             opts.validation_layers.value_or(!static_cast<bool>(IS_RELEASE)); // NOLINT(modernize-use-bool-literals)

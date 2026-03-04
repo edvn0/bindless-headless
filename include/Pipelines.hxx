@@ -24,27 +24,6 @@ struct PointLightCullingPushConstants {
     const u32 light_count;
 };
 
-/**
-struct PushConstants
-{
-    DeviceReadPtr<UBO>        frame_ubo;
-    DeviceReadPtr<PointLight> lights;       // full unculled array
-    DeviceWritePtr<VkDrawMeshTasksIndirectCommandEXT> indirect_command;
-    uint                      light_count;  // full unculled count (plain uint, no pointer)
-
-
-    float z_near;
-    float z_far;
-    float log_z_scale;
-
-    uint tiles_x;
-    uint tiles_y;
-    uint tiles_z;
-    uint cluster_count;
-
-    Cluster* clusters;
-    uint*    cluster_light_indices;
-}; */
 struct ClusteredLightCullingPushConstants {
     const DeviceAddress frame_ubo;
     const DeviceAddress all_lights;
@@ -85,22 +64,10 @@ struct TonemapPushConstants {
     float exposure;
     const u32 image_index;
     const u32 sampler_index;
+    const u32   bloom_index;
+    float bloom_strength;
 };
 
-/**
-struct RotateCubesPushConstant {
-    uint cube_count;
-    float delta_time;
-    float rads_per_second;
-    float total_time;
-    uint light_count;
-    Transform* transforms;
-    Transform* previous_frame_transforms;
-    PointLight* previous_point_lights;
-    PointLight* point_lights;
-    PointLight* static_point_lights;
-    };
-    */
 struct RotatePushConstant {
     f32 delta_time;
     f32 rads_per_second;
@@ -121,6 +88,7 @@ struct DeferredLightingPushConstants {
     const glm::mat4 shadow_matrix;
     float log_z_scale;
     f32 near_plane{z_near};
+    f32 far_plane {z_far};
 
     u32 tiles_x;
     u32 tiles_y;
@@ -180,8 +148,8 @@ struct SkyboxPushConstants {
 
 struct SSAOPushConstants {
     const DeviceAddress frame_ubo;
-    const DeviceAddress hemisphere_kernel; // 32 elements, xyz used, w ignored
-    const DeviceAddress noise_kernel;      // 16 elements, xy used, zw ignored
+    const DeviceAddress hemisphere_kernel;
+    const DeviceAddress noise_kernel;
     u32 gbuffer0_index;
     u32 gbuffer1_index;
     u32 depth_index;
@@ -196,7 +164,30 @@ struct SSAOBlurPushConstants {
     u32 ssao_output_index;
     u32 depth_index;
     u32 sampler_index;
-    u32 horizontal; // 1 for horizontal pass, 0 for vertical
+    u32 horizontal;
+};
+
+struct BloomThresholdPushConstants {
+    u32 src_index;       // lit_hdr bindless index
+    u32 dst_index;       // bloom_threshold bindless UAV index
+    u32 sampler_index;
+    float threshold;     // luminance knee, ~1.0 for physical
+    float knee;          // soft knee width
+};
+
+struct BloomDownsamplePushConstants {
+    u32 src_index;
+    u32 dst_index;
+    u32 sampler_index;
+    glm::vec2 src_texel_size;  // 1.0 / src_extent, avoids dynamic indexing in shader
+};
+
+struct BloomUpsamplePushConstants {
+    u32 src_index;          // current level
+    u32 accumulate_index;   // level below (being written into)
+    u32 sampler_index;
+    float filter_radius;    // tent radius in UV space, ~0.005
+    float strength;         // blend weight on upsample accumulation
 };
 
 struct CompiledPipeline {
@@ -225,7 +216,6 @@ auto create_compute_pipelines(VkDevice device, PipelineCache *cache, VkDescripto
     return out;
 }
 
-// Pipelines.hxx additions (signatures)
 auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                              VkFormat gbuffer0_format, VkFormat gbuffer1_format, VkFormat gbuffer2_format,
@@ -277,7 +267,7 @@ namespace Pipeline {
     };
 
     struct ColorAttachmentInfo {
-        VkFormat format;
+        VkFormat format {VK_FORMAT_UNDEFINED};
         bool blend_additive = false; // false = no blend, true = additive (light volumes)
     };
 
@@ -300,29 +290,22 @@ namespace Pipeline {
 
         std::span<const ShaderStageInfo> stages;
 
-        // Push constants
         u32 push_constant_size = 0;
         VkShaderStageFlags push_constant_stages = VK_SHADER_STAGE_ALL_GRAPHICS;
 
-        // Attachments
         std::span<const ColorAttachmentInfo> color_attachments; // empty = depth-only
         VkFormat depth_format = VK_FORMAT_UNDEFINED;
 
-        // State
         DepthMode depth_mode = DepthMode::none;
         CullMode cull_mode = CullMode::none;
         bool depth_bias = false;
 
-        // Vertex input (empty = fullscreen / mesh shader)
         std::optional<VertexInputInfo> vertex_input;
 
-        // Multisampling
         VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
 
-        // Extra dynamic states beyond viewport/scissor
         std::span<const VkDynamicState> extra_dynamic_states;
     };
-
     auto create_graphics_pipeline(const Graphics &info) -> CompiledPipeline;
 
     struct Fullscreen {

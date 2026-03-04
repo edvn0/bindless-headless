@@ -5,6 +5,7 @@
 #include <vector>
 
 
+#include "Allocator.hxx"
 #include "Buffer.hxx"
 #include "Constants.hxx"
 #include "Forward.hxx"
@@ -115,7 +116,7 @@ auto merge_aabbs(std::span<const AABB> aabbs) -> AABB;
 auto compute_instance_aabb(AABB const &local_aabb, glm::mat4 const &transform) -> AABB;
 struct MeshAABBData {
     AABB mesh_aabb;
-    std::vector<AABB> submesh_aabbs;
+    Vec<AABB> submesh_aabbs;
     Buffer device_buffer;
 };
 auto create_mesh_aabb_data(VmaAllocator &allocator, MeshData const &mesh, std::string const &name)

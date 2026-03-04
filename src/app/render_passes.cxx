@@ -10,14 +10,14 @@ namespace {
     constexpr auto begin_query_for_index = [](const RenderContext &c, const VkCommandBuffer cmd,
                                               const GraphicsIndex index,
                                               const QueryPoolHandle stats_pool) -> VkQueryPool {
-        u32 query_idx = static_cast<u32>(index);
+        const auto query_idx = static_cast<u32>(index);
         const auto *qs = c.query_pools.get(stats_pool);
         vkCmdBeginQuery(cmd, qs->pool, query_idx, 0);
         return qs->pool;
     };
     constexpr auto end_query_for_index = [](const VkCommandBuffer cmd, const GraphicsIndex index,
                                             const VkQueryPool pool) -> void {
-        u32 query_idx = static_cast<u32>(index);
+        const auto query_idx = static_cast<u32>(index);
         vkCmdEndQuery(cmd, pool, query_idx);
     };
     template<typename... Vs>
@@ -39,10 +39,10 @@ namespace RP {
     } // namespace
 
     auto setup_render_passes_for_frame(AppContext &ctx, BoundedFrameIndex frame_index) -> void {
-        g_frame.compute = resolve(ctx.gpu.ctx, ctx.pipes.compute_stats_pool[frame_index],
-                                  ctx.pipes.compute_query_pool[frame_index]);
-        g_frame.graphics = resolve(ctx.gpu.ctx, ctx.pipes.graphics_stats_pool[frame_index],
-                                   ctx.pipes.graphics_query_pool[frame_index]);
+        g_frame.compute = resolve(ctx.gpu.ctx, ctx.pipes.compute_query_pool[frame_index],
+                                  ctx.pipes.compute_stats_pool[frame_index]);
+        g_frame.graphics = resolve(ctx.gpu.ctx, ctx.pipes.graphics_query_pool[frame_index],
+                                   ctx.pipes.graphics_stats_pool[frame_index]);
     }
 
     auto get_frame_markers() -> FrameMarkers const & { return g_frame; }
@@ -50,20 +50,47 @@ namespace RP {
     auto graphics_specification(GraphicsIndex idx) -> Specification {
         switch (idx) {
             case GraphicsIndex::PreDepth:
-                return {u32(GraphicsStamp::PreDepthBegin), u32(GraphicsStamp::PreDepthEnd), u32(idx)};
+                return {
+                        static_cast<u32>(GraphicsStamp::PreDepthBegin),
+                        static_cast<u32>(GraphicsStamp::PreDepthEnd),
+                        static_cast<u32>(idx),
+                };
             case GraphicsIndex::GBuffer:
-                return {u32(GraphicsStamp::GbufferBegin), u32(GraphicsStamp::GbufferEnd), u32(idx)};
+                return {
+                        static_cast<u32>(GraphicsStamp::GbufferBegin),
+                        static_cast<u32>(GraphicsStamp::GbufferEnd),
+                        static_cast<u32>(idx),
+                };
             case GraphicsIndex::Deferred:
-                return {u32(GraphicsStamp::DeferredBegin), u32(GraphicsStamp::DeferredEnd), u32(idx)};
+                return {
+                        static_cast<u32>(GraphicsStamp::DeferredBegin),
+                        static_cast<u32>(GraphicsStamp::DeferredEnd),
+                        static_cast<u32>(idx),
+                };
             case GraphicsIndex::Skybox:
-                return {u32(GraphicsStamp::SkyboxBegin), u32(GraphicsStamp::SkyboxEnd), u32(idx)};
+                return {
+                        static_cast<u32>(GraphicsStamp::SkyboxBegin),
+                        static_cast<u32>(GraphicsStamp::SkyboxEnd),
+                        static_cast<u32>(idx),
+                };
             case GraphicsIndex::Tonemap:
-                return {u32(GraphicsStamp::TonemapBegin), u32(GraphicsStamp::TonemapEnd), u32(idx)};
+                return {
+                        static_cast<u32>(GraphicsStamp::TonemapBegin),
+                        static_cast<u32>(GraphicsStamp::TonemapEnd),
+                        static_cast<u32>(idx),
+                };
             case GraphicsIndex::Present:
-                return {u32(GraphicsStamp::PresentBegin), u32(GraphicsStamp::PresentEnd), u32(idx)};
+                return {
+                        static_cast<u32>(GraphicsStamp::PresentBegin),
+                        static_cast<u32>(GraphicsStamp::PresentEnd),
+                        static_cast<u32>(idx),
+                };
             case GraphicsIndex::ShadowMap:
-                return {u32(GraphicsStamp::DirectionalShadowMapBegin), u32(GraphicsStamp::DirectionalShadowMapEnd),
-                        u32(idx)};
+                return {
+                        static_cast<u32>(GraphicsStamp::DirectionalShadowMapBegin),
+                        static_cast<u32>(GraphicsStamp::DirectionalShadowMapEnd),
+                        static_cast<u32>(idx),
+                };
             default:
                 break;
         }
@@ -82,6 +109,8 @@ namespace RP {
                 return {u32(ComputeStamp::SsaoBegin), u32(ComputeStamp::SsaoEnd), u32(idx)};
             case ComputeIndex::SsaoBlur:
                 return {u32(ComputeStamp::SsaoBlurBegin), u32(ComputeStamp::SsaoBlurEnd), u32(idx)};
+            case ComputeIndex::Bloom:
+                return {u32(ComputeStamp::BloomBegin), u32(ComputeStamp::BloomEnd), u32(idx)};
             default:
                 break;
         }
@@ -115,7 +144,7 @@ namespace RP {
 
 auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32 last_frame_index,
                        const DeviceAddress &point_lights_base_addr, const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     const RotatePushConstant geo_pc{
             .delta_time = static_cast<float>(ui.dt),
@@ -133,9 +162,6 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
                 TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "RotateGeometryGPU");
-                auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
-                        pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
-
                 auto _ = RP::begin_compute(cmd, ComputeIndex::RotateGeometry);
 
                 auto *pipe = gpu.ctx.pipeline_pool.get(pipes.cube_rotation_pipeline);
@@ -186,9 +212,6 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
                 TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "RotateLightsGPU");
-                auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
-                        pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
-
                 auto _ = RP::begin_compute(cmd, ComputeIndex::RotateLights);
 
                 auto *pipe = gpu.ctx.pipeline_pool.get(pipes.light_rotation_pipeline);
@@ -222,7 +245,8 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
 auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                        std::span<const MeshInstanceRange> mesh_instance_ranges, std::span<const DrawRanges> ranges,
                        const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
+
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -281,7 +305,7 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
 
                     vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
                     const std::array<VkBuffer, 1> vert_bufs = {verts->buffer()};
-                    const std::array<VkDeviceSize, 1> vert_offs = {0};
+                    constexpr std::array<VkDeviceSize, 1> vert_offs = {0};
                     const VkDeviceSize vert_size = verts->size();
                     vkCmdBindVertexBuffers2(cmd, 0, 1, vert_bufs.data(), vert_offs.data(), &vert_size, nullptr);
 
@@ -334,7 +358,7 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
 
 auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
                                  const SubmitSynchronisation &sync) -> TimelineValue {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -347,9 +371,9 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::SkyboxBegin);
                 begin_stats(cmd, *stats_pool, GraphicsIndex::Skybox);
 
-                auto *skybox_pipe = gpu.ctx.pipeline_pool.get(pipes.skybox_pipeline);
-                auto *lit = gpu.ctx.textures.get(res.lit_hdr);
-                auto *depth = gpu.ctx.textures.get(res.depth);
+                const auto *skybox_pipe = gpu.ctx.pipeline_pool.get(pipes.skybox_pipeline);
+                const auto *lit = gpu.ctx.textures.get(res.lit_hdr);
+                const auto *depth = gpu.ctx.textures.get(res.depth);
 
                 const std::array<VkImageMemoryBarrier2, 2> barriers{{
                         VkImageMemoryBarrier2{
@@ -425,7 +449,7 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
 
-                SkyboxPushConstants pc{
+                const SkyboxPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
                         .cubemap_index = res.environment_cubemap.index(),
                         .sampler_index = pipes.linear_clamp.index(),
@@ -440,13 +464,31 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
 
                 end_stats(cmd, *stats_pool, GraphicsIndex::Skybox);
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::SkyboxEnd);
+
+                auto release_lit = create_info<VkImageMemoryBarrier2>();
+                release_lit.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                release_lit.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                release_lit.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                release_lit.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                release_lit.dstAccessMask = VK_ACCESS_2_NONE;
+                release_lit.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                release_lit.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                release_lit.srcQueueFamilyIndex = gpu.queue_family_indices.graphics;
+                release_lit.dstQueueFamilyIndex = gpu.queue_family_indices.compute;
+                release_lit.image = lit->image;
+                release_lit.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                auto dep_release_lit = create_info<VkDependencyInfo>();
+                dep_release_lit.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_release_lit.imageMemoryBarrierCount = 1;
+                dep_release_lit.pImageMemoryBarriers = &release_lit;
+                              vkCmdPipelineBarrier2(cmd, &dep_release_lit);
             },
             sync);
 }
 
 auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync)
         -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
 
     return submit_stage(
@@ -518,7 +560,7 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
                 vkCmdPipelineBarrier2(cmd, &dep_info);
 
                 // --------------- DEBUG ------------------
-                auto *heatmap_pipe = gpu.ctx.pipeline_pool.get(pipes.debug_light_clustering);
+                const auto *heatmap_pipe = gpu.ctx.pipeline_pool.get(pipes.debug_light_clustering);
                 const u32 cell_size = 16;
                 const u32 slices_per_row = 4; // arrange Z slices into a 4x4 grid
 
@@ -561,7 +603,7 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
 auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstanceRange> mesh_instance_ranges,
                                      std::span<const DrawRanges> ranges, const u32 bounded_frame_index,
                                      const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -684,7 +726,7 @@ auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstan
 auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const MeshInstanceRange> mesh_instance_ranges,
                       std::span<const DrawRanges> ranges, const u32 bounded_frame_index,
                       const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -716,7 +758,7 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
                         cmd, VK_IMAGE_LAYOUT_GENERAL,
                         {VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT, VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT});
 
-                VkRenderingAttachmentInfo colors[3]{};
+                std::array<VkRenderingAttachmentInfo, 3> colors{};
                 auto init_color = [&](VkRenderingAttachmentInfo &a, VkImageView view) {
                     a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
                     a.imageView = view;
@@ -741,8 +783,8 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
                 ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
                 ri.renderArea = {.offset = {0, 0}, .extent = frame_extent};
                 ri.layerCount = 1;
-                ri.colorAttachmentCount = 3;
-                ri.pColorAttachments = colors;
+                ri.colorAttachmentCount = static_cast<u32>(colors.size());
+                ri.pColorAttachments = colors.data();
                 ri.pDepthAttachment = &depth_att;
 
                 vkCmdBeginRendering(cmd, &ri);
@@ -822,7 +864,7 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
 
 auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
                    const SubmitSynchronisation &sync) -> TimelineValue {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_compute, gpu.device,
@@ -900,8 +942,8 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe->layout, 0, 1, &gpu.bindless.set, 0,
                                         nullptr);
 
-                const auto hemisphere_address = gpu.ctx.buffers.get(res.ssao_hemisphere_kernel)->device_address();
-                const auto noise_address = gpu.ctx.buffers.get(res.noise_ssao_kernel)->device_address();
+                const auto hemisphere_address = gpu.ctx.device_address(res.ssao_hemisphere_kernel);
+                const auto noise_address = gpu.ctx.device_address(res.noise_ssao_kernel);
 
                 const SSAOPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
@@ -953,7 +995,7 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
 
 auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
                         const SubmitSynchronisation &sync) -> TimelineValue {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_compute, gpu.device,
@@ -1095,7 +1137,7 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
 
 auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32,
                                 const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -1299,9 +1341,209 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
             sync);
 }
 
+
+auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent,
+                    const SubmitSynchronisation &sync) -> TimelineValue {
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
+
+    return submit_stage(
+            gpu.tl_compute, gpu.device,
+            [&](VkCommandBuffer cmd) {
+                TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "Bloom");
+                auto _ = RP::begin_compute(cmd, ComputeIndex::Bloom);
+
+                auto *threshold_pipe  = gpu.ctx.pipeline_pool.get(pipes.bloom_threshold_pipeline);
+                auto *downsample_pipe = gpu.ctx.pipeline_pool.get(pipes.bloom_downsample_pipeline);
+                auto *upsample_pipe   = gpu.ctx.pipeline_pool.get(pipes.bloom_upsample_pipeline);
+
+                const u32 mip_count = res.bloom_mip_count;
+
+                auto *lit = gpu.ctx.textures.get(res.lit_hdr);
+                const VkImageMemoryBarrier2 acquire_lit{
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .pNext = nullptr,
+                        .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                        .srcAccessMask = VK_ACCESS_2_NONE,
+                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+                        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                        .srcQueueFamilyIndex = gpu.queue_family_indices.graphics,
+                        .dstQueueFamilyIndex = gpu.queue_family_indices.compute,
+                        .image = lit->image,
+                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                };
+                auto dep_acquire = create_info<VkDependencyInfo>();
+                dep_acquire.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_acquire.imageMemoryBarrierCount = 1;
+                dep_acquire.pImageMemoryBarriers = &acquire_lit;
+                vkCmdPipelineBarrier2(cmd, &dep_acquire);
+
+                auto *thresh_tex = gpu.ctx.textures.get(res.bloom_threshold);
+                thresh_tex->transition_if_not_initialised(
+                        cmd, VK_IMAGE_LAYOUT_GENERAL,
+                        {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, threshold_pipe->pipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, threshold_pipe->layout, 0, 1,
+                                        &gpu.bindless.set, 0, nullptr);
+
+                const BloomThresholdPushConstants threshold_pc{
+                        .src_index    = res.lit_hdr.index(),
+                        .dst_index    = res.bloom_threshold.index(),
+                        .sampler_index = pipes.linear_clamp.index(),
+                        .threshold    = ui.bloom_config.threshold,
+                        .knee         = ui.bloom_config.knee,
+                };
+                vkCmdPushConstants(cmd, threshold_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                                   0, sizeof(threshold_pc), &threshold_pc);
+
+                const u32 thresh_x = (frame_extent.width  + 7u) / 8u;
+                const u32 thresh_y = (frame_extent.height + 7u) / 8u;
+                vkCmdDispatch(cmd, thresh_x, thresh_y, 1);
+
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, downsample_pipe->pipeline);
+
+                u32 src_index = res.bloom_threshold.index();
+                u32 src_w     = frame_extent.width;
+                u32 src_h     = frame_extent.height;
+
+                for (u32 i = 0; i < mip_count; ++i) {
+                    auto *ds_tex = gpu.ctx.textures.get(res.bloom_downsample[i]);
+                    ds_tex->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+
+                    auto ds_barrier = create_info<VkMemoryBarrier2>();
+                    ds_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    ds_barrier.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    ds_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    ds_barrier.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    ds_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                    auto dep_ds = create_info<VkDependencyInfo>();
+                    dep_ds.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep_ds.memoryBarrierCount = 1;
+                    dep_ds.pMemoryBarriers = &ds_barrier;
+                    vkCmdPipelineBarrier2(cmd, &dep_ds);
+
+                    const u32 dst_w = std::max(1u, src_w >> 1);
+                    const u32 dst_h = std::max(1u, src_h >> 1);
+
+                    const BloomDownsamplePushConstants ds_pc{
+                            .src_index      = src_index,
+                            .dst_index      = res.bloom_downsample[i].index(),
+                            .sampler_index  = pipes.linear_clamp.index(),
+                            .src_texel_size = {1.0f / static_cast<float>(src_w),
+                                               1.0f / static_cast<float>(src_h)},
+                    };
+                    vkCmdPushConstants(cmd, downsample_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                                       0, sizeof(ds_pc), &ds_pc);
+
+                    vkCmdDispatch(cmd, (dst_w + 7u) / 8u, (dst_h + 7u) / 8u, 1);
+
+                    src_index = res.bloom_downsample[i].index();
+                    src_w     = dst_w;
+                    src_h     = dst_h;
+                }
+
+                const VkClearColorValue zero_clear{.float32 = {0.0f, 0.0f, 0.0f, 0.0f}};
+                            const VkImageSubresourceRange full_range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+                            for (i32 i = static_cast<i32>(mip_count) - 2; i >= 0; --i) {
+                                auto *us_tex = gpu.ctx.textures.get(res.bloom_upsample[i]);
+                                us_tex->transition_if_not_initialised(
+                                        cmd, VK_IMAGE_LAYOUT_GENERAL,
+                                        {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+                                vkCmdClearColorImage(cmd, us_tex->image, VK_IMAGE_LAYOUT_GENERAL,
+                                                     &zero_clear, 1, &full_range);
+                            }
+
+                            // Barrier: clears visible to shader writes/reads
+                            auto clear_barrier = create_info<VkMemoryBarrier2>();
+                            clear_barrier.sType         = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                            clear_barrier.srcStageMask  = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                            clear_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                            clear_barrier.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                            clear_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                            auto dep_clear = create_info<VkDependencyInfo>();
+                            dep_clear.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                            dep_clear.memoryBarrierCount = 1;
+                            dep_clear.pMemoryBarriers = &clear_barrier;
+                            vkCmdPipelineBarrier2(cmd, &dep_clear);
+
+
+                // ── Upsample chain ───────────────────────────────────────────
+                // Walk back up: ds[N-1] → us[N-2] → ... → us[0]
+                // us[i] has the same extent as ds[i], so use the downsample
+                // extents we can recompute cheaply.
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, upsample_pipe->pipeline);
+
+                // src starts at the smallest downsample level
+                u32 us_src_index = res.bloom_downsample[mip_count - 1].index();
+
+                for (i32 i = static_cast<i32>(mip_count) - 2; i >= 0; --i) {
+                    auto *us_tex = gpu.ctx.textures.get(res.bloom_upsample[i]);
+                    us_tex->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+
+                    auto us_barrier = create_info<VkMemoryBarrier2>();
+                    us_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+                    us_barrier.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    us_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                    us_barrier.dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    us_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                    auto dep_us = create_info<VkDependencyInfo>();
+                    dep_us.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                    dep_us.memoryBarrierCount = 1;
+                    dep_us.pMemoryBarriers = &us_barrier;
+                    vkCmdPipelineBarrier2(cmd, &dep_us);
+
+                    // Extent of upsample[i] matches downsample[i]
+                    const u32 dst_w = std::max(1u, frame_extent.width  >> (i + 1));
+                    const u32 dst_h = std::max(1u, frame_extent.height >> (i + 1));
+
+                    const BloomUpsamplePushConstants us_pc{
+                            .src_index       = us_src_index,
+                            .accumulate_index = res.bloom_upsample[i].index(),
+                            .sampler_index   = pipes.linear_clamp.index(),
+                            .filter_radius   = ui.bloom_config.radius,
+                            .strength        = ui.bloom_config.strength,
+                    };
+                    vkCmdPushConstants(cmd, upsample_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT,
+                                       0, sizeof(us_pc), &us_pc);
+
+                    vkCmdDispatch(cmd, (dst_w + 7u) / 8u, (dst_h + 7u) / 8u, 1);
+
+                    us_src_index = res.bloom_upsample[i].index();
+                }
+
+                auto *us0 = gpu.ctx.textures.get(res.bloom_upsample[0]);
+                auto release_us0 = create_info<VkImageMemoryBarrier2>();
+                release_us0.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                release_us0.pNext = nullptr;
+                release_us0.srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                release_us0.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+                release_us0.dstStageMask  = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                release_us0.dstAccessMask = VK_ACCESS_2_NONE;
+                release_us0.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                release_us0.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                release_us0.srcQueueFamilyIndex = gpu.queue_family_indices.compute;
+                release_us0.dstQueueFamilyIndex = gpu.queue_family_indices.graphics;
+                release_us0.image = us0->image;
+                release_us0.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                auto dep_release = create_info<VkDependencyInfo>();
+                dep_release.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep_release.imageMemoryBarrierCount = 1;
+                dep_release.pImageMemoryBarriers = &release_us0;
+                vkCmdPipelineBarrier2(cmd, &dep_release);
+            },
+            sync);
+}
+
 auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 bounded_frame_index,
                       const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -1373,6 +1615,8 @@ auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 
                         .exposure = 1.0f,
                         .image_index = res.lit_hdr.index(),
                         .sampler_index = pipes.linear_clamp.index(),
+                        .bloom_index    = res.bloom_upsample[0].index(),
+                        .bloom_strength = ui.bloom_config.strength,
                 };
 
                 auto &&[vp, sc] = viewport_scissors(frame_extent);
@@ -1394,7 +1638,7 @@ auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 
 
 auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 bounded_frame_index,
                         const SubmitSynchronisation &sync) -> u64 {
-    auto &&[gpu, pipes, res, ui] = ctx;
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,

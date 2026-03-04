@@ -114,6 +114,10 @@ add_library(BindlessEngine STATIC
   "src/GlobalCommandContext.cxx"
   "src/ThreadPool.cxx"
   "src/ImGuiRenderer.cxx"
+  "src/StringPool.cxx"
+  "src/RenderSubmission.cxx"
+
+  "src/scene/Scene.cxx"
 )
 
 target_precompile_headers(BindlessEngine PRIVATE PCH.hxx)
@@ -136,8 +140,9 @@ target_link_libraries(BindlessEngine PUBLIC
   expected
   tinyobjloader
   imgui
-    BZip2::BZip2
+  BZip2::BZip2
   $<$<BOOL:${HAS_IMAGE_WRITERS}>:ImageOperations>
+  EnTT::EnTT
 )
 
 # Slang runtime deps only when runtime path

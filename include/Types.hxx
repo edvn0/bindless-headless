@@ -16,9 +16,11 @@
 #include <utility>
 #include <volk.h>
 
+#include "Allocator.hxx"
 #include "Error.hxx"
 #include "Logger.hxx"
 #include "Numeric.hxx"
+#include "StringPool.hxx"
 
 using VmaAllocation = struct VmaAllocation_T*;
 
@@ -54,7 +56,7 @@ enum class DeviceAddress : std::uint64_t {
 template<std::size_t N>
 using DeviceAddresses = std::array<const DeviceAddress, N>;
 
-template<typename T>
+template<typename>
 struct TypedDeviceAddress {
     DeviceAddress address;
 
@@ -155,7 +157,7 @@ inline auto is_cubemap_view(VkImageViewType t) -> bool {
 inline auto is_3d_view(VkImageViewType t) -> bool { return t == VK_IMAGE_VIEW_TYPE_3D; }
 
 struct FrameStats {
-    std::vector<double> samples;
+    Vec<double> samples;
 
     std::size_t count = 0;
     double mean = 0.0;
@@ -164,7 +166,7 @@ struct FrameStats {
     double min = std::numeric_limits<double>::infinity();
     double max = -std::numeric_limits<double>::infinity();
 
-    mutable std::vector<double> sorted;
+    mutable Vec<double> sorted;
     mutable bool sorted_dirty = true;
 
     explicit FrameStats(std::size_t capacity = 0) {
@@ -391,9 +393,10 @@ struct NanoProfiler {
 
 template<typename T>
 struct LatestBuffer {
-    std::vector<T> data;
+    Vec<T> data;
 
-    void update(std::vector<T> incoming) {
+    template<typename Alloc>
+    void update(std::vector<T, Alloc> incoming) {
         if (incoming.size() > data.size()) {
             data = std::move(incoming);
         } else {

@@ -161,5 +161,5 @@ NanoProfiler::NanoProfiler(const std::string_view n) : start_time(glfwGetTime())
 NanoProfiler::~NanoProfiler() {
     auto end_time = glfwGetTime();
     auto millis = (end_time - start_time) * 1000.0;
-    info("Scope [{}] took {:4.2f} ms", scope_name, millis);
+    info("Scope [{}] took {:4.2f} ms", scope_name.c_str(), millis);
 }

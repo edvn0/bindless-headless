@@ -5,8 +5,8 @@
 namespace {
     template<typename VertexType>
     auto compute_submesh_aabbs(std::span<const VertexType> vertices, std::span<const u32> indices,
-                               std::span<const Submesh> submeshes) -> std::vector<AABB> {
-        std::vector<AABB> result;
+                               std::span<const Submesh> submeshes) -> Vec<AABB> {
+                                   Vec<AABB> result;
         result.reserve(submeshes.size());
 
         for (auto const &submesh: submeshes) {
@@ -70,7 +70,7 @@ auto create_mesh_aabb_data(VmaAllocator &allocator, MeshData const &mesh, std::s
     auto submesh_aabbs =
             compute_submesh_aabbs(std::span(mesh.vertices), std::span(mesh.indices), std::span(mesh.submeshes));
 
-    AABB mesh_aabb = merge_aabbs(std::span(submesh_aabbs));
+    const auto mesh_aabb = merge_aabbs(std::span(submesh_aabbs));
 
     // Create device buffer
     auto buffer_result =

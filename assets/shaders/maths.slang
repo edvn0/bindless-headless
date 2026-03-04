@@ -1,4 +1,5 @@
 import common;
+import constants;
 
 bool sphere_in_frustum(float3 view_pos, float radius, float4 frustum_planes[6])
 {

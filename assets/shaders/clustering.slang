@@ -22,11 +22,11 @@ struct ClusteredLightCullingPushConstants
     DeviceWritePtr<VkDrawMeshTasksIndirectCommandEXT> indirect_command;
     DeviceWritePtr<Cluster> clusters;
     DeviceWritePtr<uint>    cluster_light_indices;
-    
+
     float z_near;
     float z_far;
     float log_z_scale;
-    
+
     uint                      light_count;  // full unculled count (plain uint, no pointer)
     uint tiles_x;
     uint tiles_y;
@@ -61,8 +61,8 @@ if (view_z + radius < pc.z_near || view_z - radius > pc.z_far)
         if (v < box.min_v[i]) sq_dist += (box.min_v[i] - v) * (box.min_v[i] - v);
         if (v > box.max_v[i]) sq_dist += (v - box.max_v[i]) * (v - box.max_v[i]);
     }
-
-    return sq_dist < (radius * radius);
+float safe_radius = l.position_radius.w * 1.02; // Add 2% padding
+    return sq_dist < (safe_radius * safe_radius);
 }
 
 groupshared uint g_light_count;

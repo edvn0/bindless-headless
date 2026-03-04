@@ -20,13 +20,19 @@
 #include <unordered_map>
 
 #include "Constants.hxx"
+#include "ImGuizmo.h"
 #include "Logger.hxx"
 #include "Pipelines.hxx"
+#include "RenderSubmission.hxx"
 #include "Types.hxx"
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
 
 #include "SceneLoader.hxx"
+#include "glm/gtc/random.hpp"
+#include "scene/Components.hxx"
+#include "scene/Scene.hxx"
+#include "vulkan/vulkan_core.h"
 
 extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 
@@ -225,20 +231,20 @@ namespace {
         });
 
         glfwSetMouseButtonCallback(window, [](GLFWwindow *w, int button, int action, int mods) {
-            if (imgui_mouse_button_callback) {
+            if (imgui_mouse_button_callback)
                 imgui_mouse_button_callback(w, button, action, mods);
-            }
 
             auto &app = *static_cast<AppState *>(glfwGetWindowUserPointer(w));
 
             const bool alt_down =
                     glfwGetKey(w, GLFW_KEY_LEFT_ALT) == GLFW_PRESS || glfwGetKey(w, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
-            const auto super_down = glfwGetKey(w, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
+            const bool super_down = glfwGetKey(w, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS ||
                                     glfwGetKey(w, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS;
             const bool modifier_down = alt_down || super_down;
-            // --- RMB fly look (unchanged) ---
+            const bool gizmo_wants_mouse = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
+
             if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-                if (action == GLFW_PRESS && app.viewport_input.hovered) {
+                if (action == GLFW_PRESS && app.viewport_input.hovered && !gizmo_wants_mouse) {
                     app.cam_in.rmb = true;
                     begin_cursor_capture(w, app);
                 } else if (action == GLFW_RELEASE && app.cam_in.rmb) {
@@ -248,9 +254,8 @@ namespace {
                 return;
             }
 
-            // --- Alt + LMB orbit capture ---
             if (button == GLFW_MOUSE_BUTTON_LEFT && modifier_down) {
-                if (action == GLFW_PRESS && app.viewport_input.hovered) {
+                if (action == GLFW_PRESS && app.viewport_input.hovered && !gizmo_wants_mouse) {
                     app.cam_in.lmb = true;
                     app.cam_in.orbit_capture = true;
                     begin_cursor_capture(w, app);
@@ -261,11 +266,10 @@ namespace {
                 }
                 return;
             }
+
             const bool camera_capturing = app.cam_in.rmb || app.cam_in.orbit_capture;
-            // --- normal mouse routing ---
-            if (!camera_capturing && !route_mouse_to_app(app)) {
+            if (!camera_capturing && !route_mouse_to_app(app))
                 return;
-            }
 
             if (action == GLFW_PRESS) {
                 auto e = std::make_unique<MouseButtonPressedEvent>();
@@ -373,12 +377,10 @@ namespace {
         app.cam_in.gamepad_lb = pad.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER] == GLFW_PRESS;
         app.cam_in.gamepad_rb = pad.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER] == GLFW_PRESS;
     }
-
 } // namespace
 
 
 namespace {
-
     auto wire_event_dispatch(AppUI &ui) -> void {
         ui.app_state.event_system.set_event_callback([&](Event &e) {
             EventDispatcher dispatcher(e);
@@ -414,6 +416,9 @@ namespace {
             });
 
             dispatcher.dispatch<MouseButtonPressedEvent>([&](MouseButtonPressedEvent &event) {
+                if (ImGuizmo::IsOver()) {
+                    return true; // Event handled by gizmo
+                }
                 if (event.button == GLFW_MOUSE_BUTTON_LEFT) {
                     ui.app_state.cam_in.lmb = true;
                     return true;
@@ -452,10 +457,116 @@ namespace {
             });
         });
     }
-
-
 } // namespace
 
+namespace {
+
+    auto generate_random_hierarchies(entt::registry &reg, std::span<const entt::entity> entities, int k,
+                                     std::mt19937 &rng, float leaf_probability = 0.3f) -> std::vector<entt::entity> {
+        std::uniform_real_distribution<float> chance(0.0f, 1.0f);
+
+        std::vector<std::vector<entt::entity>> depth_buckets(k + 1);
+        depth_buckets[0].push_back(entities[0]);
+
+        for (size_t i = 1; i < entities.size(); ++i) {
+            int target_depth;
+            if (chance(rng) < leaf_probability) {
+                target_depth = k;
+            } else {
+                std::uniform_int_distribution<int> depth_dist(1, k);
+                target_depth = depth_dist(rng);
+            }
+
+            while (target_depth > 0 && depth_buckets[target_depth - 1].empty())
+                --target_depth;
+
+            if (target_depth == 0) {
+                depth_buckets[0].push_back(entities[i]);
+                continue;
+            }
+
+            auto &parent_bucket = depth_buckets[target_depth - 1];
+            std::uniform_int_distribution<int> parent_dist(0, (int) parent_bucket.size() - 1);
+            auto parent = parent_bucket[parent_dist(rng)];
+
+            auto &parent_hc = reg.get_or_emplace<HierarchyComponent>(parent);
+            auto &child_hc = reg.get_or_emplace<HierarchyComponent>(entities[i]);
+            parent_hc.children.push_back(entities[i]);
+            child_hc.parent = parent;
+
+            depth_buckets[target_depth].push_back(entities[i]);
+        }
+
+        return depth_buckets[0];
+    }
+
+    auto create_scene(Scene &scene) -> void {
+        auto &reg = scene.registry;
+
+        auto rng =
+                std::mt19937{static_cast<unsigned long>(std::chrono::system_clock::now().time_since_epoch().count())};
+        auto distrib = std::uniform_real_distribution<float>{-5.0f, 5.0f};
+
+        auto sponza = reg.create();
+        reg.emplace<MeshComponent>(sponza, MeshComponent{.name = "sponza", .mesh_index = 0u});
+        reg.emplace<TransformComponent>(sponza, glm::identity<glm::mat4x3>());
+
+        auto capsule = reg.create();
+        reg.emplace<MeshComponent>(capsule, MeshComponent{.name = "capsule", .mesh_index = 1u});
+        reg.emplace<TransformComponent>(capsule, glm::identity<glm::mat4x3>());
+
+        std::vector<entt::entity> helmets;
+        helmets.reserve(100);
+
+        for (auto i: std::views::iota(0, 100)) {
+            auto e = reg.create();
+            reg.emplace<MeshComponent>(e, MeshComponent{.name = std::format("damaged_helmet_{}", i), .mesh_index = 2u});
+            auto random_position = glm::vec3{distrib(rng), distrib(rng), distrib(rng)};
+            auto tx = glm::translate(glm::mat4{1.0f}, random_position);
+            reg.emplace<TransformComponent>(e, glm::mat4x3{std::move(tx)});
+            helmets.push_back(e);
+        }
+
+        generate_random_hierarchies(reg, helmets, 4, rng, 0.3f);
+    }
+
+    auto flush_render_queue(RenderQueue &queue, AppResources &res, RenderContext &ctx, u32 frame_idx) -> void {
+        res.mesh_instance_ranges.clear();
+
+        static thread_local std::vector<glm::mat4x3> transform_scratch;
+        transform_scratch.clear();
+
+        auto flush_batch = [&](u32 mesh_index, u32 base_instance) {
+            res.transforms_ring.write_elements(ctx, frame_idx, base_instance,
+                                               std::span<const glm::mat4x3>{transform_scratch});
+            res.mesh_instance_ranges.push_back({
+                    .mesh_index = mesh_index,
+                    .instance_count = static_cast<u32>(transform_scratch.size()),
+                    .base_instance = base_instance,
+            });
+            transform_scratch.clear();
+        };
+
+        u32 base = 0;
+        for (u32 i = 0; i < queue.meshes.size(); ++i) {
+            const auto &sub = queue.meshes[i];
+            const bool new_batch = !transform_scratch.empty() && queue.meshes[i - 1].mesh_index != sub.mesh_index;
+
+            if (new_batch) {
+                flush_batch(queue.meshes[i - 1].mesh_index, base);
+                base = i;
+            }
+            transform_scratch.push_back(sub.transform);
+        }
+
+        if (!transform_scratch.empty()) {
+            flush_batch(queue.meshes.back().mesh_index, base);
+        }
+
+        res.flushed_instance_count = static_cast<u32>(queue.meshes.size());
+        queue.reset();
+    }
+} // namespace
 
 auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int, Error> {
     signal(SIGINT, sig_handler);
@@ -464,12 +575,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     AppPipelines pipes{};
     AppResources res{};
     AppUI ui{};
+    AppScene scene{};
 
     AppContext app_context{
             .gpu = gpu,
             .pipes = pipes,
             .res = res,
             .ui = ui,
+            .scene = scene,
     };
 
     gpu.opts = &opts;
@@ -850,6 +963,13 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         TRY_PROPAGATE(loaded_capsule, load_static_mesh(gpu.ctx, "assets/meshes/capsule.obj"),
                       "Failed to load capsule mesh");
         res.meshes.emplace_back(std::move(loaded_capsule));
+
+        TRY_PROPAGATE(loaded_damaged_helmet,
+                      load_scene(gpu.ctx, "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.scene.bz2"),
+                      "Failed to load damaged helmet mesh");
+        res.meshes.emplace_back(std::move(loaded_damaged_helmet));
+
+        create_scene(scene.scene);
     }
 
     const auto graphics_family = gpu.queue_family_indices.graphics;
@@ -878,17 +998,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.point_lights_ring = std::move(ring.value());
         res.point_lights_ring.write_all_slots(gpu.ctx, res.all_point_lights);
 
-
-        const u32 sponza_instances = 1;
-        const u32 capsule_instances = 1;
-        const u32 total_instances = sponza_instances + capsule_instances;
-
-        res.transforms_ring =
-                AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, total_instances, {}, "transforms", family_indices)
-                        .value();
+        res.transforms_ring = AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, AppResources::max_draws_per_frame, {},
+                                                                     "transforms", family_indices)
+                                      .value();
         res.transforms_ring.write_all_slots(gpu.ctx, glm::identity<glm::mat4x3>());
-
-        res.mesh_instance_ranges = MeshInstanceRanges::create(2, 1);
 
         res.prefix = AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                     "light_prefix", family_indices)
@@ -955,14 +1068,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         pipelines_node = gpu.window_resize_graph.add_node(
                 "pipelines",
                 [&](VkExtent2D, const ResizeContext &rc) {
-                    std::array<const std::string_view, 2> names = {"LightFlagsCS", "LightCompactCS"};
-                    std::array<ReflectionData, names.size()> reflection_data = {};
-                    TRY_UNWRAP_WITH_DISCARD(
-                            culling_code,
-                            gpu.compiler->compile_from_file("assets/shaders/light_cull_compact_modern.slang",
-                                                            std::span(names), std::span(reflection_data)),
-                            "Failed to compile light culling shader");
-
                     std::array<const std::string_view, 2> clustered_culling_names = {"BuildClusterCS",
                                                                                      "LightFinaliseCS"};
                     std::array<ReflectionData, clustered_culling_names.size()> clustered_culling_reflection_data = {};
@@ -1057,9 +1162,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(ssao_compute_reflection)),
                                             "Failed to compile ssao compute shader");
 
-                    auto &&[fp, cp] =
-                            create_compute_pipelines(gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, {},
-                                                     std::span(culling_code), std::span(names));
+                    std::array<const std::string_view, 3> bloom_names = {"bloom_threshold_cs", "bloom_downsample_cs",
+                                                                         "bloom_upsample_cs"};
+                    std::array<ReflectionData, bloom_names.size()> bloom_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(bloom_code,
+                                            gpu.compiler->compile_from_file("assets/shaders/bloom.slang",
+                                                                            std::span(bloom_names),
+                                                                            std::span(bloom_reflection)),
+                                            "Failed to compile bloom shader");
 
                     auto &&[crp, lrp] = create_compute_pipelines(
                             gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, sizeof(RotatePushConstant),
@@ -1169,12 +1279,26 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                              gpu.bindless.layout, ssao_compute_code.at(1),
                                                              sizeof(SSAOBlurPushConstants), "ssao_blur");
 
+                    auto bloom_threshold = create_compute_pipeline(
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, bloom_code.at(0),
+                            sizeof(BloomThresholdPushConstants), "bloom_threshold_cs");
+
+                    auto bloom_downsample = create_compute_pipeline(
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, bloom_code.at(1),
+                            sizeof(BloomDownsamplePushConstants), "bloom_downsample_cs");
+
+                    auto bloom_upsample = create_compute_pipeline(
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, bloom_code.at(2),
+                            sizeof(BloomUpsamplePushConstants), "bloom_upsample_cs");
+
+                    hot_swap(pipes.bloom_threshold_pipeline, std::move(bloom_threshold), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.bloom_downsample_pipeline, std::move(bloom_downsample), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.bloom_upsample_pipeline, std::move(bloom_upsample), gpu.ctx, rc.retire_value);
+
                     hot_swap(pipes.gbuffer_pipeline_lighting, std::move(gbuf_light), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.cube_rotation_pipeline, std::move(crp), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.light_rotation_pipeline, std::move(lrp), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.gbuffer_pipeline_mrt, std::move(gbuffer_pipeline), gpu.ctx, rc.retire_value);
-                    hot_swap(pipes.flags_pipeline, std::move(fp), gpu.ctx, rc.retire_value);
-                    hot_swap(pipes.compact_pipeline, std::move(cp), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.finalise_compact_pipeline, std::move(finalise_cl), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.predepth_pipeline, std::move(pp), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.predepth_alpha_pipeline, std::move(pp_alpha), gpu.ctx, rc.retire_value);
@@ -1312,6 +1436,46 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 },
                 ResizeTrigger::Clustering);
 
+        const auto bloom_node =
+                gpu.scene_resize_graph.add_node("bloom_targets", [&](VkExtent2D e, const ResizeContext &rc) {
+                    hot_swap(res.bloom_threshold,
+                             create_offscreen_target(gpu.allocator, e.width, e.height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                     {}, "bloom_threshold"),
+                             gpu.ctx, rc.retire_value);
+
+                    // Resize the vectors if mip count changed or first run
+                    const u32 mip_count = res.bloom_mip_count;
+
+                    if (res.bloom_downsample.size() != mip_count) {
+                        for (auto h: res.bloom_downsample)
+                            destroy(gpu.ctx, h, rc.retire_value);
+                        for (auto h: res.bloom_upsample)
+                            destroy(gpu.ctx, h, rc.retire_value);
+                        res.bloom_downsample.resize(mip_count);
+                        res.bloom_upsample.resize(mip_count - 1);
+                    }
+
+                    for (u32 i = 0; i < mip_count; ++i) {
+                        const u32 w = std::max(1u, e.width >> (i + 1));
+                        const u32 h = std::max(1u, e.height >> (i + 1));
+
+                        hot_swap(res.bloom_downsample[i],
+                                 create_offscreen_target(gpu.allocator, w, h, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                                         std::format("bloom_ds_{}", i)),
+                                 gpu.ctx, rc.retire_value);
+
+                        if (i < mip_count - 1) {
+                            hot_swap(res.bloom_upsample[i],
+                                     create_offscreen_target(gpu.allocator, w, h, VK_FORMAT_R16G16B16A16_SFLOAT, {},
+                                                             std::format("bloom_us_{}", i)),
+                                     gpu.ctx, rc.retire_value);
+                        }
+                    }
+                });
+
+        gpu.scene_resize_graph.add_dependency(bloom_node, offscreen_node);
+        gpu.scene_resize_graph.add_dependency(tonemapped_node, bloom_node);
+
         gpu.scene_resize_graph.add_dependency(tonemapped_node, offscreen_node);
     }
 
@@ -1363,22 +1527,14 @@ gpu.bindless.need_repopulate = true;
 
     // --- Graph setup ---
     if (!ui.graphs_initialized) {
-        ui.gpu_frame_graph.add_line("Geometry Rotate");
-        ui.gpu_frame_graph.add_line("Light Rotate");
-        ui.gpu_frame_graph.add_line("Clustering");
-        ui.gpu_frame_graph.add_line("Pre-Depth");
-        ui.gpu_frame_graph.add_line("GBuffer");
-        ui.gpu_frame_graph.add_line("SSAO");
-        ui.gpu_frame_graph.add_line("Deferred");
-        ui.gpu_frame_graph.add_line("Skybox");
-        ui.gpu_frame_graph.add_line("Tonemap");
-        ui.gpu_frame_graph.add_line("Present");
-        ui.gpu_frame_graph.add_line("Directional SM");
+        for (auto idx: compute_stages)
+            ui.gpu_frame_graph.add_line(get_compute_pass_name(idx));
+        for (auto idx: graphics_stages)
+            ui.gpu_frame_graph.add_line(get_graphics_pass_name(idx));
         ui.graphs_initialized = true;
     }
 
     ui.last_frame_time = std::chrono::high_resolution_clock::now();
-
     auto stats = FrameStats{};
 
     glfwShowWindow(gpu.window);
@@ -1415,7 +1571,7 @@ gpu.bindless.need_repopulate = true;
         poll_gamepad(ui.app_state);
         ui.app_state.cam.update(gpu.window, ui.dt, ui.app_state.cam_in);
 
-        write_camera_to_frame_ubo(gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam,
+        write_camera_to_frame_ubo(*res.frame_ubo, gpu.ctx, res.frame_ubo_ring, bounded_frame_index, ui.app_state.cam,
                                   render_scene_extent, fov_y, z_near, z_far);
 
         ui.total_time += ui.dt;
@@ -1471,11 +1627,15 @@ gpu.bindless.need_repopulate = true;
         }
 
         std::vector<DrawRanges> all_mesh_ranges;
+        submit_mesh_instances(scene.scene, scene.render_queue);
+        flush_render_queue(scene.render_queue, res, gpu.ctx, bounded_frame_index);
+
         all_mesh_ranges.reserve(res.mesh_instance_ranges.size());
         for (const auto &mir: res.mesh_instance_ranges) {
             all_mesh_ranges.push_back(write_mesh_indirect(
                     gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring, res.draw_material_id_ring,
-                    res.meshes.at(mir.mesh_index).mesh, mir.instance_count, mir.base_instance));
+                    res.meshes.at(mir.mesh_index).mesh, // MeshData lives on StaticMesh
+                    mir.instance_count, mir.base_instance));
         }
 
         const u32 light_slot = reserve_light_volumes(gpu.ctx, bounded_frame_index, res.draw_stream.writer,
@@ -1656,11 +1816,24 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
+            const std::array bloom_waits{
+                    TimelineWait{
+                            .value     = fs.timeline_values[stage_index(Stage::Skybox)],
+                            .semaphore = gpu.tl_graphics.timeline,
+                            .stage     = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    },
+            };
+            fs.timeline_values[stage_index(Stage::Bloom)] =
+                    run_bloom_pass(app_context, render_scene_extent,
+                                   SubmitSynchronisation{.timeline_waits = bloom_waits});
+        }
+
+        {
             const std::array tonemap_waits{
                     TimelineWait{
-                            .value = fs.timeline_values[stage_index(Stage::Skybox)],
-                            .semaphore = gpu.tl_graphics.timeline,
-                            .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                            .value = fs.timeline_values[stage_index(Stage::Bloom)],
+                            .semaphore = gpu.tl_compute.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
             fs.timeline_values[stage_index(Stage::Tonemapping)] =

@@ -20,7 +20,6 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     const float aspect = static_cast<float>(extent.width) / std::max(1.0f, static_cast<float>(extent.height));
 
     ubo.view = cam.view_matrix();
-    // info("{}", glm::to_string(ubo.view));
     ubo.projection = glm::perspectiveRH_ZO(fov_y_radians, aspect, far_plane, near_plane);
     ubo.inv_projection = glm::inverse(ubo.projection);
     ubo.view_projection = ubo.projection * ubo.view;
@@ -35,22 +34,11 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     std::swap(ubo.frustum_planes[4], ubo.frustum_planes[5]);
 }
 
-auto write_camera_to_frame_ubo(RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
+auto write_camera_to_frame_ubo(FrameUBO& ubo,RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
                                const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float near_plane,
                                float far_plane) -> void {
-    FrameUBO ubo{};
     fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, near_plane, far_plane);
-
-    auto write = [&](auto &val, auto offset) { frame_ubo_ring.write_field(ctx, frame_index, val, offset); };
-
-    write(ubo.view, offsetof(FrameUBO, view));
-    write(ubo.projection, offsetof(FrameUBO, projection));
-    write(ubo.view_projection, offsetof(FrameUBO, view_projection));
-    write(ubo.inv_view_projection, offsetof(FrameUBO, inv_view_projection));
-    write(ubo.inv_projection, offsetof(FrameUBO, inv_projection));
-    write(ubo.inv_view_projection_no_translation, offsetof(FrameUBO, inv_view_projection_no_translation));
-    write(ubo.camera_position, offsetof(FrameUBO, camera_position));
-    write(ubo.frustum_planes, offsetof(FrameUBO, frustum_planes));
+    frame_ubo_ring.write_element(ctx, frame_index, 0, ubo);
 }
 auto clamp_u32(u32 v, u32 lo, u32 hi) -> u32 { return std::min(std::max(v, lo), hi); }
 auto sanitize_window_extent(VkExtent2D raw, VkPhysicalDevice physical_device, VkSurfaceKHR surface, ExtentBounds bounds)

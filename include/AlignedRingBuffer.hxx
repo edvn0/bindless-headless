@@ -6,7 +6,6 @@
 #include "RenderContext.hxx"
 
 template<typename T, std::size_t N = frames_in_flight>
-    requires std::is_trivial_v<T>
 class AlignedRingBuffer {
     BufferHandle buffer{};
     u64 stride_bytes{0};

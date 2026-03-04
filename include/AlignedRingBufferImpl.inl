@@ -3,7 +3,6 @@
 #include <cstring> // std::memset
 
 template<typename T, std::size_t N>
-    requires std::is_trivial_v<T>
 auto AlignedRingBuffer<T, N>::create(RenderContext &ctx, u64 elements_per_slot, VkBufferUsageFlags extra_usage,
                                      std::string_view name, const std::span<const u32> queue_indices) -> tl::expected<AlignedRingBuffer, Error> {
     constexpr auto align_up_pow2 = [](u64 value, u64 alignment) -> u64 {

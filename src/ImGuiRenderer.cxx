@@ -19,6 +19,8 @@
 
 #include <unordered_map>
 
+#include "ImGuizmo.h"
+
 namespace {
 
     struct ImGuiViewportRenderTarget {
@@ -116,7 +118,7 @@ namespace {
         }
     }
 
-    static auto get_or_create_viewport_target(RenderContext &ctx, GLFWwindow *w) -> ImGuiViewportRenderTarget & {
+    auto get_or_create_viewport_target(RenderContext &ctx, GLFWwindow *w) -> ImGuiViewportRenderTarget & {
         auto it = viewport_targets.find(w);
         if (it != viewport_targets.end()) {
             return it->second;
@@ -215,7 +217,6 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
     io.DisplaySize = ImVec2(dim.width / display_scale, dim.height / display_scale);
     io.DisplayFramebufferScale = ImVec2(display_scale, display_scale);
     if (std::filesystem::create_directory("assets/editor")) {
-        // ensure the ini file exists so ImGui doesn't error when trying to write to it later
         std::ofstream ini_file("assets/editor/imgui.ini");
     }
     io.IniFilename = "assets/editor/imgui.ini";
@@ -238,6 +239,7 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
 
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    ImGuizmo::BeginFrame();
 }
 
 auto ImGuiRenderer::acquire_draw_slot() -> DrawableData & {

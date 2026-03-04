@@ -29,7 +29,7 @@ struct TextureLoadPacket {
     enum class Type { SRGB, Linear };
     enum class Class { Albedo, Normal, Roughness, Metallic, Occlusion, Emissive };
 
-    auto to_format() const -> VkFormat {
+    [[nodiscard]] auto to_format() const -> VkFormat {
         switch (type) {
             case Type::Linear:
                 return VK_FORMAT_R8G8B8A8_UNORM;
@@ -124,8 +124,8 @@ struct LoadedTextureTable {
 struct StaticMesh {
     MeshData mesh;
     std::unordered_map<std::string, MaterialData> materials;
-    std::vector<GPUMaterialData> gpu_materials;
-    std::vector<VkDrawIndexedIndirectCommand> indirect_template;
+    Vec<GPUMaterialData> gpu_materials;
+    Vec<VkDrawIndexedIndirectCommand> indirect_template;
     // GPUMaterialData
     BufferHandle material_buffer;
     // Submesh -> Material mapping
@@ -136,7 +136,7 @@ struct StaticMesh {
     u32 draw_count;
 
     AABB mesh_aabb;
-    std::vector<AABB> submesh_aabbs;
+    Vec<AABB> submesh_aabbs;
     BufferHandle aabb_buffer;
 };
 

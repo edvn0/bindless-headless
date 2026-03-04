@@ -281,7 +281,7 @@ namespace Tooling {
                 params.qualityLevel = 255;
                 params.normalMap = (img.usage == TextureUsage::Normal) ? KTX_TRUE : KTX_FALSE;
                 params.compressionLevel = 5;
-                params.threadCount = std::thread::hardware_concurrency();
+                params.threadCount = std::max(1u, std::thread::hardware_concurrency() / 2);
 
                 rc = ktxTexture2_CompressBasisEx(ktx2, &params);
                 if (rc != KTX_SUCCESS) {
@@ -391,11 +391,12 @@ namespace Tooling {
 
     auto SceneLoader::convert_gltf(const std::filesystem::path &scene_path, const std::filesystem::path &output_path)
             -> tl::expected<void, Error> {
-        const auto base_dir = scene_path.parent_path();
+        const auto base_dir = assets_dir / scene_path.parent_path();
 
         auto src_bytes = read_file_bytes(scene_path);
         if (!src_bytes)
-            return tl::unexpected(make_error(std::format("Failed to read source for hashing: {}", scene_path.string())));
+            return tl::unexpected(
+                    make_error(std::format("Failed to read source for hashing: {}", scene_path.string())));
 
         const u64 src_hash = fnv1a_64(*src_bytes);
 
@@ -631,8 +632,8 @@ namespace Tooling {
                     v.position = {positions[i].x, positions[i].y, positions[i].z};
 
                     auto uv_prior_to_packing = (i < uvs.size()) ? std::array<float, 2>{uvs[i].x, uvs[i].y}
-                                             : std::array<float, 2>{0.0f, 0.0f};
-                                             v.uvs = glm::packHalf2x16(glm::vec2(uv_prior_to_packing[0], uv_prior_to_packing[1]));
+                                                                : std::array<float, 2>{0.0f, 0.0f};
+                    v.uvs = glm::packHalf2x16(glm::vec2(uv_prior_to_packing[0], uv_prior_to_packing[1]));
 
                     const glm::vec3 n = glm::normalize((i < normals.size()) ? normals[i] : glm::vec3(0, 0, 1));
                     v.normal = glm::packSnorm3x10_1x2(glm::vec4(n, 0.0f));
@@ -665,7 +666,7 @@ namespace Tooling {
         header.index_count = static_cast<u32>(indices.size());
         header.material_count = static_cast<u32>(gpu_materials.size());
         header.texture_count = static_cast<u32>(tex_cache.textures.size());
-        header.content_hash = src_hash; 
+        header.content_hash = src_hash;
 
         const u64 header_offset = w.write_pod(header);
 

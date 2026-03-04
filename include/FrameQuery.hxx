@@ -32,7 +32,7 @@ static constexpr auto read_timestamp_pair_ms_any = [](const RenderContext &rende
         return std::nullopt;
     }
 
-    std::vector<u64> stamps(count, 0);
+    Vec<u64> stamps(count, 0);
 
     const VkResult r =
             vkGetQueryPoolResults(render_context.get_device(), qs->pool, 0, count, stamps.size() * sizeof(u64),
@@ -51,7 +51,7 @@ static constexpr auto read_timestamp_pair_ms_any = [](const RenderContext &rende
 };
 
 static constexpr auto read_timestamp_pairs_ms = [](const RenderContext &render_context,
-                                                   QueryPoolHandle h) -> std::optional<std::vector<double>> {
+                                                   QueryPoolHandle h) -> std::optional<Vec<double>> {
     const auto *qs = render_context.query_pools.get(h);
     if (!qs) {
         return std::nullopt;
@@ -62,7 +62,7 @@ static constexpr auto read_timestamp_pairs_ms = [](const RenderContext &render_c
         return std::nullopt;
     }
 
-    std::vector<u64> stamps(count, 0);
+    Vec<u64> stamps(count, 0);
 
     const VkResult r =
             vkGetQueryPoolResults(render_context.get_device(), qs->pool, 0, count, stamps.size() * sizeof(u64),
@@ -75,7 +75,7 @@ static constexpr auto read_timestamp_pairs_ms = [](const RenderContext &render_c
         return std::nullopt;
     }
 
-    std::vector<double> out{};
+    Vec<double> out{};
     out.reserve(count / 2);
 
     for (u32 i = 0; i < count; i += 2) {
@@ -105,13 +105,13 @@ struct ComputeGpuStats {
 
 
 static constexpr auto read_graphics_stats = [](const RenderContext &ctx,
-                                               QueryPoolHandle h) -> std::optional<std::vector<GraphicsGpuStats>> {
+                                               QueryPoolHandle h) -> std::optional<Vec<GraphicsGpuStats>> {
     const auto *qs = ctx.query_pools.get(h);
     if (!qs || qs->query_count == 0)
         return std::nullopt;
 
     const u32 count = qs->query_count;
-    std::vector<GraphicsGpuStats> results(count);
+    Vec<GraphicsGpuStats> results(count);
 
     VkResult r = vkGetQueryPoolResults(ctx.get_device(), qs->pool, 0, count, count * sizeof(GraphicsGpuStats),
                                        results.data(),
@@ -124,13 +124,13 @@ static constexpr auto read_graphics_stats = [](const RenderContext &ctx,
 };
 
 static constexpr auto read_compute_stats = [](const RenderContext &ctx,
-                                              const auto h) -> std::optional<std::vector<ComputeGpuStats>> {
+                                              const auto h) -> std::optional<Vec<ComputeGpuStats>> {
     const auto *qs = ctx.query_pools.get(h);
     if (!qs)
         return std::nullopt;
 
     const u32 count = qs->query_count;
-    std::vector<ComputeGpuStats> results(count);
+    Vec<ComputeGpuStats> results(count);
 
     VkResult r = vkGetQueryPoolResults(ctx.get_device(), qs->pool, 0, count, count * sizeof(ComputeGpuStats),
                                        results.data(), sizeof(ComputeGpuStats), VK_QUERY_RESULT_64_BIT);

@@ -64,11 +64,18 @@ struct tracy_allocator {
     friend auto operator==(const tracy_allocator &, const tracy_allocator &) noexcept -> bool = default;
 };
 
-// Convenience alias: when Tracy is off, you get the normal allocator.
 #if defined(TRACY_ENABLE)
 template<class T>
 using default_allocator = tracy_allocator<T, /*Secure=*/false>;
+
+template<typename T>
+using Vec = std::vector<T, default_allocator<T>>;
+template<typename T>
+using FastVec = std::vector<T, std::allocator<T>>;
 #else
 template<class T>
 using default_allocator = std::allocator<T>;
+
+template<typename T>
+using Vec = std::vector<T, default_allocator<T>>;
 #endif

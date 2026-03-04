@@ -1,3 +1,4 @@
 static const uint MAX_LIGHTS_PER_CLUSTER = 128;
 static const uint CLUSTER_BUILD_THREADS  = 64;
 static const float alpha_cutoff = 0.5F;
+static const float CLUSTER_START_Z = 0.1F;

@@ -99,6 +99,13 @@ CPMAddPackage(
   OPTIONS "FASTGLTF_COMPILE_AS_CPP20 ON FASTGLTF_USE_CUSTOM_SMALLVECTOR ON"
 )
 
+CPMAddPackage(
+  URI "gh:skypjack/entt"
+  GIT_TAG "9fdc43f6f8189581ccc81dace2ece1d5a981ace0"
+  GIT_SHALLOW YES
+  OPTIONS "ENTT_INCLUDE_NATVIS ON ENTT_INCLUDE_HEADERS ON"
+)
+
 if(HAS_IMAGE_WRITERS)
   CPMAddPackage(
     URI "gh:madler/zlib@1.3.1"
@@ -173,55 +180,55 @@ if(HAS_TRACY)
   )
 endif()
 
-  find_package(Slang CONFIG REQUIRED)
+find_package(Slang CONFIG REQUIRED)
 
-  # Ensure SLANG_ROOT is set if find_package didn't set it automatically
-  set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
-  set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
+# Ensure SLANG_ROOT is set if find_package didn't set it automatically
+set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
+set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
 
-  add_library(slang-compiler SHARED IMPORTED)
-  add_library(slang-rt       SHARED IMPORTED)
+add_library(slang-compiler SHARED IMPORTED)
+add_library(slang-rt SHARED IMPORTED)
+
+set_target_properties(slang-compiler PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+)
+set_target_properties(slang-rt PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+)
+
+if(WIN32)
+  # Typical layout: import libs in lib/, DLLs sometimes in bin/ (depends on the package)
+  # Adjust BIN dir if your package puts DLLs elsewhere.
+  set(SLANG_BIN_DIR "${SLANG_ROOT}/bin")
 
   set_target_properties(slang-compiler PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+    IMPORTED_IMPLIB "${SLANG_LIB_DIR}/slang-compiler.lib"
+    IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-compiler.dll"
   )
   set_target_properties(slang-rt PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+    IMPORTED_IMPLIB "${SLANG_LIB_DIR}/slang-rt.lib"
+    IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-rt.dll"
   )
 
-  if(WIN32)
-    # Typical layout: import libs in lib/, DLLs sometimes in bin/ (depends on the package)
-    # Adjust BIN dir if your package puts DLLs elsewhere.
-    set(SLANG_BIN_DIR "${SLANG_ROOT}/bin")
+elseif(APPLE)
+  set_target_properties(slang-compiler PROPERTIES
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.dylib"
+  )
+  set_target_properties(slang-rt PROPERTIES
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.dylib"
+  )
 
-    set_target_properties(slang-compiler PROPERTIES
-      IMPORTED_IMPLIB   "${SLANG_LIB_DIR}/slang-compiler.lib"
-      IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-compiler.dll"
-    )
-    set_target_properties(slang-rt PROPERTIES
-      IMPORTED_IMPLIB   "${SLANG_LIB_DIR}/slang-rt.lib"
-      IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-rt.dll"
-    )
+else() # Linux
+  set_target_properties(slang-compiler PROPERTIES
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.so"
+  )
+  set_target_properties(slang-rt PROPERTIES
+    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.so"
+  )
+endif()
 
-  elseif(APPLE)
-    set_target_properties(slang-compiler PROPERTIES
-      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.dylib"
-    )
-    set_target_properties(slang-rt PROPERTIES
-      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.dylib"
-    )
-
-  else() # Linux
-    set_target_properties(slang-compiler PROPERTIES
-      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.so"
-    )
-    set_target_properties(slang-rt PROPERTIES
-      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.so"
-    )
-  endif()
-
-  message(STATUS "Slang root: ${SLANG_ROOT}")
-  message(STATUS "Slang lib dir: ${SLANG_LIB_DIR}")
+message(STATUS "Slang root: ${SLANG_ROOT}")
+message(STATUS "Slang lib dir: ${SLANG_LIB_DIR}")
 
 
 CPMAddPackage(
@@ -239,7 +246,15 @@ CPMAddPackage(
   DOWNLOAD_ONLY YES
 )
 
-if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR)
+CPMAddPackage(
+  NAME ImGuizmo
+  GITHUB_REPOSITORY CedricGuillemet/ImGuizmo
+  GIT_TAG a15acd87a3f3241a29ea1363ceafc680dca3a96b
+  GIT_SHALLOW YES
+  DOWNLOAD_ONLY YES
+)
+
+if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR AND ImGuizmo_SOURCE_DIR)
   set(IMGUI_SRCS
     ${ImGui_SOURCE_DIR}/imgui.cpp
     ${ImGui_SOURCE_DIR}/imgui_demo.cpp
@@ -255,43 +270,46 @@ if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR)
     ${ImPlot_SOURCE_DIR}/implot.cpp
     ${ImPlot_SOURCE_DIR}/implot_items.cpp
   )
+
+  set(IMGUIZMO_SRCS
+    ${ImGuizmo_SOURCE_DIR}/ImGuizmo.cpp
+  )
   list(PREPEND CMAKE_PREFIX_PATH "C:/D/Builds")
 
-# HarfBuzz package name is often lowercase on disk (harfbuzzConfig.cmake)
-find_package(harfbuzz CONFIG REQUIRED)
+  find_package(harfbuzz CONFIG REQUIRED)
 
-# Bridge target-name mismatch for FreeType exports
-if(NOT TARGET HarfBuzz::HarfBuzz)
-  if(TARGET harfbuzz::harfbuzz)
-    add_library(HarfBuzz::HarfBuzz ALIAS harfbuzz::harfbuzz)
-  elseif(TARGET harfbuzz)
-    add_library(HarfBuzz::HarfBuzz ALIAS harfbuzz)
-  else()
-    message(FATAL_ERROR "Found harfbuzz package, but no known harfbuzz target was exported.")
+  if(NOT TARGET HarfBuzz::HarfBuzz)
+    if(TARGET harfbuzz::harfbuzz)
+      add_library(HarfBuzz::HarfBuzz ALIAS harfbuzz::harfbuzz)
+    elseif(TARGET harfbuzz)
+      add_library(HarfBuzz::HarfBuzz ALIAS harfbuzz)
+    else()
+      message(FATAL_ERROR "Found harfbuzz package, but no known harfbuzz target was exported.")
+    endif()
   endif()
-endif()
   find_package(Freetype CONFIG REQUIRED)
 
-  add_library(imgui STATIC ${IMGUI_SRCS} ${IMPLOT_SRCS})
+  add_library(imgui STATIC ${IMGUI_SRCS} ${IMPLOT_SRCS} ${IMGUIZMO_SRCS})
 
   target_include_directories(imgui PUBLIC
     ${ImGui_SOURCE_DIR}
     ${ImGui_SOURCE_DIR}/backends
     ${ImPlot_SOURCE_DIR}
+    ${ImGuizmo_SOURCE_DIR}
   )
 
-target_link_libraries(imgui PUBLIC
-  glfw
-  volk
-  volk::volk_headers
-  platform_wsi
-  Freetype::Freetype
-)
+  target_link_libraries(imgui PUBLIC
+    glfw
+    volk
+    volk::volk_headers
+    platform_wsi
+    Freetype::Freetype
+  )
 
-target_compile_definitions(imgui
-  PUBLIC
+  target_compile_definitions(imgui
+    PUBLIC
     GLFW_INCLUDE_NONE
     IMGUI_IMPL_VULKAN_USE_VOLK
     IMGUI_ENABLE_FREETYPE
-)
+  )
 endif()

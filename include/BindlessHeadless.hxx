@@ -92,6 +92,7 @@ enum class Stage : u32 {
     Skybox,
     LightClustering,
     DirectionalShadowMap,
+    Bloom,
     Count,
 };
 
@@ -356,11 +357,13 @@ enum class ComputeStamp : u32 {
     SsaoEnd,
     SsaoBlurBegin,
     SsaoBlurEnd,
+    BloomBegin,
+    BloomEnd,
     Count
 };
-enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Ssao, SsaoBlur, Count };
+enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Ssao, SsaoBlur, Bloom, Count };
 inline constexpr auto compute_stages =
-        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering, ComputeIndex::Ssao, ComputeIndex::SsaoBlur};
+        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering, ComputeIndex::Ssao, ComputeIndex::SsaoBlur, ComputeIndex::Bloom};
 
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
@@ -393,6 +396,33 @@ inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Coun
 inline constexpr u32 total_queries = stats_compute_count + stats_graphics_count;
 
 static_assert(graphics_query_count == 2 * stats_graphics_count);
+
+constexpr auto get_compute_pass_name(const ComputeIndex index) -> std::string_view {
+    switch (index) {
+        case ComputeIndex::RotateGeometry:  return "Rotate Geometry";
+        case ComputeIndex::RotateLights:    return "Rotate Lights";
+        case ComputeIndex::LightClustering: return "Light Clustering";
+        case ComputeIndex::Ssao:            return "SSAO";
+        case ComputeIndex::SsaoBlur:        return "SSAO Blur";
+        case ComputeIndex::Bloom:           return "Bloom";
+        case ComputeIndex::Count:           break;
+    }
+    std::abort();
+}
+
+constexpr auto get_graphics_pass_name(const GraphicsIndex index) -> std::string_view {
+    switch (index) {
+        case GraphicsIndex::PreDepth:  return "Pre-Depth";
+        case GraphicsIndex::GBuffer:   return "GBuffer";
+        case GraphicsIndex::Deferred:  return "Deferred";
+        case GraphicsIndex::Skybox:    return "Skybox";
+        case GraphicsIndex::Tonemap:   return "Tonemap";
+        case GraphicsIndex::Present:   return "Present";
+        case GraphicsIndex::ShadowMap: return "Directional Shadow Map";
+        case GraphicsIndex::Count:     break;
+    }
+    std::abort();
+}
 
 using EnabledFeatureSet = std::unordered_set<std::string, string_hash, string_eq>;
 auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u32 transfer_index)
@@ -493,7 +523,7 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
         info.stageMask = s.stage;
         signal_infos.push_back(info);
     }
-    
+
     auto cmd_info = create_info<VkCommandBufferSubmitInfo>();
     cmd_info.commandBuffer = cmd;
 

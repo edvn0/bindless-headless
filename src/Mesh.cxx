@@ -802,8 +802,8 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
     return StaticMesh{
             .mesh = std::move(mesh),
             .materials = std::move(materials),
-            .gpu_materials = std::move(gpu_materials),
-            .indirect_template = std::move(indirect_cmds),
+            .gpu_materials = {gpu_materials.begin(), gpu_materials.end()},
+            .indirect_template = {indirect_cmds.begin(), indirect_cmds.end()},
             .material_buffer = ctx.create_buffer(std::move(material_buffer)),
             .material_ids_buffer = ctx.create_buffer(std::move(material_ids_buffer)),
             .vertex_buffer = ctx.create_buffer(std::move(vertex_buffer)),
@@ -1312,8 +1312,8 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     return StaticMesh{
             .mesh = std::move(mesh),
             .materials = {}, // no MaterialData map needed at runtime
-            .gpu_materials = std::move(gpu_materials),
-            .indirect_template = std::move(indirect_cmds),
+            .gpu_materials = {gpu_materials.begin(), gpu_materials.end()},
+            .indirect_template = {indirect_cmds.begin(), indirect_cmds.end()},
             .material_buffer = ctx.buffers.create(std::move(material_buffer)),
             .material_ids_buffer = ctx.buffers.create(std::move(material_ids_buffer)),
             .vertex_buffer = ctx.buffers.create(std::move(vertex_buffer)),

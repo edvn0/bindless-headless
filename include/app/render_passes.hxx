@@ -55,8 +55,8 @@ namespace RP {
     }
 
     inline auto begin_compute(VkCommandBuffer cmd, ComputeIndex idx,
-                              VkPipelineStageFlags2 ts_begin = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                              VkPipelineStageFlags2 ts_end = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT) -> Scope {
+                              VkPipelineStageFlags2 ts_begin = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                              VkPipelineStageFlags2 ts_end = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) -> Scope {
         return {cmd, get_frame_markers().compute, compute_specification(idx), ts_begin, ts_end};
     }
 
@@ -91,6 +91,9 @@ auto run_deferred_lighting_pass(AppContext &, const VkExtent2D frame_extent, u32
 
 auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex,
                                  const SubmitSynchronisation &sync) -> TimelineValue;
+
+auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent,
+                    const SubmitSynchronisation &sync) -> TimelineValue;
 
 auto run_tonemap_pass(AppContext &, const VkExtent2D frame_extent, BoundedFrameIndex, const SubmitSynchronisation &sync)
         -> TimelineValue;

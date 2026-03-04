@@ -117,7 +117,7 @@ struct ClusterConfig {
 auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float z_near, float z_far) -> ClusterConfig;
 
 struct PointLight {
-    std::array<float, 4> position_radius;
-    std::array<float, 4> colour_intensity;
+    std::array<float, 4> position_radius{};
+    std::array<float, 4> colour_intensity{};
 };
 auto spawn_lights_in_aabb(AABB const &aabb, std::span<PointLight> lights) -> void;

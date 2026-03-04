@@ -29,12 +29,12 @@ float3 normal_ts_to_ws(float3 n_ts, float3 t_ws, float3 b_ws, float3 n_ws)
 {
     float3 N = safe_normalize(n_ws);
     float3 T = safe_normalize(t_ws - N * dot(N, t_ws));
-    
+
     // Preserve handedness from the original bitangent
     float3 B = cross(N, T);
     float handedness = dot(B, b_ws) < 0.0 ? -1.0 : 1.0;
     B *= handedness;
-    
+
     float3x3 TBN = float3x3(T, B, N);
     return safe_normalize(mul(n_ts, TBN));
 }
@@ -73,7 +73,7 @@ SurfaceMaterial evaluate_material_tbn(
     // Roughness
     if (mat.has_roughness_map())
     {
-        float r = sample_texture(uv, mat.roughness_map, sampler_index).r;
+        float r = sample_texture(uv, mat.roughness_map, sampler_index).g;
         surf.roughness = r * mat.roughness_factor;
     }
     else
@@ -85,7 +85,7 @@ SurfaceMaterial evaluate_material_tbn(
     // Metallic
     if (mat.has_metallic_map())
     {
-        float m = sample_texture(uv, mat.metallic_map, sampler_index).r;
+        float m = sample_texture(uv, mat.metallic_map, sampler_index).b;
         surf.metallic = m * mat.metallic_factor;
     }
     else
@@ -255,7 +255,7 @@ float3 evaluate_point_light_fixed_v4(
             float3 L = light_pos - world_pos;
     float dist = length(L);
     if (dist > radius) return 0.0.xxx;
-    
+
 float norm_dist = saturate(dist / (radius * 0.85));
 float attenuation = (1.0 - norm_dist * norm_dist);
 attenuation = attenuation * attenuation;
@@ -489,6 +489,7 @@ struct DeferredLightingPushConstants
     float4x4 shadow_matrix;
     float log_z_scale;
     float z_near;
+    float z_far;
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
@@ -503,31 +504,35 @@ struct DeferredLightingPushConstants
     uint debug_mode;
 };
 
+float linearize_reverse_z(float d, float z_near, float z_far) {
+    // d = 1.0 at z_near, d = 0.0 at z_far
+    return (z_near * z_far) / (z_near + d * (z_far - z_near));
+}
+
 uint compute_cluster_index(
-    float2 screen_pos, // SV_Position.xy
-    float3 view_pos,   // Position in view space
-    float z_near,      // MUST match pc.z_near from builder
+    float2 screen_pos,
+    float raw_depth,    // Sampled from Depth Texture (1.0 = near, 0.0 = far)
+    float z_near,
+    float z_far,
     float log_z_scale,
-    uint tiles_x,
-    uint tiles_y,
-    uint tiles_z,
+    uint3 tiles,
     float2 screen_size)
 {
-    uint cluster_x = uint(screen_pos.x / screen_size.x * float(tiles_x));
-    uint cluster_y = uint(screen_pos.y / screen_size.y * float(tiles_y));
+    uint cluster_x = uint(floor(screen_pos.x / screen_size.x * float(tiles.x)));
+        uint cluster_y = uint(floor(screen_pos.y / screen_size.y * float(tiles.y)));
 
-    cluster_x = min(cluster_x, tiles_x - 1);
-    cluster_y = min(cluster_y, tiles_y - 1);
+        float view_dist = linearize_reverse_z(raw_depth, z_near, z_far);
 
-    // Use positive distance from camera for the log-distribution
-    float view_dist = -view_pos.z; 
-    
-    // Match the BuildClusterCS logic: 
-    // uint z0 = uint(log2(view_dist / z_near) * log_z_scale);
-    uint cluster_z = uint(log2(max(view_dist / z_near, 1.0)) * log_z_scale);
-    cluster_z = min(cluster_z, tiles_z - 1);
+        uint cluster_z = 0;
+        if (view_dist > CLUSTER_START_Z) {
+            cluster_z = uint(log2(view_dist / CLUSTER_START_Z) * log_z_scale);
+        }
 
-    return cluster_x + (cluster_y * tiles_x) + (cluster_z * tiles_x * tiles_y);
+        cluster_x = min(cluster_x, tiles.x - 1);
+        cluster_y = min(cluster_y, tiles.y - 1);
+        cluster_z = min(cluster_z, tiles.z - 1);
+
+        return cluster_x + (cluster_y * tiles.x) + (cluster_z * tiles.x * tiles.y);
 }
 
 struct VSOut
@@ -594,15 +599,17 @@ float combined_ao = ao * ssao;
     float3 view_pos = mul(pc.frame_ubo->view, float4(world_pos, 1.0)).xyz;
     float2 screen_size = pc.frame_ubo->viewport_size;
 
+    float raw_depth = sample_texture(uv, pc.depth_index).r;
+
+    // No more view_pos for Z calculation!
     uint cluster_idx = compute_cluster_index(
         i.position.xy,
-        view_pos,
-        pc.z_near, 
+        raw_depth,
+        pc.z_near,
+        pc.z_far,
         pc.log_z_scale,
-        pc.tiles_x,
-        pc.tiles_y,
-        pc.tiles_z,
-        screen_size
+        uint3(pc.tiles_x, pc.tiles_y, pc.tiles_z),
+        pc.frame_ubo->viewport_size
     );
 
     var cluster = pc.clusters[cluster_idx];
@@ -637,12 +644,12 @@ if (pc.debug_mode == 2)
     // Visualise light count per cluster
     float t = float(cluster.light_count) / 128.0;
     return float4(t, t, t, 1.0);
-} 
+}
 if (pc.debug_mode == 3)
 {
     // Red = view_pos.z is positive (wrong), green = negative (correct)
-    return view_pos.z > 0.0 
-        ? float4(1.0, 0.0, 0.0, 1.0) 
+    return view_pos.z > 0.0
+        ? float4(1.0, 0.0, 0.0, 1.0)
         : float4(0.0, 1.0, 0.0, 1.0);
 }else {
 

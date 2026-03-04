@@ -15,6 +15,7 @@
 #include "Mesh.hxx"
 #include "Numeric.hxx"
 #include "Profiler.hxx"
+#include "RenderSubmission.hxx"
 #include "ResizeableGraph.hxx"
 #include "Swapchain.hxx"
 
@@ -22,6 +23,7 @@
 #include "app/listeners.hxx"
 #include "app/math.hxx"
 #include "app/render.hxx"
+#include "scene/Scene.hxx"
 #include "ui/PerformanceGraph.hxx"
 
 struct InstanceWithDebug;
@@ -74,8 +76,6 @@ struct AppGpuState {
 struct AppPipelines {
     ShaderHandle fullscreen_vs{};
 
-    PipelineHandle flags_pipeline{};
-    PipelineHandle compact_pipeline{};
     PipelineHandle finalise_compact_pipeline{};
     PipelineHandle debug_point_light_pipeline{};
     PipelineHandle debug_light_clustering{};
@@ -97,6 +97,10 @@ struct AppPipelines {
 
     PipelineHandle ssao_pipeline{};
     PipelineHandle ssao_blur_pipeline{};
+
+    PipelineHandle bloom_threshold_pipeline{};
+PipelineHandle  bloom_downsample_pipeline{};
+PipelineHandle bloom_upsample_pipeline{};
 
     std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
@@ -155,14 +159,13 @@ struct MeshInstanceRanges {
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
 
+    std::unique_ptr<FrameUBO> frame_ubo {std::make_unique<FrameUBO>()};
+
     std::vector<StaticMesh> meshes{};
     std::vector<MeshInstanceRange> mesh_instance_ranges;
+    u32 flushed_instance_count{0};
 
-    auto instance_count() const {
-        return mesh_instance_ranges.empty()
-                       ? 0
-                       : (mesh_instance_ranges.back().base_instance + mesh_instance_ranges.back().instance_count);
-    }
+    auto instance_count() const {return flushed_instance_count;}
 
     std::vector<PointLight> all_point_lights{};
     std::vector<PointLight> all_point_lights_zero{};
@@ -205,6 +208,11 @@ struct AppResources {
     BufferHandle noise_ssao_kernel{};
     BufferHandle ssao_hemisphere_kernel{};
 
+    Vec<TextureHandle> bloom_downsample{};
+    Vec<TextureHandle> bloom_upsample{};
+    TextureHandle bloom_threshold{};
+    u32 bloom_mip_count{6};
+
     static constexpr u32 max_draws_per_frame = 100000U;
     AlignedRingBuffer<VkDrawIndexedIndirectCommand> indirect_ring{};
     AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> mesh_indirect_ring{};
@@ -214,6 +222,17 @@ struct AppResources {
         FrameIndirectWriter writer{};
         auto begin_frame() -> void { writer.cursor = 0; }
     } draw_stream{};
+};
+
+struct OutlinerState {
+    entt::entity last_decomposed = entt::null;
+    std::unordered_map<entt::entity, glm::vec3> euler_cache;
+};
+struct AppScene {
+    Scene scene{};
+    RenderQueue render_queue{};
+    entt::entity selected_entity = entt::null;
+    OutlinerState outliner_state{};
 };
 
 
@@ -231,7 +250,7 @@ struct ViewportInput {
     bool imgui_blocks_mouse{false};
     bool imgui_blocks_keyboard{false};
 
-    auto extent() const -> VkExtent2D {
+    [[nodiscard]] auto extent() const -> VkExtent2D {
         return VkExtent2D{static_cast<u32>(std::max(1.0f, max.x - min.x)),
                           static_cast<u32>(std::max(1.0f, max.y - min.y))};
     }
@@ -261,6 +280,21 @@ struct PendingResize {
     double last_change_time_s{0.0};
 };
 
+struct BloomConfig {
+    float threshold{
+        0.5f
+    };
+    float knee{
+        0.1f
+    };
+    float radius{
+        0.003f
+    };
+    float strength{
+        1.0f
+    };
+};
+
 struct AppUI {
     AppState app_state{};
     std::unique_ptr<ImGuiRenderer> gui{};
@@ -285,6 +319,8 @@ struct AppUI {
     LatestBuffer<double> last_graphics_res;
     LatestBuffer<GraphicsGpuStats> last_g_stats;
     LatestBuffer<ComputeGpuStats> last_c_stats;
+
+    BloomConfig bloom_config{};
 
     enum class ClusterDebugMode : u32 {
         None = 0,
@@ -311,6 +347,7 @@ struct AppContext {
     AppPipelines &pipes;
     AppResources &res;
     AppUI &ui;
+    AppScene& scene;
 };
 
 class BindlessApp {
