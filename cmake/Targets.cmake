@@ -143,6 +143,7 @@ target_link_libraries(BindlessEngine PUBLIC
   BZip2::BZip2
   $<$<BOOL:${HAS_IMAGE_WRITERS}>:ImageOperations>
   EnTT::EnTT
+  meshoptimizer
 )
 
 # Slang runtime deps only when runtime path

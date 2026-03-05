@@ -99,6 +99,13 @@ CPMAddPackage(
   OPTIONS "FASTGLTF_COMPILE_AS_CPP20 ON FASTGLTF_USE_CUSTOM_SMALLVECTOR ON"
 )
 
+# git@github.com:zeux/meshoptimizer.git
+CPMAddPackage(
+  URI "gh:zeux/meshoptimizer"
+  GIT_TAG "89d53a0facf5af456c595db7f398dc50e1d72c5a"
+  GIT_SHALLOW YES
+)
+
 CPMAddPackage(
   URI "gh:skypjack/entt"
   GIT_TAG "9fdc43f6f8189581ccc81dace2ece1d5a981ace0"

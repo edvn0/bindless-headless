@@ -29,6 +29,8 @@
 #include <ktx.h>
 #include <ktxvulkan.h>
 
+#include <meshoptimizer.h>
+
 #define TINYOBJLOADER_USE_MAPBOX_EARCUT
 #include <tiny_obj_loader.h>
 
@@ -1199,6 +1201,7 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     }
     mesh.indices.assign(file_indices.begin(), file_indices.end());
 
+
     // -------------------------------------------------------------------------
     // 10. Convert file Submesh -> runtime Submesh
     // -------------------------------------------------------------------------
@@ -1220,6 +1223,18 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
                 .alpha_tested = alpha,
         });
         submesh_material_ids.emplace_back(mat_idx);
+    }
+
+    for (auto &sm: mesh.submeshes) {
+        const size_t index_count = sm.index_count;
+        const size_t vertex_count = mesh.vertices.size();
+
+        u32 *idx_begin = mesh.indices.data() + sm.index_offset;
+
+        meshopt_optimizeVertexCache(idx_begin, idx_begin, index_count, vertex_count);
+
+        meshopt_optimizeOverdraw(idx_begin, idx_begin, index_count, &mesh.vertices[0].position.x, vertex_count,
+                                 sizeof(Vertex), 1.05f);
     }
 
     // -------------------------------------------------------------------------
