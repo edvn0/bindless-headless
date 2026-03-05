@@ -1,3 +1,4 @@
+// SceneLoader.hxx
 #pragma once
 
 #include <filesystem>
@@ -7,15 +8,16 @@
 #include "Numeric.hxx"
 
 #include <array>
+#include <bit>
 #include <cstring>
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
 namespace Tooling {
-
 
     static constexpr u32 k_version = 2;
     static constexpr u32 k_lod_count = 4;
@@ -113,9 +115,7 @@ namespace Tooling {
             using is_transparent = void;
 
             auto operator()(std::string_view s) const noexcept -> usize { return std::hash<std::string_view>{}(s); }
-
             auto operator()(const std::string &s) const noexcept -> usize { return std::hash<std::string_view>{}(s); }
-
             auto operator()(const char *s) const noexcept -> usize { return std::hash<std::string_view>{}(s); }
         };
 
@@ -123,8 +123,7 @@ namespace Tooling {
         std::vector<char> m_blob; // null-terminated strings
     };
 
-    static constexpr u32 k_magic = 0x31534E43; // 'CNS1' (pick any)
-
+    static constexpr u32 k_magic = 0x31534E43; // 'CNS1'
 
     struct FileHeader {
         u32 magic = k_magic;
@@ -151,20 +150,17 @@ namespace Tooling {
         BlobRange texture_blob; // concatenated KTX2 files
     };
 
-    // Keep your 10_10_10_2 packing; recommend tangent.w = handedness.
     struct Vertex {
         std::array<float, 3> position{};
-        u32 uvs{}; // packed half2 (x = u, y = v)
-        u32 normal; // packed 10_10_10_2
-        u32 tangent; // packed 10_10_10_2 (xyz + sign in w or last bits)
-        u32 reserved; // pad to 32 bytes
+        u32 uvs{}; // packed half2 (x=u, y=v)
+        u32 normal{}; // packed 10_10_10_2
+        u32 tangent{}; // packed 10_10_10_2 (xyz + sign in w/2 bits)
+        u32 reserved{}; // note: keeps sizeof(Vertex)==28
     };
     static_assert(sizeof(Vertex) == 28);
     static_assert(std::is_trivially_copyable_v<Vertex>);
     static_assert(alignof(Vertex) == 4);
 
-    // This is the runtime GPU material payload (your struct, but POD-safe).
-    // IMPORTANT: GLM types are not ABI-stable on disk -> use float arrays.
     struct GPUMaterial {
         u32 albedo_map = 0xFFFFFFFFu;
         std::array<float, 4> albedo_factor{1, 1, 1, 1};
@@ -184,34 +180,38 @@ namespace Tooling {
         u32 reserved0 = 0;
     };
 
-    // Texture entry points to one KTX2 byte-range in texture_blob.
-    // original_path/name are optional debug strings; runtime can ignore.
     struct Texture {
         u32 original_path_str = 0; // offset into string_blob (0 means none)
         u32 name_str = 0; // optional
         u32 reserved0 = 0;
         u32 reserved1 = 0;
 
-        u64 ktx2_offset = 0; // file offset to KTX2 bytes (NOT relative to texture_blob)
+        u64 ktx2_offset = 0; // file offset to KTX2 bytes (absolute from file start)
         u64 ktx2_size = 0;
     };
     static_assert(sizeof(Texture) == 32);
 
     class SceneLoader {
-    private:
-        std::filesystem::path assets_dir{"assets/meshes"};
-
     public:
-        explicit SceneLoader(const std::filesystem::path &assets = "assets/meshes") : assets_dir(assets) {}
+        // Mesh input root. Convention: scene_path is relative to this.
+        explicit SceneLoader(const std::filesystem::path &meshes_root = "assets/meshes") : m_meshes_root(meshes_root) {}
 
-        /**
-         * @brief Converts a GLTF file to a serialised scene format. Performs ktx mipmapping and texture packing as part
-         * of the conversion.
-         * @param scene_path The path to the GLTF file.
-         * @param output_path The path to the output file.
-         * @return tl::expected<void, Error> indicating success or failure.
-         */
+        // scene_path: relative to meshes_root(), e.g. "myMesh/myMesh.gltf"
+        // output_path: relative to meshes_root() unless absolute (you can pass e.g. "myMesh/myMesh")
         auto convert_gltf(const std::filesystem::path &scene_path, const std::filesystem::path &output_path)
                 -> tl::expected<void, Error>;
+
+        [[nodiscard]] auto meshes_root() const -> const std::filesystem::path & { return m_meshes_root; }
+
+    private:
+        std::filesystem::path m_meshes_root;
+
+        static auto resolve_under(const std::filesystem::path &root, const std::filesystem::path &p)
+                -> std::filesystem::path {
+            if (p.is_absolute())
+                return p;
+            return root / p;
+        }
     };
+
 } // namespace Tooling

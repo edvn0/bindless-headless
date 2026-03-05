@@ -61,6 +61,7 @@ struct Transform {
 struct InstanceData {
     Transform transform;
     uint lod_level;
+    uint padding[3];
 };
 
 float4 unpackSnorm3x10_1x2(uint packed)

@@ -1,3 +1,4 @@
+// SceneLoader.cxx
 #include "SceneLoader.hxx"
 
 #include <algorithm>
@@ -8,10 +9,12 @@
 #include <glm/gtc/packing.hpp>
 #include <iterator>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -34,13 +37,11 @@
 #include <3PP/stb_image_resize2.h>
 #include <bzlib.h>
 
-
 namespace Tooling {
 
     namespace {
 
         constexpr u64 k_align = 16;
-
         constexpr u64 k_prefix_magic = 0x454E4543534E5331ULL; // 'SNS1CENE'
 
         auto fnv1a_64(std::span<const std::byte> data) -> u64 {
@@ -91,14 +92,18 @@ namespace Tooling {
             return hash;
         }
 
-        auto write_file_bytes(const std::filesystem::path &path, std::span<std::byte> bytes, u64 src_hash)
-                -> tl::expected<void, Error> {
-            auto out_path = path;
+        auto normalize_scene_out_path(std::filesystem::path out_path) -> std::filesystem::path {
             if (out_path.has_extension()) {
                 out_path.replace_extension(".scene.bz2");
             } else {
                 out_path += ".scene.bz2";
             }
+            return out_path;
+        }
+
+        auto write_file_bytes_abs(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes,
+                                  u64 src_hash) -> tl::expected<void, Error> {
+            auto out_path = normalize_scene_out_path(out_path_no_normalize);
             info("Writing output scene file: {}", out_path.string());
 
             auto compressed_size = static_cast<unsigned int>(static_cast<float>(bytes.size()) * 1.01f + 600);
@@ -173,11 +178,10 @@ namespace Tooling {
             }
         }
 
-
         struct LoadedImageRGBA {
-            TextureUsage usage;
-            int width;
-            int height;
+            TextureUsage usage{};
+            int width{};
+            int height{};
             auto oetf() const { return texture_usage_to_oetf(usage); }
             std::vector<u8> rgba{};
         };
@@ -214,6 +218,7 @@ namespace Tooling {
             ci.baseHeight = static_cast<ktx_uint32_t>(img.height);
             ci.baseDepth = 1;
             ci.numDimensions = 2;
+
             auto calculate_mips = [](int w, int h) {
                 int levels = 1;
                 while (w > 1 || h > 1) {
@@ -223,6 +228,7 @@ namespace Tooling {
                 }
                 return levels;
             };
+
             ci.numLevels = generate_mips ? static_cast<ktx_uint32_t>(calculate_mips(img.width, img.height)) : 1;
             ci.numLayers = 1;
             ci.numFaces = 1;
@@ -254,8 +260,7 @@ namespace Tooling {
                     std::vector<unsigned char> mip_data(mip_w * mip_h * 4);
 
                     const unsigned char *result = stbir_resize_uint8_linear(
-                            reinterpret_cast<const unsigned char *>(prev_level_data.data()), prev_w, prev_h, 0,
-                            reinterpret_cast<unsigned char *>(mip_data.data()), mip_w, mip_h, 0, STBIR_RGBA);
+                            prev_level_data.data(), prev_w, prev_h, 0, mip_data.data(), mip_w, mip_h, 0, STBIR_RGBA);
 
                     if (result == nullptr) {
                         ktxTexture2_Destroy(ktx2);
@@ -308,13 +313,14 @@ namespace Tooling {
         }
 
         auto get_gltf_image_bytes(const fastgltf::Asset &asset, const fastgltf::Image &image,
-                                  const std::filesystem::path &base_dir)
+                                  const std::filesystem::path &gltf_dir_abs)
                 -> tl::expected<std::vector<std::byte>, Error> {
+
             if (auto *uri = std::get_if<fastgltf::sources::URI>(&image.data)) {
                 if (!uri->uri.valid())
                     return tl::unexpected(make_error("Image has empty URI"));
 
-                const auto img_path = base_dir / uri->uri.fspath();
+                const auto img_path = gltf_dir_abs / uri->uri.fspath();
                 auto bytes = read_file_bytes(img_path);
                 if (!bytes)
                     return tl::unexpected(bytes.error());
@@ -331,8 +337,8 @@ namespace Tooling {
                         return std::span<const std::byte>(reinterpret_cast<const std::byte *>(vec->bytes.data()),
                                                           vec->bytes.size());
                     }
-                    if (auto *uri = std::get_if<fastgltf::sources::URI>(&buf.data)) {
-                        (void) uri;
+                    if (auto *u = std::get_if<fastgltf::sources::URI>(&buf.data)) {
+                        (void) u;
                         return tl::unexpected(
                                 make_error("BufferView points to external buffer; handle by pre-loading buffers"));
                     }
@@ -393,45 +399,48 @@ namespace Tooling {
 
     auto SceneLoader::convert_gltf(const std::filesystem::path &scene_path, const std::filesystem::path &output_path)
             -> tl::expected<void, Error> {
-        const auto base_dir = assets_dir / scene_path.parent_path();
 
-        auto src_bytes = read_file_bytes(scene_path);
+        // --- Path model (single source of truth) ---
+        // m_meshes_root is the root for mesh assets, e.g. "assets/meshes".
+        // scene_path is relative to that root, e.g. "myMesh/myMesh.gltf".
+        const std::filesystem::path scene_abs = resolve_under(m_meshes_root, scene_path);
+        const std::filesystem::path gltf_dir_abs = scene_abs.parent_path();
+
+        // Output path is relative to meshes_root by default (unless absolute).
+        const std::filesystem::path out_abs_no_normalize = resolve_under(m_meshes_root, output_path);
+        const std::filesystem::path out_abs = normalize_scene_out_path(out_abs_no_normalize);
+
+        // Hash the source glTF file bytes for up-to-date skipping.
+        auto src_bytes = read_file_bytes(scene_abs);
         if (!src_bytes)
-            return tl::unexpected(
-                    make_error(std::format("Failed to read source for hashing: {}", scene_path.string())));
-
+            return tl::unexpected(make_error(std::format("Failed to read source for hashing: {}", scene_abs.string())));
         const u64 src_hash = fnv1a_64(*src_bytes);
 
-        auto out_path = output_path;
-        if (out_path.has_extension()) {
-            out_path.replace_extension(".scene.bz2");
-        } else {
-            out_path += ".scene.bz2";
-        }
-
-        if (std::filesystem::exists(out_path)) {
-            if (const u64 existing_hash = read_existing_src_hash(out_path); existing_hash == src_hash) {
-                info("Scene up to date, skipping conversion: {}", out_path.string());
+        // Early-out if output exists and hash matches.
+        if (std::filesystem::exists(out_abs)) {
+            if (const u64 existing_hash = read_existing_src_hash(out_abs); existing_hash == src_hash) {
+                info("Scene up to date, skipping conversion: {}", out_abs.string());
                 return {};
             }
-            info("Scene hash mismatch, reconverting: {}", scene_path.string());
+            info("Scene hash mismatch, reconverting: {}", scene_abs.string());
         }
 
         fastgltf::Parser parser(fastgltf::Extensions::KHR_texture_transform |
                                 fastgltf::Extensions::KHR_materials_unlit |
                                 fastgltf::Extensions::KHR_materials_emissive_strength);
 
-        auto loaded = fastgltf::GltfDataBuffer::FromPath(scene_path);
+        auto loaded = fastgltf::GltfDataBuffer::FromPath(scene_abs);
         if (!loaded)
-            return tl::unexpected(make_error(std::format("Failed to read glTF file: {}", scene_path.string())));
+            return tl::unexpected(make_error(std::format("Failed to read glTF file: {}", scene_abs.string())));
         auto data = std::move(loaded.get());
 
         constexpr auto opts = fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages |
                               fastgltf::Options::DecomposeNodeMatrices | fastgltf::Options::GenerateMeshIndices;
 
-        auto asset_exp = parser.loadGltfBinary(data, base_dir, opts, fastgltf::Category::All);
+        // IMPORTANT: glTF base dir must be the directory containing the glTF file.
+        auto asset_exp = parser.loadGltfBinary(data, gltf_dir_abs, opts, fastgltf::Category::All);
         if (!asset_exp) {
-            asset_exp = parser.loadGltf(data, base_dir, opts);
+            asset_exp = parser.loadGltf(data, gltf_dir_abs, opts);
         }
         if (!asset_exp)
             return tl::unexpected(make_error("fastgltf failed to load glTF"));
@@ -455,13 +464,13 @@ namespace Tooling {
             std::string key = std::format("image_index:{}", image_index);
             if (auto *uri = std::get_if<fastgltf::sources::URI>(&img.data)) {
                 if (uri->uri.valid() && !uri->uri.isDataUri())
-                    key = canonical_key(base_dir, uri->uri.fspath().generic_string());
+                    key = canonical_key(gltf_dir_abs, uri->uri.fspath().generic_string());
             }
 
             if (auto it = tex_cache.key_to_index.find(key); it != tex_cache.key_to_index.end())
                 return it->second;
 
-            auto bytes_exp = get_gltf_image_bytes(asset, img, base_dir);
+            auto bytes_exp = get_gltf_image_bytes(asset, img, gltf_dir_abs);
             if (!bytes_exp)
                 return tl::unexpected(bytes_exp.error());
 
@@ -659,7 +668,6 @@ namespace Tooling {
                             remap.data(), local_indices.data(), local_indices.size(), vertices.data() + vertex_offset,
                             prim_vertex_count, sizeof(Vertex));
 
-                    // remap indices (local to this primitive, not yet offset by vertex_offset)
                     meshopt_remapIndexBuffer(opt_indices.data(), local_indices.data(), local_indices.size(),
                                              remap.data());
                     meshopt_optimizeVertexCache(opt_indices.data(), opt_indices.data(), opt_indices.size(), unique);
@@ -667,6 +675,7 @@ namespace Tooling {
                                              &vertices[vertex_offset].position[0], prim_vertex_count, sizeof(Vertex),
                                              1.05f);
                 }
+
                 constexpr std::array<float, k_lod_count> k_lod_ratios = {1.0f, 0.5f, 0.25f, 0.125f};
                 constexpr float k_target_error = 1e-2f;
 
@@ -674,6 +683,7 @@ namespace Tooling {
                 sm.vertex_offset = vertex_offset;
                 sm.vertex_count = static_cast<u32>(prim_vertex_count);
                 sm.material_index = material_index;
+
                 for (u32 lod = 0; lod < k_lod_count; ++lod) {
                     const u32 global_index_offset = static_cast<u32>(indices.size());
 
@@ -688,6 +698,7 @@ namespace Tooling {
 
                         std::vector<u32> simplified(opt_indices.size());
                         float result_error = 0.0f;
+
                         const size_t simplified_count =
                                 meshopt_simplify(simplified.data(), opt_indices.data(), opt_indices.size(),
                                                  &vertices[vertex_offset].position[0], prim_vertex_count,
@@ -776,7 +787,8 @@ namespace Tooling {
 
         w.patch_pod<FileHeader>(header_offset, header);
 
-        return write_file_bytes(output_path, w.data(), src_hash);
+        // Final write.
+        return write_file_bytes_abs(out_abs_no_normalize, w.data(), src_hash);
     }
 
 } // namespace Tooling

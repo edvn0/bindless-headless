@@ -101,8 +101,7 @@ CPMAddPackage(
 
 # git@github.com:zeux/meshoptimizer.git
 CPMAddPackage(
-  URI "gh:zeux/meshoptimizer"
-  GIT_TAG "89d53a0facf5af456c595db7f398dc50e1d72c5a"
+  URI "gh:zeux/meshoptimizer@1.0.1"
   GIT_SHALLOW YES
 )
 

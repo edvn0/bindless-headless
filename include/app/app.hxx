@@ -158,11 +158,14 @@ struct MeshInstanceRanges {
 };
 
 struct InstanceData {
-    glm::mat4x3 transform;
-    u32 lod_level;
+    glm::mat4x3 transform; // sizeof(glm::mat4x3) == 48 bytes
+    u32 lod_level; // sizeof(u32) == 4 bytes
+    std::array<u32, 3> padding{0}; // sizeof(std::array<u32, 3>) == 12 bytes
 
     static auto empty() -> InstanceData { return InstanceData{glm::identity<glm::mat4x3>(), 0}; }
 };
+// Lets align InstanceData
+static_assert(sizeof(InstanceData) % 16 == 0, "Unexpected padding in InstanceData");
 
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
