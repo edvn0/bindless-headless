@@ -1,32 +1,39 @@
 #include "app/render.hxx"
-
 #include "Mesh.hxx"
 
-auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndirectWriter &w,
-                         AlignedRingBuffer<VkDrawIndexedIndirectCommand> &cmd_ring,
-                         AlignedRingBuffer<u32> &material_id_ring, const MeshData &mesh, u32 instance_count,
-                         u32 first_instance) -> DrawRanges {
+auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffers buffers, const MeshData &mesh,
+                         const MeshDrawInfo &draw_info) -> DrawRanges {
     const u32 total_submeshes = static_cast<u32>(mesh.submeshes.size());
-    const u32 opaque_base = w.allocate(total_submeshes);
+    const u32 opaque_base = buffers.writer.allocate(total_submeshes);
 
     std::vector<VkDrawIndexedIndirectCommand> opaque_cmds, alpha_cmds;
     std::vector<u32> opaque_mats, alpha_mats;
 
-    for (const auto &s: mesh.submeshes) {
+    for (u32 si = 0; si < mesh.submeshes.size(); ++si) {
+        const auto &s = mesh.submeshes[si];
+
         VkDrawIndexedIndirectCommand c{
                 .indexCount = s.index_count,
-                .instanceCount = instance_count,
+                .instanceCount = draw_info.instance_count,
                 .firstIndex = s.index_offset,
                 .vertexOffset = 0,
-                .firstInstance = first_instance,
+                .firstInstance = draw_info.first_instance,
         };
+
+        u32 mat_id = draw_info.material_pool_base + s.material_id;
+        for (const auto &ov: draw_info.overrides) {
+            if (ov.mesh_index == draw_info.mesh_index && ov.submesh_index == si) {
+                mat_id = ov.material_pool_index;
+                break;
+            }
+        }
 
         if (s.alpha_tested) {
             alpha_cmds.push_back(c);
-            alpha_mats.push_back(s.material_id);
+            alpha_mats.push_back(mat_id);
         } else {
             opaque_cmds.push_back(c);
-            opaque_mats.push_back(s.material_id);
+            opaque_mats.push_back(mat_id);
         }
     }
 
@@ -34,13 +41,13 @@ auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndirectWrite
     const u32 alpha_count = static_cast<u32>(alpha_cmds.size());
 
     if (opaque_count > 0) {
-        cmd_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_cmds));
-        material_id_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_mats));
+        buffers.cmd_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_cmds));
+        buffers.material_id_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_mats));
     }
 
     if (alpha_count > 0) {
-        cmd_ring.write_elements(ctx, frame_index, opaque_base + opaque_count, std::span(alpha_cmds));
-        material_id_ring.write_elements(ctx, frame_index, opaque_base + opaque_count, std::span(alpha_mats));
+        buffers.cmd_ring.write_elements(ctx, frame_index, opaque_base + opaque_count, std::span(alpha_cmds));
+        buffers.material_id_ring.write_elements(ctx, frame_index, opaque_base + opaque_count, std::span(alpha_mats));
     }
 
     return {
@@ -54,7 +61,6 @@ auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndirectWrite
 auto reserve_light_volumes(RenderContext &ctx, u32 frame_index, FrameIndirectWriter &w,
                            AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> &mesh_cmd_ring,
                            AlignedRingBuffer<u32> &material_id_ring, u32 light_material_id) -> u32 {
-
     const u32 slot = w.allocate(1);
 
     VkDrawMeshTasksIndirectCommandEXT light_cmd{
@@ -64,7 +70,6 @@ auto reserve_light_volumes(RenderContext &ctx, u32 frame_index, FrameIndirectWri
     };
 
     mesh_cmd_ring.write_elements(ctx, frame_index, slot, {&light_cmd, 1});
-
     material_id_ring.write_elements(ctx, frame_index, slot, {&light_material_id, 1});
 
     return slot;

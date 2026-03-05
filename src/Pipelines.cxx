@@ -77,8 +77,8 @@ auto create_compute_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
 }
 
 auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
-                              const std::vector<u32> &vert_code, VkFormat depth_format,
-                              VkSampleCountFlagBits samples) -> CompiledPipeline {
+                              const std::vector<u32> &vert_code, VkFormat depth_format, VkSampleCountFlagBits samples)
+        -> CompiledPipeline {
     VkShaderModule vert_module{};
     auto shader_ci = create_info<VkShaderModuleCreateInfo>();
     shader_ci.codeSize = vert_code.size() * sizeof(u32);
@@ -156,17 +156,19 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{VkVertexInputAttributeDescription{
-            .location = 0,
-            .binding = 0,
-            .format = VK_FORMAT_R32G32B32_SFLOAT,
-            .offset = offsetof(PositionOnlyVertex, pos),
-    }, VkVertexInputAttributeDescription{
-            .location = 1,
-            .binding = 0,
-            .format = VK_FORMAT_R32_UINT,
-            .offset = offsetof(PositionOnlyVertex, uvs),
-    }};
+    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
+            VkVertexInputAttributeDescription{
+                    .location = 0,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32G32B32_SFLOAT,
+                    .offset = offsetof(PositionOnlyVertex, pos),
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 1,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uvs),
+            }};
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
     vertex_input.vertexBindingDescriptionCount = static_cast<u32>(binding_descriptions.size());
@@ -351,8 +353,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
 }
 
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
-                                            VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<u32> &vert_code,
+                                            VkDescriptorSetLayout bindless_layout, const std::vector<u32> &vert_code,
                                             const std::vector<u32> &frag_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
@@ -450,12 +451,12 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
                     .format = VK_FORMAT_R32G32B32_SFLOAT,
                     .offset = offsetof(PositionOnlyVertex, pos),
             },
-                VkVertexInputAttributeDescription{
-                        .location = 1,
-                        .binding = 0,
-                        .format = VK_FORMAT_R32_UINT,
-                        .offset = offsetof(PositionOnlyVertex, uvs),
-                },
+            VkVertexInputAttributeDescription{
+                    .location = 1,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uvs),
+            },
     };
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
@@ -495,9 +496,8 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
     return {pipeline, layout};
 }
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
-                                            VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<u32> &vert_code, VkFormat depth_format,
-                                            VkSampleCountFlagBits samples) -> CompiledPipeline {
+                                            VkDescriptorSetLayout bindless_layout, const std::vector<u32> &vert_code,
+                                            VkFormat depth_format, VkSampleCountFlagBits samples) -> CompiledPipeline {
     VkShaderModule vert_module{};
     auto shader_ci = create_info<VkShaderModuleCreateInfo>();
     shader_ci.codeSize = vert_code.size() * sizeof(u32);
@@ -585,12 +585,12 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
                     .format = VK_FORMAT_R32G32B32_SFLOAT,
                     .offset = offsetof(PositionOnlyVertex, pos),
             },
-                VkVertexInputAttributeDescription{
-                        .location = 1,
-                        .binding = 0,
-                        .format = VK_FORMAT_R32_UINT,
-                        .offset = offsetof(PositionOnlyVertex, uvs),
-                },
+            VkVertexInputAttributeDescription{
+                    .location = 1,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uvs),
+            },
     };
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
@@ -1590,6 +1590,161 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
     vkDestroyShaderModule(device, task_module, nullptr);
     vkDestroyShaderModule(device, mesh_module, nullptr);
     vkDestroyShaderModule(device, frag_module, nullptr);
+
+    return {pipeline, layout};
+}
+
+auto Pipeline::create_mesh_pipeline(const Mesh &info) -> CompiledPipeline {
+    std::vector<VkPipelineShaderStageCreateInfo> stage_cis;
+    std::vector<VkShaderModule> modules;
+
+    auto make_stage = [&](const ShaderStageInfo &s, VkShaderStageFlagBits stage_flag) {
+        VkShaderModule mod{};
+        auto smci = create_info<VkShaderModuleCreateInfo>();
+        smci.codeSize = s.code.size() * sizeof(u32);
+        smci.pCode = s.code.data();
+        vk_check(vkCreateShaderModule(info.device, &smci, nullptr, &mod));
+        modules.push_back(mod);
+
+        auto ci = create_info<VkPipelineShaderStageCreateInfo>();
+        ci.stage = stage_flag;
+        ci.module = mod;
+        ci.pName = s.entry.data();
+        stage_cis.push_back(ci);
+    };
+
+    if (info.stages.task)
+        make_stage(*info.stages.task, VK_SHADER_STAGE_TASK_BIT_EXT);
+    make_stage(info.stages.mesh, VK_SHADER_STAGE_MESH_BIT_EXT);
+    make_stage(info.stages.fragment, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    VkPushConstantRange push_range{
+            .stageFlags = info.push_constant_stages,
+            .offset = 0,
+            .size = info.push_constant_size,
+    };
+
+    auto plci = create_info<VkPipelineLayoutCreateInfo>();
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &info.bindless_layout;
+    if (info.push_constant_size > 0) {
+        plci.pushConstantRangeCount = 1;
+        plci.pPushConstantRanges = &push_range;
+    }
+
+    VkPipelineLayout layout{};
+    vk_check(vkCreatePipelineLayout(info.device, &plci, nullptr, &layout));
+    set_debug_name(info.device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, info.debug_name);
+
+    auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
+    rs.lineWidth = 1.0f;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.cullMode = [&] {
+        switch (info.cull_mode) {
+            case CullMode::back:
+                return VK_CULL_MODE_BACK_BIT;
+            case CullMode::front:
+                return VK_CULL_MODE_FRONT_BIT;
+            default:
+                return VK_CULL_MODE_NONE;
+        }
+    }();
+    rs.depthBiasEnable = info.depth_bias ? VK_TRUE : VK_FALSE;
+
+    auto ms = create_info<VkPipelineMultisampleStateCreateInfo>();
+    ms.rasterizationSamples = info.samples;
+
+    auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
+    ds.minDepthBounds = 0.0f;
+    ds.maxDepthBounds = 1.0f;
+    switch (info.depth_mode) {
+        case DepthMode::write:
+            ds.depthTestEnable = VK_TRUE;
+            ds.depthWriteEnable = VK_TRUE;
+            ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+            break;
+        case DepthMode::test_equal:
+            ds.depthTestEnable = VK_TRUE;
+            ds.depthWriteEnable = VK_FALSE;
+            ds.depthCompareOp = VK_COMPARE_OP_EQUAL;
+            break;
+        case DepthMode::test_greater_equal:
+            ds.depthTestEnable = VK_TRUE;
+            ds.depthWriteEnable = VK_FALSE;
+            ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
+            break;
+        case DepthMode::none:
+        default:
+            ds.depthTestEnable = VK_FALSE;
+            ds.depthWriteEnable = VK_FALSE;
+            ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+            break;
+    }
+
+    std::vector<VkPipelineColorBlendAttachmentState> blend_attachments;
+    std::vector<VkFormat> color_formats;
+    for (const auto &att: info.color_attachments) {
+        color_formats.push_back(att.format);
+        VkPipelineColorBlendAttachmentState a{};
+        a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                           VK_COLOR_COMPONENT_A_BIT;
+        if (att.blend_additive) {
+            a.blendEnable = VK_TRUE;
+            a.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            a.colorBlendOp = VK_BLEND_OP_ADD;
+            a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+            a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            a.alphaBlendOp = VK_BLEND_OP_ADD;
+        }
+        blend_attachments.push_back(a);
+    }
+
+    auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
+    cb.attachmentCount = static_cast<u32>(blend_attachments.size());
+    cb.pAttachments = blend_attachments.empty() ? nullptr : blend_attachments.data();
+
+    auto ri = create_info<VkPipelineRenderingCreateInfo>();
+    ri.colorAttachmentCount = static_cast<u32>(color_formats.size());
+    ri.pColorAttachmentFormats = color_formats.empty() ? nullptr : color_formats.data();
+    ri.depthAttachmentFormat = info.depth_format;
+    ri.stencilAttachmentFormat = VK_FORMAT_UNDEFINED;
+
+    auto vp = create_info<VkPipelineViewportStateCreateInfo>();
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    std::vector<VkDynamicState> dynamic_states{VK_DYNAMIC_STATE_VIEWPORT,           VK_DYNAMIC_STATE_SCISSOR,
+                                               VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE,
+                                               VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,   VK_DYNAMIC_STATE_CULL_MODE};
+    for (auto s: info.extra_dynamic_states)
+        dynamic_states.push_back(s);
+
+    auto dy = create_info<VkPipelineDynamicStateCreateInfo>();
+    dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
+    dy.pDynamicStates = dynamic_states.data();
+
+    auto gpci = create_info<VkGraphicsPipelineCreateInfo>();
+    gpci.pNext = &ri;
+    gpci.stageCount = static_cast<u32>(stage_cis.size());
+    gpci.pStages = stage_cis.data();
+    gpci.pViewportState = &vp;
+    gpci.pRasterizationState = &rs;
+    gpci.pMultisampleState = &ms;
+    gpci.pDepthStencilState = &ds;
+    gpci.pColorBlendState = &cb;
+    gpci.pDynamicState = &dy;
+    gpci.layout = layout;
+    gpci.basePipelineHandle = VK_NULL_HANDLE;
+    gpci.basePipelineIndex = -1;
+
+    VkPipeline pipeline{};
+    VkPipelineCache cache_handle = info.cache ? info.cache->get() : VK_NULL_HANDLE;
+    vk_check(vkCreateGraphicsPipelines(info.device, cache_handle, 1, &gpci, nullptr, &pipeline));
+    set_debug_name(info.device, VK_OBJECT_TYPE_PIPELINE, pipeline, info.debug_name);
+
+    for (auto mod: modules)
+        vkDestroyShaderModule(info.device, mod, nullptr);
 
     return {pipeline, layout};
 }

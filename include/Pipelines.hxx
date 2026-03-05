@@ -5,6 +5,7 @@
 #include "Constants.hxx"
 #include "Forward.hxx"
 #include "Types.hxx"
+#include "app/math.hxx"
 
 #include <array>
 #include <ranges>
@@ -13,6 +14,9 @@
 
 inline constexpr u32 THREADS_PER_GROUP = 64;
 inline constexpr u32 MAX_WAVES_PER_GROUP = 4;
+
+template<typename>
+using DeviceReadPtr = DeviceAddress;
 
 struct PointLightCullingPushConstants {
     const DeviceAddress ubo;
@@ -64,7 +68,7 @@ struct TonemapPushConstants {
     float exposure;
     const u32 image_index;
     const u32 sampler_index;
-    const u32   bloom_index;
+    const u32 bloom_index;
     float bloom_strength;
 };
 
@@ -88,7 +92,7 @@ struct DeferredLightingPushConstants {
     const glm::mat4 shadow_matrix;
     float log_z_scale;
     f32 near_plane{z_near};
-    f32 far_plane {z_far};
+    f32 far_plane{z_far};
 
     u32 tiles_x;
     u32 tiles_y;
@@ -168,26 +172,35 @@ struct SSAOBlurPushConstants {
 };
 
 struct BloomThresholdPushConstants {
-    u32 src_index;       // lit_hdr bindless index
-    u32 dst_index;       // bloom_threshold bindless UAV index
+    u32 src_index; // lit_hdr bindless index
+    u32 dst_index; // bloom_threshold bindless UAV index
     u32 sampler_index;
-    float threshold;     // luminance knee, ~1.0 for physical
-    float knee;          // soft knee width
+    float threshold; // luminance knee, ~1.0 for physical
+    float knee; // soft knee width
 };
 
 struct BloomDownsamplePushConstants {
     u32 src_index;
     u32 dst_index;
     u32 sampler_index;
-    glm::vec2 src_texel_size;  // 1.0 / src_extent, avoids dynamic indexing in shader
+    glm::vec2 src_texel_size; // 1.0 / src_extent, avoids dynamic indexing in shader
 };
 
 struct BloomUpsamplePushConstants {
-    u32 src_index;          // current level
-    u32 accumulate_index;   // level below (being written into)
+    u32 src_index; // current level
+    u32 accumulate_index; // level below (being written into)
     u32 sampler_index;
-    float filter_radius;    // tent radius in UV space, ~0.005
-    float strength;         // blend weight on upsample accumulation
+    float filter_radius; // tent radius in UV space, ~0.005
+    float strength; // blend weight on upsample accumulation
+};
+
+struct BillboardPushConstants {
+    DeviceReadPtr<FrameUBO> frame_ubo;
+    DeviceReadPtr<PointLight> point_lights;
+    u32 light_count;
+    u32 texture_index;
+    u32 sampler_index;
+    float world_size; // billboard size in world units e.g. 0.25
 };
 
 struct CompiledPipeline {
@@ -233,14 +246,12 @@ auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, 
         -> CompiledPipeline;
 
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
-                                            VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<u32> &vert_code,
+                                            VkDescriptorSetLayout bindless_layout, const std::vector<u32> &vert_code,
                                             const std::vector<u32> &frag_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline;
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
-                                            VkDescriptorSetLayout bindless_layout,
-                                            const std::vector<u32> &vert_code, VkFormat depth_format,
-                                            VkSampleCountFlagBits samples) -> CompiledPipeline;
+                                            VkDescriptorSetLayout bindless_layout, const std::vector<u32> &vert_code,
+                                            VkFormat depth_format, VkSampleCountFlagBits samples) -> CompiledPipeline;
 
 auto create_tonemap_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &,
                              const std::vector<u32> &, const std::string_view, const std::string_view, VkFormat)
@@ -267,7 +278,7 @@ namespace Pipeline {
     };
 
     struct ColorAttachmentInfo {
-        VkFormat format {VK_FORMAT_UNDEFINED};
+        VkFormat format{VK_FORMAT_UNDEFINED};
         bool blend_additive = false; // false = no blend, true = additive (light volumes)
     };
 
@@ -328,4 +339,38 @@ namespace Pipeline {
     };
     auto create_fullscreen_pipeline(const Fullscreen &) -> CompiledPipeline;
     [[nodiscard]] auto get_or_create_fullscreen_vs(RenderContext &) -> u32;
+
+    struct MeshStages {
+        // Task shader is optional — omit for simple mesh pipelines
+        std::optional<ShaderStageInfo> task;
+        ShaderStageInfo mesh;
+        ShaderStageInfo fragment;
+    };
+
+    struct Mesh {
+        VkDevice device;
+        PipelineCache *cache;
+        VkDescriptorSetLayout bindless_layout;
+        std::string_view debug_name;
+
+        MeshStages stages;
+
+        u32 push_constant_size = 0;
+        VkShaderStageFlags push_constant_stages =
+                VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        std::span<const ColorAttachmentInfo> color_attachments;
+        VkFormat depth_format = VK_FORMAT_UNDEFINED;
+
+        DepthMode depth_mode = DepthMode::none;
+        CullMode cull_mode = CullMode::none;
+        bool depth_bias = false;
+
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+
+        std::span<const VkDynamicState> extra_dynamic_states{};
+    };
+
+    auto create_mesh_pipeline(const Mesh &info) -> CompiledPipeline;
+
 } // namespace Pipeline

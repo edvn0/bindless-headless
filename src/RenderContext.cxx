@@ -72,6 +72,23 @@ auto RenderContext::create_pipeline(CompiledPipeline &&state) -> PipelineHandle 
 
 auto RenderContext::create_shader(VkShaderModule &&module) -> ShaderHandle { return shaders.create(std::move(module)); }
 
+auto RenderContext::create_material(GPUMaterialData &&mat) -> MaterialHandle {
+    auto handle = materials.cpu_pool.create(std::move(mat));
+
+    constexpr auto max = std::numeric_limits<u32>::max();
+
+    const u32 gpu_slot = materials.gpu_count++;
+    if (materials.pool_to_gpu.size() <= handle.index())
+        materials.pool_to_gpu.resize(handle.index() + 1, max);
+    if (materials.gpu_to_pool.size() <= gpu_slot)
+        materials.gpu_to_pool.resize(gpu_slot + 1, max);
+
+    materials.pool_to_gpu[handle.index()] = gpu_slot;
+    materials.gpu_to_pool[gpu_slot] = handle.index();
+    materials.dirty = true;
+    return handle;
+}
+
 auto RenderContext::device_address(BufferHandle handle) -> DeviceAddress {
     if (const auto *buf = buffers.get(handle)) [[likely]] {
         return buf->device_address();

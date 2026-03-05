@@ -940,10 +940,10 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
     ici.arrayLayers = num_layers;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
-ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
-    ici.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
-}
+    ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
+        ici.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
     ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (ktx->isCubemap)
@@ -1044,31 +1044,31 @@ if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPT
     }
 
     const u32 cube_layers = std::max(1u, ktx->numLayers);
-const bool is_cubemap = ktx->isCubemap != 0;
-const u32 face_layers = is_cubemap ? (cube_layers * 6u) : cube_layers;
+    const bool is_cubemap = ktx->isCubemap != 0;
+    const u32 face_layers = is_cubemap ? (cube_layers * 6u) : cube_layers;
 
-srv_ci = create_info<VkImageViewCreateInfo>();
-srv_ci.image = image;
-srv_ci.viewType = (cube_layers > 1) ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE;
-srv_ci.format = vkFormat;
-srv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
-vk_check(vkCreateImageView(device, &srv_ci, nullptr, &t.sampled_view));
-set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
-t.sampled_view_type = srv_ci.viewType;
+    srv_ci = create_info<VkImageViewCreateInfo>();
+    srv_ci.image = image;
+    srv_ci.viewType = (cube_layers > 1) ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE;
+    srv_ci.format = vkFormat;
+    srv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
+    vk_check(vkCreateImageView(device, &srv_ci, nullptr, &t.sampled_view));
+    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
+    t.sampled_view_type = srv_ci.viewType;
 
-if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
-    auto uav_ci = create_info<VkImageViewCreateInfo>();
-    uav_ci.image = image;
-    uav_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    uav_ci.format = vkFormat;
-    uav_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
-    vk_check(vkCreateImageView(device, &uav_ci, nullptr, &t.storage_view));
-    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
-    t.storage_view_type = uav_ci.viewType;
-} else {
-    t.storage_view = VK_NULL_HANDLE;
-    t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
-}
+    if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
+        auto uav_ci = create_info<VkImageViewCreateInfo>();
+        uav_ci.image = image;
+        uav_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        uav_ci.format = vkFormat;
+        uav_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
+        vk_check(vkCreateImageView(device, &uav_ci, nullptr, &t.storage_view));
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
+        t.storage_view_type = uav_ci.viewType;
+    } else {
+        t.storage_view = VK_NULL_HANDLE;
+        t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
+    }
 
     auto rtv_ci = create_info<VkImageViewCreateInfo>();
     rtv_ci.image = image;
@@ -1466,3 +1466,45 @@ auto throttle(auto &tl, VkDevice device) -> void {
 }
 
 auto throttle(ComputeTimeline &tl, VkDevice device) -> void { return throttle<ComputeTimeline>(tl, device); }
+
+auto flush_material_pool(RenderContext &ctx) -> void {
+    auto &pool = ctx.materials;
+
+    if (!pool.dirty) [[likely]]
+        return;
+
+    std::vector<GPUMaterialData> gpu_data(pool.gpu_count);
+    for (u32 gpu_slot = 0; gpu_slot < pool.gpu_count; ++gpu_slot) {
+        const u32 pool_idx = pool.gpu_to_pool[gpu_slot];
+        const auto *mat = pool.cpu_pool.get(pool.cpu_pool.get_handle(pool_idx));
+        if (mat)
+            gpu_data[gpu_slot] = *mat;
+    }
+
+    auto old_handle = pool.gpu_buffer;
+    auto buf = Buffer::from_slice<GPUMaterialData>(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                   std::span{gpu_data}, "global_material_pool")
+                       .value();
+
+    destroy(ctx, old_handle);
+    pool.gpu_buffer = ctx.create_buffer(std::move(buf));
+    pool.dirty = false;
+}
+
+auto GPUMaterialPool::register_batch(std::span<const GPUMaterialData> mats) -> u32 {
+    const u32 base = gpu_count;
+    for (const auto &mat: mats) {
+        const auto handle = cpu_pool.create(GPUMaterialData{mat});
+        const u32 gpu_slot = gpu_count++;
+
+        if (pool_to_gpu.size() <= handle.index())
+            pool_to_gpu.resize(handle.index() + 1, UINT32_MAX);
+        if (gpu_to_pool.size() <= gpu_slot)
+            gpu_to_pool.resize(gpu_slot + 1, UINT32_MAX);
+
+        pool_to_gpu[handle.index()] = gpu_slot;
+        gpu_to_pool[gpu_slot] = handle.index();
+    }
+    dirty = true;
+    return base;
+}

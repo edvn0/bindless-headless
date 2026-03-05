@@ -20,10 +20,30 @@ struct DrawRanges {
     u32 alpha_count;
 };
 
-auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, FrameIndirectWriter &w,
-                         AlignedRingBuffer<VkDrawIndexedIndirectCommand> &cmd_ring,
-                         AlignedRingBuffer<u32> &material_id_ring, const MeshData &mesh, u32 instance_count,
-                         u32 first_instance) -> DrawRanges;
+using MaterialBaseOffset = u32;
+
+struct SubmeshMaterialOverride {
+    u32 mesh_index;
+    u32 submesh_index;
+    u32 material_pool_index; // global pool index
+};
+
+struct IndirectWriteBuffers {
+    FrameIndirectWriter &writer;
+    AlignedRingBuffer<VkDrawIndexedIndirectCommand> &cmd_ring;
+    AlignedRingBuffer<u32> &material_id_ring;
+};
+
+struct MeshDrawInfo {
+    u32 mesh_index;
+    u32 material_pool_base;
+    u32 instance_count;
+    u32 first_instance;
+    std::span<const SubmeshMaterialOverride> overrides;
+};
+
+auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffers buffers, const MeshData &mesh,
+                         const MeshDrawInfo &draw_info) -> DrawRanges;
 auto reserve_light_volumes(RenderContext &, u32, FrameIndirectWriter &,
                            AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> &, AlignedRingBuffer<u32> &, u32)
         -> u32;

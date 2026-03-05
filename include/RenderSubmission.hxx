@@ -7,7 +7,6 @@
 struct MeshSubmission {
     u32 mesh_index; // Inside of the renderer - the index of the DrawID really.
     glm::mat4x3 transform;
-    u32 material_id;
 };
 
 struct RenderQueue {
@@ -18,7 +17,7 @@ struct RenderQueue {
     static constexpr usize shrink_threshold_frames = 120;
     static constexpr float shrink_factor = 0.75f;
 
-    auto submit(MeshSubmission&& sub) -> void { meshes.emplace_back(sub); }
+    auto submit(MeshSubmission &&sub) -> void { meshes.emplace_back(sub); }
 
     auto flush() -> std::span<const MeshSubmission> { return meshes; }
 

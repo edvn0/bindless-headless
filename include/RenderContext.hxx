@@ -52,6 +52,10 @@ struct RenderContext {
     ShaderPool shaders{};
     auto create_shader(VkShaderModule &&) -> ShaderHandle;
 
+    GPUMaterialPool materials{};
+    auto create_material(GPUMaterialData &&) -> MaterialHandle;
+    auto update_material(MaterialHandle, const GPUMaterialData &) -> void;
+
     auto device_address(BufferHandle) -> DeviceAddress;
     auto flush_mapped_memory(BufferHandle, std::size_t offset, std::size_t size) const -> void;
     [[nodiscard]] auto texture_format(TextureHandle) const -> VkFormat;

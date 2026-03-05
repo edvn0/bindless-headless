@@ -99,8 +99,10 @@ struct AppPipelines {
     PipelineHandle ssao_blur_pipeline{};
 
     PipelineHandle bloom_threshold_pipeline{};
-PipelineHandle  bloom_downsample_pipeline{};
-PipelineHandle bloom_upsample_pipeline{};
+    PipelineHandle bloom_downsample_pipeline{};
+    PipelineHandle bloom_upsample_pipeline{};
+
+    PipelineHandle billboard_pipeline{};
 
     std::array<QueryPoolHandle, frames_in_flight> compute_query_pool{};
     std::array<QueryPoolHandle, frames_in_flight> graphics_query_pool{};
@@ -141,7 +143,7 @@ struct Cluster {
 struct MeshInstanceRange {
     u32 mesh_index;
     u32 instance_count;
-    u32 base_instance; // offset into transforms ring
+    u32 base_instance;
 };
 
 struct MeshInstanceRanges {
@@ -159,13 +161,14 @@ struct MeshInstanceRanges {
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
 
-    std::unique_ptr<FrameUBO> frame_ubo {std::make_unique<FrameUBO>()};
+    std::unique_ptr<FrameUBO> frame_ubo{std::make_unique<FrameUBO>()};
 
     std::vector<StaticMesh> meshes{};
     std::vector<MeshInstanceRange> mesh_instance_ranges;
+    Vec<SubmeshMaterialOverride> submesh_material_overrides;
     u32 flushed_instance_count{0};
 
-    auto instance_count() const {return flushed_instance_count;}
+    auto instance_count() const { return flushed_instance_count; }
 
     std::vector<PointLight> all_point_lights{};
     std::vector<PointLight> all_point_lights_zero{};
@@ -213,7 +216,7 @@ struct AppResources {
     TextureHandle bloom_threshold{};
     u32 bloom_mip_count{6};
 
-    static constexpr u32 max_draws_per_frame = 100000U;
+    static constexpr u32 max_draws_per_frame = 100'000U;
     AlignedRingBuffer<VkDrawIndexedIndirectCommand> indirect_ring{};
     AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> mesh_indirect_ring{};
     AlignedRingBuffer<u32> draw_material_id_ring{};
@@ -281,18 +284,10 @@ struct PendingResize {
 };
 
 struct BloomConfig {
-    float threshold{
-        0.5f
-    };
-    float knee{
-        0.1f
-    };
-    float radius{
-        0.003f
-    };
-    float strength{
-        1.0f
-    };
+    float threshold{0.5f};
+    float knee{0.1f};
+    float radius{0.003f};
+    float strength{1.0f};
 };
 
 struct AppUI {
@@ -347,7 +342,7 @@ struct AppContext {
     AppPipelines &pipes;
     AppResources &res;
     AppUI &ui;
-    AppScene& scene;
+    AppScene &scene;
 };
 
 class BindlessApp {

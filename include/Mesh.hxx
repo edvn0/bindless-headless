@@ -86,7 +86,8 @@ struct Vertex {
 
     auto operator<=>(const Vertex &other) const {
         return std::tie(position.x, position.y, position.z, normal, uvs, tangent, bitangent) <=>
-               std::tie(other.position.x, other.position.y, other.position.z, other.normal, other.uvs, other.tangent, other.bitangent);
+               std::tie(other.position.x, other.position.y, other.position.z, other.normal, other.uvs, other.tangent,
+                        other.bitangent);
     }
 
     auto operator==(const Vertex &other) const -> bool = default;
@@ -97,7 +98,6 @@ struct PositionOnlyVertex {
     glm::vec3 pos;
     u32 uvs;
 };
-
 
 
 struct MeshData {
@@ -123,13 +123,11 @@ struct LoadedTextureTable {
 
 struct StaticMesh {
     MeshData mesh;
-    std::unordered_map<std::string, MaterialData> materials;
-    Vec<GPUMaterialData> gpu_materials;
     Vec<VkDrawIndexedIndirectCommand> indirect_template;
-    // GPUMaterialData
-    BufferHandle material_buffer;
-    // Submesh -> Material mapping
-    BufferHandle material_ids_buffer;
+
+    u32 material_pool_base{0}; // index of first material in global GPUMaterialPool
+    u32 material_count{0}; // how many materials this mesh owns in the pool
+
     BufferHandle vertex_buffer;
     BufferHandle pos_uv_buffer;
     BufferHandle index_buffer;

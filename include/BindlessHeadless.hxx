@@ -93,6 +93,7 @@ enum class Stage : u32 {
     LightClustering,
     DirectionalShadowMap,
     Bloom,
+    Billboard,
     Count,
 };
 
@@ -194,12 +195,12 @@ auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
                                VkFormat format, std::span<const u8> data, std::span<const u32> mip_offsets,
                                std::span<const u32> mip_sizes, std::string_view name) -> OffscreenTarget;
-auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width,
-                               u32 height, VkFormat format, std::span<const std::uint8_t> data,
-                               std::string_view name) -> OffscreenTarget;
-auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width,
-                               u32 height, VkFormat format, std::span<const std::byte> data,
-                               std::string_view name) -> OffscreenTarget;
+auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const std::uint8_t> data, std::string_view name)
+        -> OffscreenTarget;
+auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, u32 width, u32 height,
+                               VkFormat format, std::span<const std::byte> data, std::string_view name)
+        -> OffscreenTarget;
 auto load_cubemap_ktx(VmaAllocator, GlobalCommandContext &, VkDevice, VkPhysicalDevice, VkQueue transfer_queue,
                       const std::filesystem::path &, std::string_view) -> tl::expected<OffscreenTarget, Error>;
 
@@ -363,7 +364,8 @@ enum class ComputeStamp : u32 {
 };
 enum class ComputeIndex : u32 { RotateGeometry, RotateLights, LightClustering, Ssao, SsaoBlur, Bloom, Count };
 inline constexpr auto compute_stages =
-        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering, ComputeIndex::Ssao, ComputeIndex::SsaoBlur, ComputeIndex::Bloom};
+        std::array{ComputeIndex::RotateGeometry, ComputeIndex::RotateLights, ComputeIndex::LightClustering,
+                   ComputeIndex::Ssao,           ComputeIndex::SsaoBlur,     ComputeIndex::Bloom};
 
 
 inline constexpr u32 compute_query_count = static_cast<u32>(ComputeStamp::Count);
@@ -384,12 +386,14 @@ enum class GraphicsStamp : u32 {
     PresentEnd,
     DirectionalShadowMapBegin,
     DirectionalShadowMapEnd,
+    BillboardBegin,
+    BillboardEnd,
     Count
 };
-enum class GraphicsIndex : u32 { PreDepth, GBuffer, Deferred, Skybox, Tonemap, Present, ShadowMap, Count };
+enum class GraphicsIndex : u32 { PreDepth, GBuffer, Deferred, Skybox, Tonemap, Present, ShadowMap, Billboard, Count };
 inline constexpr auto graphics_stages =
-        std::array{GraphicsIndex::PreDepth, GraphicsIndex::GBuffer, GraphicsIndex::Deferred, GraphicsIndex::Skybox,
-                   GraphicsIndex::Tonemap,  GraphicsIndex::Present, GraphicsIndex::ShadowMap};
+        std::array{GraphicsIndex::PreDepth, GraphicsIndex::GBuffer, GraphicsIndex::Deferred,  GraphicsIndex::Skybox,
+                   GraphicsIndex::Tonemap,  GraphicsIndex::Present, GraphicsIndex::ShadowMap, GraphicsIndex::Billboard};
 
 inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
 inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);
@@ -399,27 +403,44 @@ static_assert(graphics_query_count == 2 * stats_graphics_count);
 
 constexpr auto get_compute_pass_name(const ComputeIndex index) -> std::string_view {
     switch (index) {
-        case ComputeIndex::RotateGeometry:  return "Rotate Geometry";
-        case ComputeIndex::RotateLights:    return "Rotate Lights";
-        case ComputeIndex::LightClustering: return "Light Clustering";
-        case ComputeIndex::Ssao:            return "SSAO";
-        case ComputeIndex::SsaoBlur:        return "SSAO Blur";
-        case ComputeIndex::Bloom:           return "Bloom";
-        case ComputeIndex::Count:           break;
+        case ComputeIndex::RotateGeometry:
+            return "Rotate Geometry";
+        case ComputeIndex::RotateLights:
+            return "Rotate Lights";
+        case ComputeIndex::LightClustering:
+            return "Light Clustering";
+        case ComputeIndex::Ssao:
+            return "SSAO";
+        case ComputeIndex::SsaoBlur:
+            return "SSAO Blur";
+        case ComputeIndex::Bloom:
+            return "Bloom";
+        case ComputeIndex::Count:
+            break;
     }
     std::abort();
 }
 
 constexpr auto get_graphics_pass_name(const GraphicsIndex index) -> std::string_view {
     switch (index) {
-        case GraphicsIndex::PreDepth:  return "Pre-Depth";
-        case GraphicsIndex::GBuffer:   return "GBuffer";
-        case GraphicsIndex::Deferred:  return "Deferred";
-        case GraphicsIndex::Skybox:    return "Skybox";
-        case GraphicsIndex::Tonemap:   return "Tonemap";
-        case GraphicsIndex::Present:   return "Present";
-        case GraphicsIndex::ShadowMap: return "Directional Shadow Map";
-        case GraphicsIndex::Count:     break;
+        case GraphicsIndex::PreDepth:
+            return "Pre-Depth";
+        case GraphicsIndex::GBuffer:
+            return "GBuffer";
+        case GraphicsIndex::Deferred:
+            return "Deferred";
+        case GraphicsIndex::Skybox:
+            return "Skybox";
+        case GraphicsIndex::Tonemap:
+            return "Tonemap";
+        case GraphicsIndex::Present:
+            return "Present";
+        case GraphicsIndex::ShadowMap:
+            return "Directional Shadow Map";
+        case GraphicsIndex::Billboard:
+            return "Billboard";
+        case GraphicsIndex::Count:
+            break;
     }
     std::abort();
 }
@@ -464,12 +485,12 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     const u64 last = tl.slot_last_signal[index];
     if (last != 0) {
         VkSemaphoreWaitInfo wi{
-                .sType          = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                .pNext          = nullptr,
-                .flags          = 0,
+                .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .pNext = nullptr,
+                .flags = 0,
                 .semaphoreCount = 1,
-                .pSemaphores    = &tl.timeline,
-                .pValues        = &last,
+                .pSemaphores = &tl.timeline,
+                .pValues = &last,
         };
         vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
         tl.completed = std::max(tl.completed, last);
@@ -478,9 +499,9 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     vk_check(vkResetCommandBuffer(cmd, 0));
 
     VkCommandBufferBeginInfo bi{
-            .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext            = nullptr,
-            .flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = nullptr,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
             .pInheritanceInfo = nullptr,
     };
     vk_check(vkBeginCommandBuffer(cmd, &bi));
@@ -489,36 +510,36 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
 
     const u64 signal_val = tl.value + 1;
 
-    constexpr usize MAX_WAITS   = 16;
+    constexpr usize MAX_WAITS = 16;
     constexpr usize MAX_SIGNALS = 12;
 
-    FixedVector<VkSemaphoreSubmitInfo, MAX_WAITS>   wait_infos;
+    FixedVector<VkSemaphoreSubmitInfo, MAX_WAITS> wait_infos;
     FixedVector<VkSemaphoreSubmitInfo, MAX_SIGNALS> signal_infos;
 
-    for (const auto &w : sync.binary_waits) {
-        auto info      = create_info<VkSemaphoreSubmitInfo>();
+    for (const auto &w: sync.binary_waits) {
+        auto info = create_info<VkSemaphoreSubmitInfo>();
         info.semaphore = w.semaphore;
         info.stageMask = w.stage;
         wait_infos.push_back(info);
     }
 
-    for (const auto &w : sync.timeline_waits) {
-        auto info      = create_info<VkSemaphoreSubmitInfo>();
+    for (const auto &w: sync.timeline_waits) {
+        auto info = create_info<VkSemaphoreSubmitInfo>();
         info.semaphore = w.semaphore;
-        info.value     = w.value;
+        info.value = w.value;
         info.stageMask = w.stage;
         wait_infos.push_back(info);
     }
 
     // Always signal the timeline first
-    auto timeline_signal      = create_info<VkSemaphoreSubmitInfo>();
+    auto timeline_signal = create_info<VkSemaphoreSubmitInfo>();
     timeline_signal.semaphore = tl.timeline;
-    timeline_signal.value     = signal_val;
+    timeline_signal.value = signal_val;
     timeline_signal.stageMask = timeline_signal_mask;
     signal_infos.push_back(timeline_signal);
 
-    for (const auto &s : sync.binary_signals) {
-        auto info      = create_info<VkSemaphoreSubmitInfo>();
+    for (const auto &s: sync.binary_signals) {
+        auto info = create_info<VkSemaphoreSubmitInfo>();
         info.semaphore = s.semaphore;
         info.stageMask = s.stage;
         signal_infos.push_back(info);
@@ -528,12 +549,12 @@ auto submit_stage(TL &tl, VkDevice device, RecordFn &&record, SubmitSynchronisat
     cmd_info.commandBuffer = cmd;
 
     auto submit = create_info<VkSubmitInfo2>();
-    submit.waitSemaphoreInfoCount   = static_cast<u32>(wait_infos.size());
-    submit.pWaitSemaphoreInfos      = wait_infos.empty()   ? nullptr : wait_infos.data();
-    submit.commandBufferInfoCount   = 1;
-    submit.pCommandBufferInfos      = &cmd_info;
+    submit.waitSemaphoreInfoCount = static_cast<u32>(wait_infos.size());
+    submit.pWaitSemaphoreInfos = wait_infos.empty() ? nullptr : wait_infos.data();
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmd_info;
     submit.signalSemaphoreInfoCount = static_cast<u32>(signal_infos.size());
-    submit.pSignalSemaphoreInfos    = signal_infos.empty() ? nullptr : signal_infos.data();
+    submit.pSignalSemaphoreInfos = signal_infos.empty() ? nullptr : signal_infos.data();
 
     vk_check(vkQueueSubmit2(tl.queue, 1, &submit, VK_NULL_HANDLE));
 

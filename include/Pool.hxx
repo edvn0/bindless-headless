@@ -3,6 +3,7 @@
 #include "Assert.hxx"
 #include "Buffer.hxx"
 #include "Forward.hxx"
+#include "Material.hxx"
 #include "Pipelines.hxx"
 #include "Types.hxx"
 
@@ -266,6 +267,7 @@ struct QueryPoolState {
     double timestamp_period_ns = 1.0; // from VkPhysicalDeviceLimits::timestampPeriod
 };
 
+
 using TextureHandle = Handle<struct TextureTag>;
 using TexturePool = Pool<TextureTag, OffscreenTarget>;
 using SamplerHandle = Handle<struct SamplerTag>;
@@ -278,6 +280,21 @@ using PipelineHandle = Handle<struct PipelineTag>;
 using PipelinePool = Pool<PipelineTag, CompiledPipeline>;
 using ShaderHandle = Handle<struct ShaderTag>;
 using ShaderPool = Pool<ShaderTag, VkShaderModule>;
+using MaterialHandle = Handle<struct MaterialTag>;
+struct GPUMaterialPool {
+    Pool<struct MaterialTag, GPUMaterialData> cpu_pool{};
+
+    BufferHandle gpu_buffer{};
+    bool dirty{true};
+
+    std::vector<u32> pool_to_gpu{};
+    std::vector<u32> gpu_to_pool{};
+    u32 gpu_count{0};
+
+    auto register_batch(std::span<const GPUMaterialData>) -> u32;
+};
+auto flush_material_pool(RenderContext &) -> void;
+
 
 constexpr auto hot_swap = []<typename Handle, typename Value>(Handle &current, Value &&next, RenderContext &ctx,
                                                               u64 retire_val = std::numeric_limits<u64>::max()) {

@@ -25,6 +25,7 @@
 #include "Pipelines.hxx"
 #include "RenderSubmission.hxx"
 #include "Types.hxx"
+#include "app/render.hxx"
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
 
@@ -536,31 +537,33 @@ namespace {
         static thread_local std::vector<glm::mat4x3> transform_scratch;
         transform_scratch.clear();
 
-        auto flush_batch = [&](u32 mesh_index, u32 base_instance) {
-            res.transforms_ring.write_elements(ctx, frame_idx, base_instance,
+        u32 ring_offset = 0;
+
+        auto flush_batch = [&](u32 mesh_index) {
+            const u32 count = static_cast<u32>(transform_scratch.size());
+            res.transforms_ring.write_elements(ctx, frame_idx, ring_offset,
                                                std::span<const glm::mat4x3>{transform_scratch});
             res.mesh_instance_ranges.push_back({
                     .mesh_index = mesh_index,
-                    .instance_count = static_cast<u32>(transform_scratch.size()),
-                    .base_instance = base_instance,
+                    .instance_count = count,
+                    .base_instance = ring_offset,
             });
+            ring_offset += count;
             transform_scratch.clear();
         };
 
-        u32 base = 0;
         for (u32 i = 0; i < queue.meshes.size(); ++i) {
             const auto &sub = queue.meshes[i];
             const bool new_batch = !transform_scratch.empty() && queue.meshes[i - 1].mesh_index != sub.mesh_index;
 
             if (new_batch) {
-                flush_batch(queue.meshes[i - 1].mesh_index, base);
-                base = i;
+                flush_batch(queue.meshes[i - 1].mesh_index);
             }
             transform_scratch.push_back(sub.transform);
         }
 
         if (!transform_scratch.empty()) {
-            flush_batch(queue.meshes.back().mesh_index, base);
+            flush_batch(queue.meshes.back().mesh_index);
         }
 
         res.flushed_instance_count = static_cast<u32>(queue.meshes.size());
@@ -1171,6 +1174,16 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                                                                             std::span(bloom_reflection)),
                                             "Failed to compile bloom shader");
 
+                    std::array<const std::string_view, 2> point_light_billboard_names = {"billboard_ms",
+                                                                                         "billboard_fs"};
+                    std::array<ReflectionData, point_light_billboard_names.size()> point_light_billboard_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(
+                            point_light_billboard_code,
+                            gpu.compiler->compile_from_file("assets/shaders/light_billboard.slang",
+                                                            std::span(point_light_billboard_names),
+                                                            std::span(point_light_billboard_reflection)),
+                            "Failed to compile point light billboard shader");
+
                     auto &&[crp, lrp] = create_compute_pipelines(
                             gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, sizeof(RotatePushConstant),
                             std::span(rotate_cubes_code), std::span(rotate_cubes_names));
@@ -1290,6 +1303,35 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                     auto bloom_upsample = create_compute_pipeline(
                             gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, bloom_code.at(2),
                             sizeof(BloomUpsamplePushConstants), "bloom_upsample_cs");
+
+                    {
+                        const std::array color_atts{Pipeline::ColorAttachmentInfo{
+                                .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+                                .blend_additive = false,
+                        }};
+                        auto pipe = Pipeline::create_mesh_pipeline(Pipeline::Mesh{
+                                .device = gpu.device,
+                                .cache = gpu.ctx.pipeline_cache.get(),
+                                .bindless_layout = gpu.bindless.layout,
+                                .debug_name = "billboard",
+                                .stages =
+                                        {
+                                                .task = std::nullopt,
+                                                .mesh = {point_light_billboard_code.at(0), "billboard_ms",
+                                                         VK_SHADER_STAGE_MESH_BIT_EXT},
+                                                .fragment = {point_light_billboard_code.at(1), "billboard_fs",
+                                                             VK_SHADER_STAGE_FRAGMENT_BIT},
+                                        },
+                                .push_constant_size = sizeof(BillboardPushConstants),
+                                .push_constant_stages = VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                .color_attachments = color_atts,
+                                .depth_format = VK_FORMAT_D32_SFLOAT, // depth_format,
+                                .depth_mode = Pipeline::DepthMode::test_greater_equal,
+                                .cull_mode = Pipeline::CullMode::none,
+                        });
+
+                        hot_swap(pipes.billboard_pipeline, std::move(pipe), gpu.ctx, rc.retire_value);
+                    }
 
                     hot_swap(pipes.bloom_threshold_pipeline, std::move(bloom_threshold), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.bloom_downsample_pipeline, std::move(bloom_downsample), gpu.ctx, rc.retire_value);
@@ -1629,13 +1671,24 @@ gpu.bindless.need_repopulate = true;
         std::vector<DrawRanges> all_mesh_ranges;
         submit_mesh_instances(scene.scene, scene.render_queue);
         flush_render_queue(scene.render_queue, res, gpu.ctx, bounded_frame_index);
+        flush_material_pool(gpu.ctx);
 
+        IndirectWriteBuffers write_buffers{
+                .writer = res.draw_stream.writer,
+                .cmd_ring = res.indirect_ring,
+                .material_id_ring = res.draw_material_id_ring,
+        };
         all_mesh_ranges.reserve(res.mesh_instance_ranges.size());
         for (const auto &mir: res.mesh_instance_ranges) {
-            all_mesh_ranges.push_back(write_mesh_indirect(
-                    gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.indirect_ring, res.draw_material_id_ring,
-                    res.meshes.at(mir.mesh_index).mesh, // MeshData lives on StaticMesh
-                    mir.instance_count, mir.base_instance));
+            auto &mesh = res.meshes.at(mir.mesh_index);
+            all_mesh_ranges.push_back(write_mesh_indirect(gpu.ctx, bounded_frame_index, write_buffers, mesh.mesh,
+                                                          MeshDrawInfo{
+                                                                  .mesh_index = mir.mesh_index,
+                                                                  .material_pool_base = mesh.material_pool_base,
+                                                                  .instance_count = mir.instance_count,
+                                                                  .first_instance = mir.base_instance,
+                                                                  .overrides = res.submesh_material_overrides,
+                                                          }));
         }
 
         const u32 light_slot = reserve_light_volumes(gpu.ctx, bounded_frame_index, res.draw_stream.writer,
@@ -1816,16 +1869,28 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
-            const std::array bloom_waits{
+            const std::array billboard_waits{
                     TimelineWait{
-                            .value     = fs.timeline_values[stage_index(Stage::Skybox)],
+                            .value = fs.timeline_values[stage_index(Stage::Skybox)],
                             .semaphore = gpu.tl_graphics.timeline,
-                            .stage     = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                            .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::Bloom)] =
-                    run_bloom_pass(app_context, render_scene_extent,
-                                   SubmitSynchronisation{.timeline_waits = bloom_waits});
+            fs.timeline_values[stage_index(Stage::Billboard)] =
+                    run_billboard_pass(app_context, render_scene_extent, bounded_frame_index,
+                                       SubmitSynchronisation{.timeline_waits = billboard_waits});
+        }
+
+        {
+            const std::array bloom_waits{
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::Billboard)],
+                            .semaphore = gpu.tl_graphics.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    },
+            };
+            fs.timeline_values[stage_index(Stage::Bloom)] = run_bloom_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = bloom_waits});
         }
 
         {

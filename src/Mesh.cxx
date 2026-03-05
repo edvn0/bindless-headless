@@ -736,24 +736,6 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
         }
     }
 
-    auto material_buffer = Buffer::from_slice<GPUMaterialData>(
-                                   ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                   std::span<const GPUMaterialData>{gpu_materials.data(), gpu_materials.size()},
-                                   std::format("gpu_materials_{}", obj_path.filename().string()))
-                                   .value();
-
-    std::vector<u32> submesh_to_material_id_mapping;
-    submesh_to_material_id_mapping.reserve(mesh.submeshes.size());
-    for (const auto &submesh: mesh.submeshes) {
-        submesh_to_material_id_mapping.emplace_back(submesh.material_id);
-    }
-
-    auto material_ids_buffer =
-            Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                    std::span(submesh_to_material_id_mapping),
-                                    std::format("material_ids_buffer_{}", obj_path.filename().string()))
-                    .value();
-
     const auto &vb_copy = mesh.vertices;
     const auto &ib_copy = mesh.indices;
 
@@ -797,15 +779,13 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
                          }) |
                          to<std::vector<VkDrawIndexedIndirectCommand>>();
 
-    indirect_cmds.reserve(mesh.submeshes.size());
+    const u32 pool_base = ctx.materials.register_batch(gpu_materials);
 
     return StaticMesh{
             .mesh = std::move(mesh),
-            .materials = std::move(materials),
-            .gpu_materials = {gpu_materials.begin(), gpu_materials.end()},
             .indirect_template = {indirect_cmds.begin(), indirect_cmds.end()},
-            .material_buffer = ctx.create_buffer(std::move(material_buffer)),
-            .material_ids_buffer = ctx.create_buffer(std::move(material_ids_buffer)),
+            .material_pool_base = pool_base,
+            .material_count = static_cast<u32>(gpu_materials.size()),
             .vertex_buffer = ctx.create_buffer(std::move(vertex_buffer)),
             .pos_uv_buffer = ctx.create_buffer(std::move(pos_uv_buffer)),
             .index_buffer = ctx.create_buffer(std::move(index_buffer)),
@@ -1261,28 +1241,16 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     // -------------------------------------------------------------------------
     const std::string stem = scene_path.stem().string();
 
-    auto material_buffer = Buffer::from_slice<GPUMaterialData>(
-                                   ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                   std::span<const GPUMaterialData>{gpu_materials.data(), gpu_materials.size()},
-                                   std::format("gpu_materials_{}", stem))
-                                   .value();
-
-    auto material_ids_buffer =
-            Buffer::from_slice<u32>(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                    std::span<const u32>{submesh_material_ids.data(), submesh_material_ids.size()},
-                                    std::format("material_ids_buffer_{}", stem))
-                    .value();
-
     auto vertex_buffer = Buffer::from_slice<Vertex>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                                     std::span<const Vertex>{mesh.vertices.data(), mesh.vertices.size()},
                                                     std::format("vertex_buffer_{}", stem))
                                  .value();
 
-                                 
 
-    auto position_vb = mesh.vertices |
-                       std::views::transform([](const Vertex &v) { return PositionOnlyVertex{.pos = v.position, .uvs = v.uvs}; }) |
-                       to<std::vector<PositionOnlyVertex>>();
+    auto position_vb =
+            mesh.vertices |
+            std::views::transform([](const Vertex &v) { return PositionOnlyVertex{.pos = v.position, .uvs = v.uvs}; }) |
+            to<std::vector<PositionOnlyVertex>>();
 
     auto pos_uv_buffer = Buffer::from_slice<PositionOnlyVertex>(
                                  ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -1306,16 +1274,13 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
                          }) |
                          to<std::vector<VkDrawIndexedIndirectCommand>>();
 
-    // -------------------------------------------------------------------------
-    // 14. Assemble StaticMesh
-    // -------------------------------------------------------------------------
+    const u32 pool_base = ctx.materials.register_batch(gpu_materials);
+
     return StaticMesh{
             .mesh = std::move(mesh),
-            .materials = {}, // no MaterialData map needed at runtime
-            .gpu_materials = {gpu_materials.begin(), gpu_materials.end()},
             .indirect_template = {indirect_cmds.begin(), indirect_cmds.end()},
-            .material_buffer = ctx.buffers.create(std::move(material_buffer)),
-            .material_ids_buffer = ctx.buffers.create(std::move(material_ids_buffer)),
+            .material_pool_base = pool_base,
+            .material_count = static_cast<u32>(gpu_materials.size()),
             .vertex_buffer = ctx.buffers.create(std::move(vertex_buffer)),
             .pos_uv_buffer = ctx.buffers.create(std::move(pos_uv_buffer)),
             .index_buffer = ctx.buffers.create(std::move(index_buffer)),

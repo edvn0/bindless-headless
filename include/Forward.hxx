@@ -14,6 +14,8 @@ struct StaticMesh;
 class Compiler;
 class Swapchain;
 
+struct FrameUBO;
+
 extern "C" {
 struct GLFWwindow;
 struct ImDrawData;
