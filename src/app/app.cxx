@@ -544,38 +544,39 @@ namespace {
         generate_random_hierarchies(reg, helmets, 4, rng, 0.3f);
     }
 
+
     auto flush_render_queue(RenderQueue &queue, AppResources &res, RenderContext &ctx, u32 frame_idx) -> void {
         res.mesh_instance_ranges.clear();
 
-        static thread_local std::vector<glm::mat4x3> transform_scratch;
-        transform_scratch.clear();
+        static thread_local std::vector<InstanceData> instance_scratch;
+        instance_scratch.clear();
 
         u32 ring_offset = 0;
 
         auto flush_batch = [&](u32 mesh_index) {
-            const u32 count = static_cast<u32>(transform_scratch.size());
-            res.transforms_ring.write_elements(ctx, frame_idx, ring_offset,
-                                               std::span<const glm::mat4x3>{transform_scratch});
+            const u32 count = static_cast<u32>(instance_scratch.size());
+            res.instance_ring.write_elements(ctx, frame_idx, ring_offset,
+                                             std::span<const InstanceData>{instance_scratch});
             res.mesh_instance_ranges.push_back({
                     .mesh_index = mesh_index,
                     .instance_count = count,
                     .base_instance = ring_offset,
             });
             ring_offset += count;
-            transform_scratch.clear();
+            instance_scratch.clear();
         };
 
         for (u32 i = 0; i < queue.meshes.size(); ++i) {
             const auto &sub = queue.meshes[i];
-            const bool new_batch = !transform_scratch.empty() && queue.meshes[i - 1].mesh_index != sub.mesh_index;
+            const bool new_batch = !instance_scratch.empty() && queue.meshes[i - 1].mesh_index != sub.mesh_index;
 
             if (new_batch) {
                 flush_batch(queue.meshes[i - 1].mesh_index);
             }
-            transform_scratch.push_back(sub.transform);
+            instance_scratch.push_back(InstanceData{sub.transform, sub.lod_level});
         }
 
-        if (!transform_scratch.empty()) {
+        if (!instance_scratch.empty()) {
             flush_batch(queue.meshes.back().mesh_index);
         }
 
@@ -1047,10 +1048,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.point_lights_ring = std::move(ring.value());
         res.point_lights_ring.write_all_slots(gpu.ctx, res.all_point_lights);
 
-        res.transforms_ring = AlignedRingBuffer<glm::mat4x3>::create(gpu.ctx, AppResources::max_draws_per_frame, {},
-                                                                     "transforms", family_indices)
-                                      .value();
-        res.transforms_ring.write_all_slots(gpu.ctx, glm::identity<glm::mat4x3>());
+        res.instance_ring = AlignedRingBuffer<InstanceData>::create(gpu.ctx, AppResources::max_draws_per_frame, {},
+                                                                    "instances", family_indices)
+                                    .value();
+        res.instance_ring.write_all_slots(gpu.ctx, InstanceData::empty());
 
         res.prefix = AlignedRingBuffer<u32>::create(gpu.ctx, res.light_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                                     "light_prefix", family_indices)

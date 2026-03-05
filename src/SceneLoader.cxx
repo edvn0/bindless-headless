@@ -28,6 +28,8 @@
 #include "Material.hxx"
 #include "Types.hxx"
 
+#include <meshoptimizer.h>
+
 #include <3PP/stb_image.h>
 #include <3PP/stb_image_resize2.h>
 #include <bzlib.h>
@@ -624,7 +626,6 @@ namespace Tooling {
                     material_index = 0;
 
                 const auto vertex_offset = static_cast<u32>(vertices.size());
-                const auto index_offset = static_cast<u32>(indices.size());
 
                 vertices.reserve(vertices.size() + positions.size());
                 for (size_t i = 0; i < positions.size(); ++i) {
@@ -649,12 +650,64 @@ namespace Tooling {
                 for (u32 idx: local_indices)
                     indices.emplace_back(vertex_offset + idx);
 
+                const size_t prim_vertex_count = positions.size();
+
+                std::vector<u32> opt_indices(local_indices.size());
+                {
+                    std::vector<u32> remap(prim_vertex_count);
+                    const size_t unique = meshopt_generateVertexRemap(
+                            remap.data(), local_indices.data(), local_indices.size(), vertices.data() + vertex_offset,
+                            prim_vertex_count, sizeof(Vertex));
+
+                    // remap indices (local to this primitive, not yet offset by vertex_offset)
+                    meshopt_remapIndexBuffer(opt_indices.data(), local_indices.data(), local_indices.size(),
+                                             remap.data());
+                    meshopt_optimizeVertexCache(opt_indices.data(), opt_indices.data(), opt_indices.size(), unique);
+                    meshopt_optimizeOverdraw(opt_indices.data(), opt_indices.data(), opt_indices.size(),
+                                             &vertices[vertex_offset].position[0], prim_vertex_count, sizeof(Vertex),
+                                             1.05f);
+                }
+                constexpr std::array<float, k_lod_count> k_lod_ratios = {1.0f, 0.5f, 0.25f, 0.125f};
+                constexpr float k_target_error = 1e-2f;
+
                 Submesh sm{};
                 sm.vertex_offset = vertex_offset;
-                sm.vertex_count = static_cast<u32>(positions.size());
-                sm.index_offset = index_offset;
-                sm.index_count = static_cast<u32>(local_indices.size());
+                sm.vertex_count = static_cast<u32>(prim_vertex_count);
                 sm.material_index = material_index;
+                for (u32 lod = 0; lod < k_lod_count; ++lod) {
+                    const u32 global_index_offset = static_cast<u32>(indices.size());
+
+                    if (lod == 0) {
+                        for (u32 idx: opt_indices)
+                            indices.push_back(vertex_offset + idx);
+
+                        sm.lods[0] = {global_index_offset, static_cast<u32>(opt_indices.size())};
+                    } else {
+                        const size_t target_count =
+                                std::max(3u, static_cast<u32>(opt_indices.size() * k_lod_ratios[lod]));
+
+                        std::vector<u32> simplified(opt_indices.size());
+                        float result_error = 0.0f;
+                        const size_t simplified_count =
+                                meshopt_simplify(simplified.data(), opt_indices.data(), opt_indices.size(),
+                                                 &vertices[vertex_offset].position[0], prim_vertex_count,
+                                                 sizeof(Vertex), target_count, k_target_error, 0, &result_error);
+
+                        simplified.resize(simplified_count);
+
+                        meshopt_optimizeVertexCache(simplified.data(), simplified.data(), simplified_count,
+                                                    prim_vertex_count);
+
+                        for (u32 idx: simplified)
+                            indices.push_back(vertex_offset + idx);
+
+                        sm.lods[lod] = {global_index_offset, static_cast<u32>(simplified_count)};
+
+                        info("LOD{}: {}/{} triangles (error {:.4f})", lod, simplified_count / 3, opt_indices.size() / 3,
+                             result_error);
+                    }
+                }
+
                 submeshes.emplace_back(sm);
             }
         }

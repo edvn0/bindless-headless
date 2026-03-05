@@ -58,6 +58,10 @@ struct UBO {
 struct Transform {
     float3x4 m;
 };
+struct InstanceData {
+    Transform transform;
+    uint lod_level;
+};
 
 float4 unpackSnorm3x10_1x2(uint packed)
 {

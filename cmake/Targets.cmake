@@ -256,6 +256,7 @@ target_link_libraries(SceneLoader PUBLIC
   ThirdPartySTB
   volk::volk_headers
   BZip2::BZip2
+  meshoptimizer
 )
 
 DEFAULT_COMPILE_OPTIONS(SceneLoader)

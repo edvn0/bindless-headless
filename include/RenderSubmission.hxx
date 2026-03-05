@@ -5,8 +5,9 @@
 #include "scene/Forward.hxx"
 
 struct MeshSubmission {
-    u32 mesh_index; // Inside of the renderer - the index of the DrawID really.
     glm::mat4x3 transform;
+    u32 mesh_index; // Inside of the renderer - the index of the DrawID really.
+    u32 lod_level; // 0 = full detail
 };
 
 struct RenderQueue {

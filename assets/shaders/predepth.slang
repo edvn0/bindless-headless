@@ -1,10 +1,11 @@
 import common;
 import maths;
 import constants;
+import pointer;
 
 struct PC {
     UBO* frame_ubo;
-    Transform* transforms;
+    DeviceReadPtr<InstanceData> instance_data;
     uint* draw_material_ids;
     Material* materials;
     uint       base_draw_id;
@@ -38,7 +39,7 @@ VSOut main_vs_mdi(
     uint instance_index = instance_id + base_instance;
 
     // 2. Transform Position
-    float3x4 model_3x4 = pc.transforms[instance_index].m;
+    float3x4 model_3x4 = pc.instance_data[instance_index].transform.m;
     float4x4 model = float4x4(
         model_3x4._m00_m01_m02_m03,
         model_3x4._m10_m11_m12_m13,

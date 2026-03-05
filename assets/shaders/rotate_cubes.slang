@@ -6,8 +6,8 @@ struct RotatePushConstant {
     float rads_per_second;
     float total_time;
     uint count; // cube_count for geometry, light_count for lights
-    DeviceReadPtr<Transform> previous_frame_transforms; // unused in light kernel
-        DeviceWritePtr<Transform> transforms;
+    DeviceReadPtr<InstanceData> previous_frame_transforms; // unused in light kernel
+    DeviceWritePtr<InstanceData> transforms;
     DeviceReadPtr<PointLight> previous_point_lights;
     DeviceWritePtr<PointLight> point_lights;
     DeviceReadPtr<PointLight> static_point_lights;

@@ -157,8 +157,8 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
             .rads_per_second = glm::radians(20.0f),
             .total_time = static_cast<f32>(ui.total_time),
             .count = res.instance_count(),
-            .previous_frame_transforms = res.transforms_ring.slot_device_address(last_frame_index),
-            .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+            .previous_frame_instance_data = res.instance_ring.slot_device_address(last_frame_index),
+            .instance_data = res.instance_ring.slot_device_address(bounded_frame_index),
             .previous_point_lights = res.point_lights_ring.slot_device_address(last_frame_index),
             .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
             .static_point_lights = point_lights_base_addr,
@@ -177,7 +177,7 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
                 const u32 groups = (res.instance_count() + 63u) / 64u;
                 vkCmdDispatch(cmd, groups, 1, 1);
 
-                auto *cube_buffer = gpu.ctx.buffers.get(res.transforms_ring.handle());
+                auto *cube_buffer = gpu.ctx.buffers.get(res.instance_ring.handle());
                 VkBufferMemoryBarrier2 barrier{};
                 barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
                 barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -185,7 +185,7 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
                 barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
                 barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
                 barrier.buffer = cube_buffer->buffer();
-                barrier.offset = static_cast<VkDeviceSize>(res.transforms_ring.slot_offset_bytes(bounded_frame_index));
+                barrier.offset = static_cast<VkDeviceSize>(res.instance_ring.slot_offset_bytes(bounded_frame_index));
                 barrier.size = static_cast<VkDeviceSize>(res.instance_count() * sizeof(glm::mat4x3));
 
                 VkDependencyInfo dep{};
@@ -207,8 +207,8 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
             .rads_per_second = glm::radians(20.0f),
             .total_time = static_cast<f32>(ui.total_time),
             .count = static_cast<u32>(res.all_point_lights.size()),
-            .previous_frame_transforms = res.transforms_ring.slot_device_address(last_frame_index),
-            .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+            .previous_frame_instance_data = res.instance_ring.slot_device_address(last_frame_index),
+            .instance_data = res.instance_ring.slot_device_address(bounded_frame_index),
             .previous_point_lights = res.point_lights_ring.slot_device_address(last_frame_index),
             .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
             .static_point_lights = point_lights_base_addr,
@@ -315,7 +315,7 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
 
                     PredepthPushConstants pc{
                             .ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                            .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+                            .instance_data = res.instance_ring.slot_device_address(bounded_frame_index),
                             .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
                             .materials = ctx.gpu.ctx.device_address(ctx.gpu.ctx.materials.gpu_buffer),
                             .base_draw_id = 0,
@@ -675,7 +675,7 @@ auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstan
 
                     ShadowMapPushConstants pc{
                             .light_view_proj = ui.shadow_config.light_view_proj,
-                            .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+                            .instance_data = res.instance_ring.slot_device_address(bounded_frame_index),
                             .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
                             .materials = ctx.gpu.ctx.device_address(ctx.gpu.ctx.materials.gpu_buffer),
                             .base_draw_id = 0,
@@ -718,7 +718,6 @@ auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstan
                 dep.imageMemoryBarrierCount = 1;
                 dep.pImageMemoryBarriers = &shadow_to_read;
                 vkCmdPipelineBarrier2(cmd, &dep);
-
                 end_stats(cmd, *stats_pool, GraphicsIndex::ShadowMap);
                 write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::DirectionalShadowMapEnd);
             },
@@ -820,7 +819,7 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
 
                     RenderingPushConstants pc{
                             .ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
-                            .transforms = res.transforms_ring.slot_device_address(bounded_frame_index),
+                            .instance_data = res.instance_ring.slot_device_address(bounded_frame_index),
                             .draw_material_ids = res.draw_material_id_ring.slot_device_address(bounded_frame_index),
                             .materials = ctx.gpu.ctx.device_address(ctx.gpu.ctx.materials.gpu_buffer),
                             .base_draw_id = 0,

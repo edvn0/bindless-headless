@@ -10,8 +10,9 @@ auto submit_mesh_instances(Scene &scene, RenderQueue &queue) -> void {
     auto view = scene.registry.view<MeshComponent, TransformComponent>();
     for (auto &&[e, mesh, xform]: view.each()) {
         queue.submit({
-                .mesh_index = mesh.mesh_index,
                 .transform = xform.local_to_world,
+                .mesh_index = mesh.mesh_index,
+                .lod_level = 0,
         });
     }
 }

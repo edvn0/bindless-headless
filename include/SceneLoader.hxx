@@ -16,6 +16,26 @@
 
 namespace Tooling {
 
+
+    static constexpr u32 k_version = 2;
+    static constexpr u32 k_lod_count = 4;
+
+    struct LodRange {
+        u32 index_offset = 0;
+        u32 index_count = 0; // 0 = this LOD not present
+    };
+    static_assert(sizeof(LodRange) == 8);
+
+    struct Submesh {
+        u32 vertex_offset = 0;
+        u32 vertex_count = 0;
+        u32 material_index = 0;
+        u32 reserved0 = 0;
+        std::array<LodRange, k_lod_count> lods{};
+    };
+    static_assert(sizeof(Submesh) == 48);
+    static_assert(std::is_trivially_copyable_v<Submesh>);
+
     struct BlobRange {
         u64 offset = 0; // from file start
         u64 size = 0; // bytes
@@ -104,7 +124,6 @@ namespace Tooling {
     };
 
     static constexpr u32 k_magic = 0x31534E43; // 'CNS1' (pick any)
-    static constexpr u32 k_version = 1;
 
 
     struct FileHeader {
@@ -143,19 +162,6 @@ namespace Tooling {
     static_assert(sizeof(Vertex) == 28);
     static_assert(std::is_trivially_copyable_v<Vertex>);
     static_assert(alignof(Vertex) == 4);
-
-    struct Submesh {
-        u32 vertex_offset = 0;
-        u32 vertex_count = 0;
-        u32 index_offset = 0;
-        u32 index_count = 0;
-        u32 material_index = 0;
-        u32 reserved0 = 0;
-        u64 reserved1 = 0;
-    };
-    static_assert(sizeof(Submesh) == 32);
-    static_assert(std::is_trivially_copyable_v<Submesh>);
-    static_assert(alignof(Submesh) == 8);
 
     // This is the runtime GPU material payload (your struct, but POD-safe).
     // IMPORTANT: GLM types are not ABI-stable on disk -> use float arrays.

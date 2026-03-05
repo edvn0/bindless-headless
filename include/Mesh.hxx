@@ -22,6 +22,7 @@
 
 #include "AABB.hxx"
 #include "Material.hxx"
+#include "SceneLoader.hxx"
 
 auto load_mtl(const std::filesystem::path &mtl_path) -> std::unordered_map<std::string, MaterialData>;
 
@@ -71,10 +72,28 @@ auto load_texture_from_file(const std::filesystem::path &texture_path, const Tex
                             const TextureLoadPacket::Class texture_class) -> TextureLoadPacket;
 
 struct Submesh {
-    u32 index_offset{0};
-    u32 index_count{0};
-    u32 material_id{0};
-    bool alpha_tested{false};
+    u32 index_offset; // LOD0 — kept for convenience / legacy paths
+    u32 index_count;
+    u32 material_id;
+    bool alpha_tested;
+
+    std::array<u32, Tooling::k_lod_count> lod_index_offsets{};
+    std::array<u32, Tooling::k_lod_count> lod_index_counts{};
+
+    [[nodiscard]] auto lod_offset(u32 lod) const -> u32 {
+        const u32 l = std::min(lod, Tooling::k_lod_count - 1u);
+        for (u32 i = l; i < Tooling::k_lod_count; ++i)
+            if (lod_index_counts[i] > 0)
+                return lod_index_offsets[i];
+        return lod_index_offsets[Tooling::k_lod_count - 1];
+    }
+    [[nodiscard]] auto lod_count(u32 lod) const -> u32 {
+        const u32 l = std::min(lod, Tooling::k_lod_count - 1u);
+        for (u32 i = l; i < Tooling::k_lod_count; ++i)
+            if (lod_index_counts[i] > 0)
+                return lod_index_counts[i];
+        return lod_index_counts[Tooling::k_lod_count - 1];
+    }
 };
 
 struct Vertex {

@@ -666,6 +666,8 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
                 .index_count = static_cast<u32>(mesh.indices.size()) - submesh_start_index,
                 .material_id = m_id,
                 .alpha_tested = is_alpha,
+                .lod_index_offsets = {}, // To be filled in later if LODs are generated
+                .lod_index_counts = {}, // To be filled in later if LODs are generated
         });
     }
 
@@ -1032,7 +1034,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     if (header.version != Tooling::k_version)
         return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
                                                 "Unsupported scene version: " + std::to_string(header.version)));
-
     // 4. Fetch typed spans into the decompressed blob
     const auto file_submeshes = blob_span<Tooling::Submesh>(file, header.submesh_table);
     const auto file_vertices = blob_span<Tooling::Vertex>(file, header.vertex_blob);
@@ -1211,18 +1212,22 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
 
     for (const auto &fs: file_submeshes) {
         const u32 mat_idx = (fs.material_index < static_cast<u32>(gpu_materials.size())) ? fs.material_index : 0u;
-
         const bool alpha = (mat_idx < static_cast<u32>(file_materials.size()))
                                    ? ((file_materials[mat_idx].flags & GPUMaterialData::FLAG_ALPHA_TESTED) != 0)
                                    : false;
 
-        mesh.submeshes.push_back(Submesh{
-                .index_offset = fs.index_offset,
-                .index_count = fs.index_count,
-                .material_id = mat_idx,
-                .alpha_tested = alpha,
-        });
-        submesh_material_ids.emplace_back(mat_idx);
+        Submesh sm{};
+        sm.index_offset = fs.lods[0].index_offset;
+        sm.index_count = fs.lods[0].index_count;
+        sm.material_id = mat_idx;
+        sm.alpha_tested = alpha;
+
+        for (u32 lod = 0; lod < Tooling::k_lod_count; ++lod) {
+            sm.lod_index_offsets[lod] = fs.lods[lod].index_offset;
+            sm.lod_index_counts[lod] = fs.lods[lod].index_count;
+        }
+
+        mesh.submeshes.push_back(sm);
     }
 
     for (auto &sm: mesh.submeshes) {

@@ -157,6 +157,12 @@ struct MeshInstanceRanges {
     }
 };
 
+struct InstanceData {
+    glm::mat4x3 transform;
+    u32 lod_level;
+
+    static auto empty() -> InstanceData { return InstanceData{glm::identity<glm::mat4x3>(), 0}; }
+};
 
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
@@ -179,7 +185,7 @@ struct AppResources {
     AlignedRingBuffer<u32> culled_light_count{};
 
     static constexpr u32 mesh_count = 1;
-    AlignedRingBuffer<glm::mat4x3> transforms_ring{};
+    AlignedRingBuffer<InstanceData> instance_ring{};
 
     AlignedRingBuffer<u32> flags{};
     AlignedRingBuffer<u32> prefix{};

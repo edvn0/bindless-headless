@@ -48,7 +48,7 @@ struct ClusteredLightCullingPushConstants {
 
 struct PredepthPushConstants {
     const DeviceAddress ubo;
-    const DeviceAddress transforms;
+    const DeviceAddress instance_data;
     const DeviceAddress draw_material_ids;
     const DeviceAddress materials;
     u32 base_draw_id;
@@ -57,7 +57,7 @@ struct PredepthPushConstants {
 
 struct RenderingPushConstants {
     const DeviceAddress ubo;
-    const DeviceAddress transforms;
+    const DeviceAddress instance_data;
     const DeviceAddress draw_material_ids;
     const DeviceAddress materials;
     u32 base_draw_id;
@@ -77,8 +77,8 @@ struct RotatePushConstant {
     f32 rads_per_second;
     f32 total_time;
     u32 count;
-    const DeviceAddress previous_frame_transforms;
-    const DeviceAddress transforms;
+    const DeviceAddress previous_frame_instance_data;
+    const DeviceAddress instance_data;
     const DeviceAddress previous_point_lights;
     const DeviceAddress point_lights;
     const DeviceAddress static_point_lights;
@@ -116,7 +116,7 @@ struct PresentPushConstants {
 
 struct ShadowMapPushConstants {
     glm::mat4 light_view_proj;
-    const DeviceAddress transforms;
+    const DeviceAddress instance_data;
     const DeviceAddress draw_material_ids;
     const DeviceAddress materials;
     u32 base_draw_id;
