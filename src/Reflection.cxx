@@ -251,4 +251,3 @@ auto reflect_program(Slang::ComPtr<slang::IComponentType> const &program, int ta
 
     return result;
 }
-

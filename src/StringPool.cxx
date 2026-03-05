@@ -2,7 +2,7 @@
 #include <mutex>
 
 auto StringPool::intern(const std::string_view sv) -> Handle {
-    auto& inst = get();
+    auto &inst = get();
 
     {
         std::shared_lock lock(inst.mutex);
@@ -15,7 +15,7 @@ auto StringPool::intern(const std::string_view sv) -> Handle {
     if (const auto it = inst.lookup.find(sv); it != inst.lookup.end())
         return it->second;
 
-    const auto index     = inst.count.load(std::memory_order_relaxed);
+    const auto index = inst.count.load(std::memory_order_relaxed);
     const auto block_idx = index / SLOTS_PER_BLOCK;
     const auto local_idx = index % SLOTS_PER_BLOCK;
 
@@ -25,7 +25,7 @@ auto StringPool::intern(const std::string_view sv) -> Handle {
     if (inst.blocks[block_idx].load(std::memory_order_acquire) == nullptr)
         inst.blocks[block_idx].store(new Block(), std::memory_order_release);
 
-    auto* const block = inst.blocks[block_idx].load(std::memory_order_relaxed);
+    auto *const block = inst.blocks[block_idx].load(std::memory_order_relaxed);
     block->storage[local_idx] = std::string(sv);
 
     const auto id = static_cast<Handle>(index);
@@ -33,11 +33,9 @@ auto StringPool::intern(const std::string_view sv) -> Handle {
     inst.count.fetch_add(1, std::memory_order_release);
 
     const auto insert_pos = static_cast<u32>(
-        std::ranges::lower_bound(inst.sorted_order, id,
-            [](const auto& a, const auto& b) {
-                return get_view(a) < get_view(b);
-            }) - inst.sorted_order.begin()
-    );
+            std::ranges::lower_bound(inst.sorted_order, id,
+                                     [](const auto &a, const auto &b) { return get_view(a) < get_view(b); }) -
+            inst.sorted_order.begin());
 
     inst.sorted_order.insert(inst.sorted_order.begin() + insert_pos, id);
 
@@ -49,13 +47,13 @@ auto StringPool::intern(const std::string_view sv) -> Handle {
 }
 
 auto StringPool::sort_key(const Handle handle) -> u32 {
-    auto& inst = get();
+    auto &inst = get();
     std::shared_lock lock(inst.mutex);
     return inst.rank_of[handle];
 }
 
 auto StringPool::get_view(const Handle handle) -> std::string_view {
-    auto& inst = get();
+    auto &inst = get();
 
     if (handle >= inst.count.load(std::memory_order_acquire)) {
         std::abort();
@@ -67,33 +65,23 @@ auto StringPool::get_view(const Handle handle) -> std::string_view {
     return inst.blocks[block_idx].load(std::memory_order_relaxed)->storage[local_idx];
 }
 
-auto StringPool::get() -> Instance& {
+auto StringPool::get() -> Instance & {
     static Instance instance;
     return instance;
 }
 
 StringPool::Instance::~Instance() {
-    for (auto& b : blocks) {
+    for (auto &b: blocks) {
         delete b.load();
     }
 }
 
-auto FlyString::c_str() const -> const char* {
-    return StringPool::get_view(handle).data();
-}
+auto FlyString::c_str() const -> const char * { return StringPool::get_view(handle).data(); }
 
-auto FlyString::view() const -> std::string_view {
-    return StringPool::get_view(handle);
-}
+auto FlyString::view() const -> std::string_view { return StringPool::get_view(handle); }
 
-FlyString::operator std::string_view() const {
-    return view();
-}
+FlyString::operator std::string_view() const { return view(); }
 
-auto FlyString::operator==(const FlyString& other) const -> bool {
-    return handle == other.handle;
-}
+auto FlyString::operator==(const FlyString &other) const -> bool { return handle == other.handle; }
 
-auto FlyString::operator!=(const FlyString& other) const -> bool {
-    return handle != other.handle;
-}
+auto FlyString::operator!=(const FlyString &other) const -> bool { return handle != other.handle; }

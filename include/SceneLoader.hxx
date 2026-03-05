@@ -193,9 +193,10 @@ namespace Tooling {
 
     class SceneLoader {
     private:
-        std::filesystem::path assets_dir {"assets/meshes"};
+        std::filesystem::path assets_dir{"assets/meshes"};
+
     public:
-        explicit SceneLoader(const std::filesystem::path& assets = "assets/meshes"): assets_dir(assets) {}
+        explicit SceneLoader(const std::filesystem::path &assets = "assets/meshes") : assets_dir(assets) {}
 
         /**
          * @brief Converts a GLTF file to a serialised scene format. Performs ktx mipmapping and texture packing as part

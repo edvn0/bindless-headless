@@ -71,8 +71,7 @@ auto main(int argc, char **argv) -> int {
         Tooling::SceneLoader loader{"assets/meshes"};
 
         auto f0 = std::async(std::launch::async, [&loader] {
-            return loader.convert_gltf("SponzaGLTF/Sponza.gltf",
-                                       "SponzaGLTF/sponza_converted");
+            return loader.convert_gltf("SponzaGLTF/Sponza.gltf", "SponzaGLTF/sponza_converted");
         });
 
         auto f1 = std::async(std::launch::async, [&loader] {

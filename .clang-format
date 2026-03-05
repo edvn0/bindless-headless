@@ -55,3 +55,5 @@ SpacesInCStyleCastParentheses: false
 SpacesInParentheses: false
 TabWidth: 4
 ...
+Language: Json
+BasedOnStyle: llvm

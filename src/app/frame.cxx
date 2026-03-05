@@ -34,9 +34,9 @@ auto fill_frame_ubo_from_camera(FrameUBO &ubo, const EditorCamera &cam, VkExtent
     std::swap(ubo.frustum_planes[4], ubo.frustum_planes[5]);
 }
 
-auto write_camera_to_frame_ubo(FrameUBO& ubo,RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring, u32 frame_index,
-                               const EditorCamera &cam, VkExtent2D extent, float fov_y_radians, float near_plane,
-                               float far_plane) -> void {
+auto write_camera_to_frame_ubo(FrameUBO &ubo, RenderContext &ctx, AlignedRingBuffer<FrameUBO> &frame_ubo_ring,
+                               u32 frame_index, const EditorCamera &cam, VkExtent2D extent, float fov_y_radians,
+                               float near_plane, float far_plane) -> void {
     fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, near_plane, far_plane);
     frame_ubo_ring.write_element(ctx, frame_index, 0, ubo);
 }

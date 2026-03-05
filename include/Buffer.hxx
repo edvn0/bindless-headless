@@ -83,7 +83,8 @@ public:
     template<typename T>
         requires std::is_trivially_copyable_v<T>
     static auto from_slice(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::span<const T> slice,
-                           const std::string_view name, const std::span<const u32> queue_indices = {}) -> tl::expected<Buffer, Error> {
+                           const std::string_view name, const std::span<const u32> queue_indices = {})
+            -> tl::expected<Buffer, Error> {
         const auto size = slice.size_bytes();
 
         // Get physical device alignment requirements
@@ -149,7 +150,8 @@ public:
     }
 
     static auto zeroes(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::size_t size,
-                       const std::string_view name, const std::span<const u32> queue_indices = {}) -> tl::expected<Buffer, Error> {
+                       const std::string_view name, const std::span<const u32> queue_indices = {})
+            -> tl::expected<Buffer, Error> {
         // Get physical device alignment requirements
         VmaAllocatorInfo alloc_info{};
         vmaGetAllocatorInfo(allocator, &alloc_info);

@@ -40,9 +40,9 @@ namespace hierarchy {
                 result.push_back(e);
         }
         std::ranges::sort(result, [&](entt::entity a, entt::entity b) {
-            return reg.get<MeshComponent>(a).name< reg.get<MeshComponent>(b).name;
+            return reg.get<MeshComponent>(a).name < reg.get<MeshComponent>(b).name;
         });
         return result;
     }
 
-}
+} // namespace hierarchy

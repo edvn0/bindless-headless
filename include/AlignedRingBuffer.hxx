@@ -132,34 +132,36 @@ public:
         write_field(ctx, slot_index, 0, value, field_offset_bytes);
     }
 
-    static auto create(RenderContext &ctx, u64 elements_per_slot, VkBufferUsageFlags extra_usage, std::string_view name, const std::span<const u32> queue_indices = {})
-            -> tl::expected<AlignedRingBuffer, Error>;
+    static auto create(RenderContext &ctx, u64 elements_per_slot, VkBufferUsageFlags extra_usage, std::string_view name,
+                       const std::span<const u32> queue_indices = {}) -> tl::expected<AlignedRingBuffer, Error>;
 
-    static auto create(RenderContext &ctx, VkBufferUsageFlags extra_usage, std::string_view name, const std::span<const u32> queue_indices = {})
-            -> tl::expected<AlignedRingBuffer, Error> {
+    static auto create(RenderContext &ctx, VkBufferUsageFlags extra_usage, std::string_view name,
+                       const std::span<const u32> queue_indices = {}) -> tl::expected<AlignedRingBuffer, Error> {
         return create(ctx, 1, extra_usage, name, queue_indices);
     }
 
-    static auto create(RenderContext &ctx, std::string_view name, const std::span<const u32> queue_indices = {}) -> tl::expected<AlignedRingBuffer, Error> {
+    static auto create(RenderContext &ctx, std::string_view name, const std::span<const u32> queue_indices = {})
+            -> tl::expected<AlignedRingBuffer, Error> {
         return create(ctx, 1, VkBufferUsageFlags{0}, name, queue_indices);
     }
 
-    static auto recreate(RenderContext& ctx, u64 retire_value, AlignedRingBuffer& current, u64 new_element_count, std::string_view name, const std::span<const u32> queue_indices = {}) -> void {
-    auto old_buffer_handle = current.handle();
+    static auto recreate(RenderContext &ctx, u64 retire_value, AlignedRingBuffer &current, u64 new_element_count,
+                         std::string_view name, const std::span<const u32> queue_indices = {}) -> void {
+        auto old_buffer_handle = current.handle();
 
-    auto new_buffer = AlignedRingBuffer<T, N>::create(ctx, new_element_count, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, name, queue_indices);
-    
-    if (new_buffer) {
-        current = std::move(*new_buffer);
-    } else {
-        error("Failed to recreate AlignedRingBuffer: {}", name);
-        return;
+        auto new_buffer = AlignedRingBuffer<T, N>::create(ctx, new_element_count, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                          name, queue_indices);
+
+        if (new_buffer) {
+            current = std::move(*new_buffer);
+        } else {
+            error("Failed to recreate AlignedRingBuffer: {}", name);
+            return;
+        }
+
+        destroy(ctx, old_buffer_handle, retire_value);
     }
-
-    destroy(ctx, old_buffer_handle, retire_value);
-}
 };
-
 
 
 #include "AlignedRingBufferImpl.inl"

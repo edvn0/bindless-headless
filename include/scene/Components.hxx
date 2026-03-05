@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Types.hxx"
 #include "StringPool.hxx"
+#include "Types.hxx"
 
-#include <glm/mat4x3.hpp>
 #include <entt/entity/entity.hpp>
+#include <glm/mat4x3.hpp>
 
 struct TransformComponent {
     glm::mat4x3 local_to_world;
@@ -16,7 +16,7 @@ struct MeshComponent {
 };
 
 struct HierarchyComponent {
-    entt::entity              parent   = entt::null;
+    entt::entity parent = entt::null;
     std::vector<entt::entity> children;
 };
 
@@ -24,4 +24,4 @@ namespace Internal {
     struct MeshRenderState {
         u32 base_instance;
     };
-}
+} // namespace Internal

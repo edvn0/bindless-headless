@@ -217,9 +217,7 @@ struct RuntimeSlangCompiler final : detail::Impl {
     }
 };
 
-Compiler::Compiler() {
-    impl = std::make_unique<RuntimeSlangCompiler>();
-}
+Compiler::Compiler() { impl = std::make_unique<RuntimeSlangCompiler>(); }
 
 Compiler::~Compiler() = default;
 

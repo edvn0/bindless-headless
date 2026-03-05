@@ -6,7 +6,7 @@ namespace {
     template<typename VertexType>
     auto compute_submesh_aabbs(std::span<const VertexType> vertices, std::span<const u32> indices,
                                std::span<const Submesh> submeshes) -> Vec<AABB> {
-                                   Vec<AABB> result;
+        Vec<AABB> result;
         result.reserve(submeshes.size());
 
         for (auto const &submesh: submeshes) {
