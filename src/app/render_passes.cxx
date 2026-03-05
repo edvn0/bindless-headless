@@ -91,6 +91,12 @@ namespace RP {
                         static_cast<u32>(GraphicsStamp::DirectionalShadowMapEnd),
                         static_cast<u32>(idx),
                 };
+            case GraphicsIndex::Billboard:
+                return {
+                        static_cast<u32>(GraphicsStamp::BillboardBegin),
+                        static_cast<u32>(GraphicsStamp::BillboardEnd),
+                        static_cast<u32>(idx),
+                };
             default:
                 break;
         }
@@ -1540,12 +1546,11 @@ auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
                 TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "Billboard");
+                auto _ = RP::begin_graphics(cmd, GraphicsIndex::Billboard);
 
                 const u32 light_count = static_cast<u32>(res.all_point_lights.size());
                 if (light_count == 0)
                     return;
-
-                auto _ = RP::begin_graphics(cmd, GraphicsIndex::Billboard);
 
                 auto *lit = gpu.ctx.textures.get(res.lit_hdr);
                 auto *depth = gpu.ctx.textures.get(res.depth);
@@ -1631,7 +1636,7 @@ auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
                         .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
                         .light_count = light_count,
-                        .texture_index = res.light_icon_texture.index(),
+                        .texture_index = res.icons_map.at("point-light").index(),
                         .sampler_index = pipes.linear_clamp.index(),
                         .world_size = 0.25f,
                 };

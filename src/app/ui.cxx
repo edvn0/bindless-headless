@@ -488,7 +488,7 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
                      ImGuiWindowFlags_NoScrollWithMouse*/);
         output.viewport_input = {};
 
-        const auto view  = ctx.res.frame_ubo->view;
+        const auto view = ctx.res.frame_ubo->view;
         const auto &proj = ctx.res.frame_ubo->projection;
 
         ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -504,10 +504,10 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
                     ImGuizmo::SetOrthographic(false);
                     ImGuizmo::SetRect(p0.x, p0.y, avail.x, avail.y);
 
-                    auto model       = glm::mat4{transform->local_to_world};
+                    auto model = glm::mat4{transform->local_to_world};
 
-                    ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj),
-                                         ImGuizmo::TRANSLATE, ImGuizmo::LOCAL, glm::value_ptr(model));
+                    ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ImGuizmo::TRANSLATE,
+                                         ImGuizmo::LOCAL, glm::value_ptr(model));
 
                     if (ImGuizmo::IsUsing()) {
                         transform->local_to_world = glm::mat4x3{model};
@@ -516,13 +516,13 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
                 }
             }
 
-            output.viewport_input.min     = p0;
-            output.viewport_input.max     = p1;
+            output.viewport_input.min = p0;
+            output.viewport_input.max = p1;
             output.viewport_input.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             output.viewport_input.hovered = ImGui::IsWindowHovered();
 
             const bool gizmo_active = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
-            output.viewport_input.imgui_blocks_mouse    = gizmo_active;
+            output.viewport_input.imgui_blocks_mouse = gizmo_active;
             output.viewport_input.imgui_blocks_keyboard = ImGuizmo::IsUsing();
         }
     }
@@ -680,6 +680,7 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
                     row_g("Tonemap", GraphicsIndex::Tonemap);
                     row_g("Present", GraphicsIndex::Present);
                     row_g("ShadowMap", GraphicsIndex::ShadowMap);
+                    row_g("Billboard", GraphicsIndex::Billboard);
                     ImGui::EndTable();
                 }
                 if (g_stats.has_value()) {

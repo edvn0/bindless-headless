@@ -22,7 +22,7 @@
 #include "Numeric.hxx"
 #include "StringPool.hxx"
 
-using VmaAllocation = struct VmaAllocation_T*;
+using VmaAllocation = struct VmaAllocation_T *;
 
 inline constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle
 inline constexpr u32 max_in_flight = 2; // GPU submit throttle depth
@@ -48,6 +48,9 @@ struct string_eq {
     using is_transparent = void;
     auto operator()(std::string_view a, std::string_view b) const noexcept -> bool { return a == b; }
 };
+
+template<typename V>
+using StringMap = std::unordered_map<std::string, V, string_hash, string_eq>;
 
 
 enum class DeviceAddress : std::uint64_t {

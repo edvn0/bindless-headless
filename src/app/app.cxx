@@ -24,23 +24,36 @@
 #include "Logger.hxx"
 #include "Pipelines.hxx"
 #include "RenderSubmission.hxx"
+#include "SceneLoader.hxx"
 #include "Types.hxx"
+#include "app/icon_parser.hxx"
 #include "app/render.hxx"
 #include "app/render_passes.hxx"
 #include "app/ui.hxx"
-
-#include "SceneLoader.hxx"
-#include "glm/gtc/random.hpp"
 #include "scene/Components.hxx"
 #include "scene/Scene.hxx"
-#include "vulkan/vulkan_core.h"
 
 extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 
 static volatile sig_atomic_t keep_running = 1;
 static void sig_handler(int) { keep_running = 0; }
 
+
 namespace {
+    [[nodiscard]] auto stbi_channels_for(IconLoadDescription::Channels channels) -> int {
+        switch (channels) {
+            case IconLoadDescription::Channels::r:
+                return STBI_grey;
+            case IconLoadDescription::Channels::rg:
+                return STBI_grey_alpha;
+            case IconLoadDescription::Channels::rgb:
+                return STBI_rgb;
+            case IconLoadDescription::Channels::rgba:
+                return STBI_rgb_alpha;
+        }
+        return STBI_rgb_alpha;
+    }
+
     /*auto generate_sky_cubemap(RenderContext &ctx, VmaAllocator alloc,
                           VkDevice device, VkDescriptorSetLayout bindless_layout,
                           VkDescriptorSet bindless_set,
@@ -662,7 +675,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             error("Failed to load one or more window icons.");
         }
 
-
         std::ifstream f("assets/editor/gamecontrollerdb.txt");
         if (f) {
             std::stringstream buf;
@@ -821,6 +833,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
                 create_image_from_span_v2(gpu.allocator, *gpu.ctx.command_ctx, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
                                           std::as_bytes(std::span(flat_normal)), "flat-normals-texture"));
 
+        // FIXME: This (these indices) is a requirement, a system wide precondition for every part.
 #ifndef NDEBUG
         ASSERT(white_handle.index() == white_texture_index,
                "White texture was not assigned the expected bindless index");
@@ -833,6 +846,39 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         (void) black_handle;
         (void) flat_normal_handle;
 #endif
+    }
+
+    {
+        auto _ = NanoProfiler{"Loading icons"};
+        for (const auto &icon: std::filesystem::directory_iterator("assets/editor/icons")) {
+            if (icon.path().extension() != ".png")
+                continue;
+
+            const auto stem = icon.path().stem().string();
+            auto parse_result = IconFilenameParser{stem}.parse();
+            if (!parse_result) {
+                error("Failed to parse icon filename '{}': {} (at pos {})", stem, parse_result.error().message,
+                      parse_result.error().pos);
+                continue;
+            }
+
+            const auto &name = parse_result->name;
+            const auto &desc = parse_result->desc;
+
+            i32 w{}, h{}, c{};
+            auto *pixels = stbi_load(icon.path().string().c_str(), &w, &h, &c, stbi_channels_for(desc.channels));
+            if (pixels) {
+                const auto pixel_count = static_cast<usize>(w * h * desc.bytes_per_pixel());
+                auto img = create_image_from_span_v2(
+                        gpu.allocator, *gpu.ctx.command_ctx, static_cast<u32>(w), static_cast<u32>(h), desc.vk_format(),
+                        std::span<const u8>(pixels, pixel_count), std::format("icon_{}", name));
+                res.icons_map[name] = gpu.ctx.create_texture(std::move(img));
+                info("Loaded icon '{}' ({}x{}, {} channels)", name, w, h, c);
+            } else {
+                error("Failed to load icon '{}'", icon.path().string());
+            }
+            stbi_image_free(pixels);
+        }
     }
 
     {
@@ -1575,7 +1621,6 @@ gpu.bindless.need_repopulate = true;
             ui.gpu_frame_graph.add_line(get_graphics_pass_name(idx));
         ui.graphs_initialized = true;
     }
-
     ui.last_frame_time = std::chrono::high_resolution_clock::now();
     auto stats = FrameStats{};
 

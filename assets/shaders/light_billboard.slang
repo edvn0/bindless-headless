@@ -21,21 +21,24 @@ struct BillboardPushConstants {
 [outputtopology("triangle")]
 void billboard_ms(
     uint tid : SV_GroupIndex,
+    uint group_id : SV_GroupID,
     uniform BillboardPushConstants pc,
     out vertices BillboardVertex verts[128],
     out indices uint3 tris[64])
 {
-    const uint light_count = min(pc.light_count, 32u);
-    SetMeshOutputCounts(light_count * 4, light_count * 2);
+    const uint light_idx = group_id.x * 32 + tid;  // <-- was just tid
+    const uint lights_this_group = min(pc.light_count - group_id.x * 32, 32u);
 
-    if (tid >= light_count) return;
+    SetMeshOutputCounts(lights_this_group * 4, lights_this_group * 2);
 
-    PointLight light = pc.point_lights[tid];
+    if (tid >= lights_this_group) return;
+
+    PointLight light = pc.point_lights[light_idx];
     float3 light_pos = light.position_radius.xyz;
     float3 color     = light.colour_intensity.rgb;
 
-    float3 right = float3(pc.frame_ubo->view._m00, pc.frame_ubo->view._m10, pc.frame_ubo->view._m20);
-    float3 up    = float3(pc.frame_ubo->view._m01, pc.frame_ubo->view._m11, pc.frame_ubo->view._m21);
+float3 right = float3(pc.frame_ubo->view._m00, pc.frame_ubo->view._m01, pc.frame_ubo->view._m02);
+float3 up    = float3(pc.frame_ubo->view._m10, pc.frame_ubo->view._m11, pc.frame_ubo->view._m12);
 
     float h = pc.world_size * 0.5;
 
@@ -62,8 +65,7 @@ void billboard_ms(
 
 [shader("fragment")]
 float4 billboard_fs(BillboardVertex i, uniform BillboardPushConstants pc) : SV_Target0 {
-    float4 tex = sample_texture(i.uv, pc.texture_index, pc.sampler_index);
-    // Discard transparent pixels so depth is correct
-    if (tex.a < 0.1) discard;
-    return float4(tex.rgb * i.color.rgb, tex.a);
+    float alpha = sample_texture(i.uv, pc.texture_index, pc.sampler_index).r;
+    if (alpha < 0.1) discard;
+    return float4(i.color.rgb, alpha);
 }

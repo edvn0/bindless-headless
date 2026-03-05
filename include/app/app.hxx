@@ -225,6 +225,8 @@ struct AppResources {
         FrameIndirectWriter writer{};
         auto begin_frame() -> void { writer.cursor = 0; }
     } draw_stream{};
+
+    StringMap<TextureHandle> icons_map{};
 };
 
 struct OutlinerState {
