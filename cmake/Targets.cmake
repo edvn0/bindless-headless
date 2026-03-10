@@ -146,10 +146,9 @@ target_link_libraries(BindlessEngine PUBLIC
   meshoptimizer
 )
 
-# Slang runtime deps only when runtime path
-  target_sources(BindlessEngine PRIVATE "src/Reflection.cxx")
-  target_include_directories(BindlessEngine PRIVATE ${SLANG_INCLUDE_DIR})
-  target_link_libraries(BindlessEngine PRIVATE slang::slang slang-compiler slang-rt)
+target_sources(BindlessEngine PRIVATE "src/Reflection.cxx")
+target_include_directories(BindlessEngine PRIVATE ${SLANG_INCLUDE_DIR})
+target_link_libraries(BindlessEngine PRIVATE slang::slang slang-compiler slang-rt)
 
 if(HAS_IMAGE_WRITERS)
   target_compile_definitions(BindlessEngine PUBLIC HAS_IMAGE_WRITERS)
@@ -174,16 +173,6 @@ target_compile_definitions(BindlessEngine PUBLIC
   ${VOLK_PLATFORM_DEFINE}
 )
 
-# LTO: put it on the engine (exe inherits on some generators, but be explicit)
-# if(MINGW)
-# set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-# else()
-# set_property(TARGET BindlessEngine PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-# endif()
-
-# ------------------------------------------------------------
-# App library: your app layer (depends on engine)
-# ------------------------------------------------------------
 add_library(BindlessApp STATIC
   "src/app/listeners.cxx"
   "src/app/math.cxx"
@@ -214,12 +203,8 @@ endif()
 
 DEFAULT_COMPILE_OPTIONS(BindlessApp)
 
-# ------------------------------------------------------------
-# Executable: only entrypoint + CLI parsing
-# ------------------------------------------------------------
 add_executable(BindlessHeadless
   "src/main.cpp"
-  "src/ArgumentParse.cxx"
 )
 
 target_precompile_headers(BindlessHeadless PRIVATE PCH.hxx)
@@ -231,7 +216,7 @@ target_include_directories(BindlessHeadless PRIVATE
 
 target_link_libraries(BindlessHeadless PRIVATE
   BindlessApp
-  CLI11::CLI11
+  BaseApplication
   platform_wsi
   SceneLoader
 )
@@ -261,16 +246,36 @@ target_link_libraries(SceneLoader PUBLIC
 
 DEFAULT_COMPILE_OPTIONS(SceneLoader)
 
-# If you still want LTO on the exe explicitly:
-# if(MINGW)
-# set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-# else()
-# set_property(TARGET BindlessHeadless PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-# endif()
+add_executable(scene_inspect src/SceneInspector.cxx)
+target_link_libraries(scene_inspect PRIVATE BindlessEngine)
+target_include_directories(scene_inspect PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
-# ------------------------------------------------------------
-# ASAN check block unchanged (pure configure-time)
-# ------------------------------------------------------------
+DEFAULT_COMPILE_OPTIONS(scene_inspect)
+
+add_library(BaseApplication STATIC
+  "src/framework/BaseApplication.cxx"
+  "src/ArgumentParse.cxx"         # moved here from BindlessHeadless
+)
+
+target_precompile_headers(BaseApplication PRIVATE PCH.hxx)
+
+target_include_directories(BaseApplication PUBLIC
+  ${CMAKE_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(BaseApplication PUBLIC
+  BindlessEngine
+  CLI11::CLI11               # moved here from BindlessHeadless
+  platform_wsi
+)
+
+DEFAULT_COMPILE_OPTIONS(BaseApplication)
+
+add_executable(ImageViewer "src/tools/ImageViewer.cxx")
+target_link_libraries(ImageViewer PRIVATE BaseApplication SceneLoader)
+DEFAULT_COMPILE_OPTIONS(ImageViewer)
+
 cmake_push_check_state()
 set(ASAN_FLAG "-fsanitize=address")
 set(CMAKE_REQUIRED_FLAGS ${ASAN_FLAG})

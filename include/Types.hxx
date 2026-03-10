@@ -104,6 +104,7 @@ struct OffscreenTarget {
     VmaAllocation allocation{};
     u32 width{};
     u32 height{};
+    u32 mip_levels{1};
     bool initialized{false};
 
     VkImageViewType sampled_view_type{VK_IMAGE_VIEW_TYPE_2D};

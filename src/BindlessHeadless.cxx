@@ -120,6 +120,11 @@ namespace destruction {
         dev = VK_NULL_HANDLE;
     }
 
+    auto wsi(VkInstance &inst, VkSurfaceKHR &surf, GLFWwindow *win) -> void {
+        vkDestroySurfaceKHR(inst, surf, nullptr);
+        glfwDestroyWindow(win);
+    }
+
     auto bindless_set(BindlessSet &bs) -> void { bs.destroy(); }
 
     auto allocator(VmaAllocator &alloc) -> void {

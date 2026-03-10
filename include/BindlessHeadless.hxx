@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include <tl/expected.hpp>
@@ -569,10 +570,7 @@ auto throttle(ComputeTimeline &, VkDevice device) -> void;
 namespace destruction {
     auto instance(InstanceWithDebug const &inst) -> void;
 
-    inline auto wsi(VkInstance &inst, VkSurfaceKHR &surf, GLFWwindow *win) -> void {
-        vkDestroySurfaceKHR(inst, surf, nullptr);
-        glfwDestroyWindow(win);
-    }
+    auto wsi(VkInstance &inst, VkSurfaceKHR &surf, GLFWwindow *win) -> void;
 
     auto device(VkDevice &dev) -> void;
 

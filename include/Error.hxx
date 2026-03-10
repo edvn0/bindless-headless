@@ -18,6 +18,8 @@ struct Error {
         FileNotFoundError,
         InvalidSize,
         SceneLoaderError,
+        WindowError,
+        SwapchainError,
         UnknownError
     };
 

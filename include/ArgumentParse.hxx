@@ -14,6 +14,7 @@ struct CLIOptions {
     std::uint32_t msaa{1};
     std::optional<bool> validation_layers{};
     bool disable_output_images{true};
+    std::optional<std::string> title{"Bindless Headless"};
 };
 
 auto parse_cli(int argc, char **argv) -> std::optional<CLIOptions>;

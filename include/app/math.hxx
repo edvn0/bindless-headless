@@ -27,12 +27,7 @@ constexpr auto msaa_from_cli = [](u32 v) -> VkSampleCountFlagBits {
     }
 };
 
-constexpr auto current_extent = [](GLFWwindow *win) {
-    int fbw{0};
-    int fbh{0};
-    glfwGetFramebufferSize(win, &fbw, &fbh);
-    return VkExtent2D{.width = static_cast<u32>(std::max(fbw, 0)), .height = static_cast<u32>(std::max(fbh, 0))};
-};
+auto current_extent(GLFWwindow *win) -> VkExtent2D;
 
 constexpr auto clamp_msaa_samples = [](VkPhysicalDevice physical_device,
                                        VkSampleCountFlagBits requested) -> VkSampleCountFlagBits {

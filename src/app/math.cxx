@@ -92,3 +92,10 @@ auto cluster_config(u32 tiles_x, u32 tiles_y, u32 tiles_z, float near_plane, flo
             .log_z_scale = log_z_scale,
     };
 }
+
+auto current_extent(GLFWwindow *win) -> VkExtent2D {
+    int fbw{0};
+    int fbh{0};
+    glfwGetFramebufferSize(win, &fbw, &fbh);
+    return VkExtent2D{.width = static_cast<u32>(std::max(fbw, 0)), .height = static_cast<u32>(std::max(fbh, 0))};
+};

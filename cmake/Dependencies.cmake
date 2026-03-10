@@ -186,6 +186,7 @@ if(HAS_TRACY)
   )
 endif()
 
+function(FIND_SLANG)
 find_package(Slang CONFIG REQUIRED)
 
 # Ensure SLANG_ROOT is set if find_package didn't set it automatically
@@ -197,9 +198,11 @@ add_library(slang-rt SHARED IMPORTED)
 
 set_target_properties(slang-compiler PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+  INTERFACE_COMPILE_DEFINITIONS "SLANG_DYNAMIC"
 )
 set_target_properties(slang-rt PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+  INTERFACE_COMPILE_DEFINITIONS "SLANG_DYNAMIC"
 )
 
 if(WIN32)
@@ -235,6 +238,9 @@ endif()
 
 message(STATUS "Slang root: ${SLANG_ROOT}")
 message(STATUS "Slang lib dir: ${SLANG_LIB_DIR}")
+endfunction()
+
+FIND_SLANG()
 
 
 CPMAddPackage(

@@ -656,9 +656,6 @@ namespace Tooling {
                 }
 
                 indices.reserve(indices.size() + local_indices.size());
-                for (u32 idx: local_indices)
-                    indices.emplace_back(vertex_offset + idx);
-
                 const size_t prim_vertex_count = positions.size();
 
                 std::vector<u32> opt_indices(local_indices.size());
