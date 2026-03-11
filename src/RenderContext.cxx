@@ -181,20 +181,35 @@ auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void
 }
 
 auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void {
-    bool is_comparison = ctx.comparison_samplers.maybe_get_handle(handle.index()).valid();
-    auto *impl = is_comparison ? ctx.comparison_samplers.get(handle) : ctx.samplers.get(handle);
+    if (handle.empty())
+        return;
+
+    VkSampler sampler_to_destroy = VK_NULL_HANDLE;
+    bool is_comparison = false;
+
+    if (ctx.comparison_samplers.maybe_get_handle(handle.index()) == handle) {
+        sampler_to_destroy = *ctx.comparison_samplers.get(handle);
+        is_comparison = true;
+    } else if (ctx.samplers.maybe_get_handle(handle.index()) == handle) {
+        sampler_to_destroy = *ctx.samplers.get(handle);
+        is_comparison = false;
+    }
+
+    if (sampler_to_destroy == VK_NULL_HANDLE) {
+        return;
+    }
 
     ctx.bindless_set->need_repopulate = true;
 
-    // Sampler is just a VkSampler handle
-    VkSampler sampler = *impl;
-
-    ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, sampler]() {
-        VmaAllocatorInfo info{};
-        vmaGetAllocatorInfo(alloc, &info);
-        vkDestroySampler(info.device, sampler, nullptr);
+    ctx.destroy_queue.enqueue(retire_value, [device = ctx.get_device(), sampler = sampler_to_destroy]() {
+        vkDestroySampler(device, sampler, nullptr);
     });
-    is_comparison ? ctx.comparison_samplers.destroy(handle) : ctx.samplers.destroy(handle);
+
+    if (is_comparison) {
+        ctx.comparison_samplers.destroy(handle);
+    } else {
+        ctx.samplers.destroy(handle);
+    }
 }
 
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value) -> void {

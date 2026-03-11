@@ -24,6 +24,7 @@ public:
     auto operator=(ImGuiRenderer &&) -> ImGuiRenderer & = delete;
 
     auto update_font(FontChoice) -> void;
+    auto set_app_name(std::string_view) -> void;
 
     auto begin_frame(ImGuiFramebuffer main_fb) -> void;
 
@@ -47,6 +48,9 @@ private:
     Holder<PipelineHandle> offscreen_target_pipeline{};
     Holder<SamplerHandle> sampler{};
     Holder<TextureHandle> font_texture{};
+
+    std::string config_name{"imgui.ini"};
+    std::filesystem::path config_path{};
 
     RenderContext &ctx;
     Compiler &compiler;

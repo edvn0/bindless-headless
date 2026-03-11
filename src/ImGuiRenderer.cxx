@@ -202,6 +202,8 @@ ImGuiRenderer::~ImGuiRenderer() {
     }
     viewport_targets.clear();
 
+    sampler.reset();
+
     ImGui_ImplGlfw_Shutdown();
 
     ImGui::DestroyPlatformWindows();
@@ -217,9 +219,9 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
     io.DisplaySize = ImVec2(dim.width / display_scale, dim.height / display_scale);
     io.DisplayFramebufferScale = ImVec2(display_scale, display_scale);
     if (std::filesystem::create_directory("assets/editor")) {
-        std::ofstream ini_file("assets/editor/imgui.ini");
+        std::ofstream ini_file(config_path);
     }
-    io.IniFilename = "assets/editor/imgui.ini";
+    io.IniFilename = config_path.c_str();
 
     if (force_recompile_primary || main_pipeline.empty()) {
         auto created = create_pipeline(std::get<1>(fb)).value();
@@ -286,13 +288,6 @@ auto ImGuiRenderer::render(VkCommandBuffer cmd) -> void {
     if (auto &io = ImGui::GetIO(); io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         render_additional_viewports();
     }
-}
-
-
-constexpr std::size_t next_power_of_two(std::size_t n) {
-    if (n == 0)
-        return 1;
-    return std::bit_ceil(n);
 }
 
 auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, PipelineHandle pipeline) -> void {
@@ -391,14 +386,14 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
                 continue;
             }
 
-            struct VulkanImguiBindData {
-                std::array<float, 4> LRTB{};
+            struct {
+                std::array<float, 4> lrtb{};
                 const DeviceAddress vb;
                 u32 base_vertex;
                 u32 texture_id{0};
                 u32 sampler_id{0};
-            } bindData{
-                    .LRTB = {L, R, T, B},
+            } pc{
+                    .lrtb = {L, R, T, B},
                     .vb = ctx.device_address(drawable.vertex),
                     .base_vertex = vertex_offset + imgui_cmd.VtxOffset,
                     .texture_id = static_cast<u32>(imgui_cmd.GetTexID()),
@@ -406,7 +401,7 @@ auto ImGuiRenderer::render_draw_data(VkCommandBuffer cmd, ImDrawData *dd, Pipeli
             };
 
             vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                               sizeof(VulkanImguiBindData), &bindData);
+                               sizeof(pc), &pc);
 
             VkRect2D scissor{
                     .offset = {static_cast<i32>(clipMin.x), static_cast<i32>(clipMin.y)},
@@ -652,7 +647,7 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
     }
 
     struct PC {
-        glm::vec4 LRTB;
+        glm::vec4 lrtb;
         const DeviceAddress vertices;
         u32 base_vertex;
         u32 texture_id;
@@ -783,6 +778,11 @@ auto ImGuiRenderer::create_pipeline(VkFormat fb) -> tl::expected<CompiledPipelin
             .pipeline = new_pipeline,
             .layout = pipeline_layout,
     };
+}
+
+auto ImGuiRenderer::set_app_name(const std::string_view name) -> void {
+    config_name = std::format("{}.ini", name);
+    config_path = std::filesystem::path{"assets/editor"} / config_name;
 }
 
 auto ImGuiRenderer::update_font(FontChoice f) -> void {

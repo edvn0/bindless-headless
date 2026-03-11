@@ -2,6 +2,7 @@
 #include "BindlessSet.hxx"
 #include "Buffer.hxx"
 #include "Compiler.hxx"
+#include "CreateInfo.hxx"
 #include "GlobalCommandContext.hxx"
 #include "ImageOperations.hxx"
 #include "Logger.hxx"
@@ -370,6 +371,9 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
     vmaSetAllocationName(alloc, t.allocation, name.data());
 
+    t.allocation_info = std::make_unique<VmaAllocationInfo>();
+    vmaGetAllocationInfo(alloc, t.allocation, t.allocation_info.get());
+
     return t;
 }
 
@@ -557,6 +561,9 @@ auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat fo
     t.attachment_view_type = vci.viewType;
     t.sampled_view_type = (t.sampled_view != VK_NULL_HANDLE) ? vci.viewType : VK_IMAGE_VIEW_TYPE_2D;
     t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
+
+    t.allocation_info = std::make_unique<VmaAllocationInfo>();
+    vmaGetAllocationInfo(alloc, t.allocation, t.allocation_info.get());
 
     return t;
 }
@@ -775,6 +782,9 @@ auto create_texture_image_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, 
         t.sampled_view_type = vci.viewType;
         t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
         t.attachment_view_type = VK_IMAGE_VIEW_TYPE_2D;
+
+        t.allocation_info = std::make_unique<VmaAllocationInfo>();
+        vmaGetAllocationInfo(alloc, t.allocation, t.allocation_info.get());
 
         return t;
     } else {

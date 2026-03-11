@@ -12,6 +12,7 @@
 #include "BindlessSet.hxx"
 #include "Compiler.hxx"
 #include "Constants.hxx"
+#include "CreateInfo.hxx"
 #include "GlobalCommandContext.hxx"
 #include "ImGuiRenderer.hxx"
 #include "Logger.hxx"
@@ -31,7 +32,6 @@ struct BaseApplication::Impl {
 
     VkSurfaceKHR surface{VK_NULL_HANDLE};
     GraphicsTimeline tl_graphics{};
-    TransferTimeline tl_transfer{};
     BindlessSet bindless{};
     Swapchain swapchain{};
     RenderContext ctx{};
@@ -40,8 +40,6 @@ struct BaseApplication::Impl {
     std::unique_ptr<ImGuiRenderer> gui{};
 
     struct Frame {
-        VkCommandPool pool{VK_NULL_HANDLE};
-        VkCommandBuffer cmd{VK_NULL_HANDLE};
         u64 frame_done_value{0};
     };
     std::array<Frame, frames_in_flight> frames{};
@@ -72,21 +70,6 @@ namespace {
 
 auto BaseApplication::on_init() -> tl::expected<void, Error> {
     auto &impl = *this->m_impl;
-    {
-        std::array<u8, 4> white{255, 255, 255, 255};
-        std::array<u8, 4> black{0, 0, 0, 255};
-        std::array<u8, 4> flat{128, 128, 255, 255};
-        impl.ctx.create_texture(create_image_from_span_v2(impl.ctx.allocator, *impl.ctx.command_ctx, 1, 1,
-                                                          VK_FORMAT_R8G8B8A8_UNORM, std::as_bytes(std::span(white)),
-                                                          "white"));
-        impl.ctx.create_texture(create_image_from_span_v2(impl.ctx.allocator, *impl.ctx.command_ctx, 1, 1,
-                                                          VK_FORMAT_R8G8B8A8_UNORM, std::as_bytes(std::span(black)),
-                                                          "black"));
-        impl.ctx.create_texture(create_image_from_span_v2(impl.ctx.allocator, *impl.ctx.command_ctx, 1, 1,
-                                                          VK_FORMAT_R8G8B8A8_UNORM, std::as_bytes(std::span(flat)),
-                                                          "flat_normal"));
-    }
-
     {
         {
             auto ci = create_info<VkSamplerCreateInfo>();
@@ -159,6 +142,16 @@ auto BaseApplication::on_init() -> tl::expected<void, Error> {
     return {};
 }
 
+auto handle_bindless_repopulation(auto &bindless, auto &render_context, auto &gui) -> void {
+    if (!bindless.repopulate_if_needed(render_context.textures, render_context.samplers,
+                                       render_context.comparison_samplers)) {
+        return;
+    }
+    gui.set_should_recompile();
+
+    info("Bindless set was repopulated, resizing pipelines.");
+}
+
 auto run_application(BaseApplication &app, int argc, char **argv) -> int {
     signal(SIGINT, sig_handler);
 
@@ -213,6 +206,12 @@ auto run_application(BaseApplication &app, int argc, char **argv) -> int {
 
     while (!glfwWindowShouldClose(app.window) && g_keep_running) {
         glfwPollEvents();
+        handle_bindless_repopulation(impl.bindless, impl.ctx, *impl.gui);
+
+        if (app.should_exit) {
+            g_keep_running = false;
+            continue;
+        }
 
         const auto now = std::chrono::high_resolution_clock::now();
         const float dt = std::chrono::duration<float>(now - impl.last_frame_time).count();
@@ -226,23 +225,20 @@ auto run_application(BaseApplication &app, int argc, char **argv) -> int {
             break;
         }
 
+        impl.ctx.destroy_queue.retire(impl.frames[fi].frame_done_value);
         app.frame_index++;
     }
 
     app.on_shutdown();
-
     vkDeviceWaitIdle(app.device);
     impl.gui.reset();
+    impl.ctx.destroy_queue.retire(std::numeric_limits<u64>::max()); // drain first
     impl.ctx.clear_all();
-    impl.ctx.destroy_queue.retire(std::numeric_limits<u64>::max());
-
-    for (auto &f: impl.frames)
-        if (f.pool != VK_NULL_HANDLE)
-            vkDestroyCommandPool(app.device, f.pool, nullptr);
+    impl.ctx.destroy_queue.retire(std::numeric_limits<u64>::max()); // catch anything clear_all queued
 
     destruction::global_command_context(*impl.ctx.command_ctx);
     destruction::bindless_set(impl.bindless);
-    destruction::timelines(app.device, impl.tl_graphics, impl.tl_transfer, impl.tl_transfer);
+    destruction::timelines(app.device, impl.tl_graphics);
     destruction::allocator(impl.ctx.allocator);
     destruction::swapchain(impl.swapchain);
     destruction::wsi(instance.instance, impl.surface, app.window);
@@ -254,7 +250,7 @@ auto run_application(BaseApplication &app, int argc, char **argv) -> int {
     return 0;
 }
 
-BaseApplication::BaseApplication() = default;
+BaseApplication::BaseApplication(AppInfo i) : app_info{std::move(i)} {};
 BaseApplication::~BaseApplication() = default;
 
 auto BaseApplication::ImplDeleter::operator()(Impl *ptr) const noexcept -> void { delete ptr; }
@@ -298,7 +294,6 @@ auto BaseApplication::init_vulkan(CLIOptions &opts, InstanceWithDebug &instance)
     allocator = create_allocator(instance.instance, physical_device, device, &enabled);
 
     impl.tl_graphics = create_graphics_timeline(device, impl.graphics_queue, impl.graphics_family);
-    impl.tl_transfer = create_transfer_timeline(device, impl.graphics_queue, impl.graphics_family);
 
     impl.bindless.init(device, query_bindless_caps(physical_device), 4u, 4u, 4u, 4u, 0u);
     impl.bindless.grow_if_needed(64u, 16u, 8u, 4u);
@@ -317,7 +312,20 @@ auto BaseApplication::init_vulkan(CLIOptions &opts, InstanceWithDebug &instance)
     };
     ctx = &impl.ctx;
 
-    init_frames();
+    {
+        std::array<u8, 4> white{255, 255, 255, 255};
+        std::array<u8, 4> black{0, 0, 0, 255};
+        std::array<u8, 4> flat{128, 128, 255, 255};
+        impl.ctx.create_texture(create_image_from_span_v2(impl.ctx.allocator, *impl.ctx.command_ctx, 1, 1,
+                                                          VK_FORMAT_R8G8B8A8_UNORM, std::as_bytes(std::span(white)),
+                                                          "white"));
+        impl.ctx.create_texture(create_image_from_span_v2(impl.ctx.allocator, *impl.ctx.command_ctx, 1, 1,
+                                                          VK_FORMAT_R8G8B8A8_UNORM, std::as_bytes(std::span(black)),
+                                                          "black"));
+        impl.ctx.create_texture(create_image_from_span_v2(impl.ctx.allocator, *impl.ctx.command_ctx, 1, 1,
+                                                          VK_FORMAT_R8G8B8A8_UNORM, std::as_bytes(std::span(flat)),
+                                                          "flat_normal"));
+    }
 
     impl.gui = std::make_unique<ImGuiRenderer>(
             window, static_cast<u32>(impl.swapchain.image_count()), impl.ctx, *impl.compiler,
@@ -325,55 +333,37 @@ auto BaseApplication::init_vulkan(CLIOptions &opts, InstanceWithDebug &instance)
                     .font_path = "assets/editor/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf",
                     .size = 13.0f,
             });
+    auto name = std::format("{}_v{}.{}.{}", app_info.name, app_info.version.at(0), app_info.version.at(1),
+                            app_info.version.at(2));
+    impl.gui->set_app_name(name);
     gui = impl.gui.get();
 
-    glfwSetWindowSizeCallback(window, [](GLFWwindow *, int, int) {});
+    glfwSetWindowTitle(window, name.data());
     glfwShowWindow(window);
     glfwFocusWindow(window);
     return {};
 }
 
-auto BaseApplication::init_frames() -> void {
-    auto &impl = *m_impl;
-    for (u32 i = 0; i < frames_in_flight; ++i) {
-        auto &f = impl.frames[i];
-
-        VkCommandPoolCreateInfo cpci{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-                .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-                .queueFamilyIndex = impl.graphics_family,
-        };
-        vk_check(vkCreateCommandPool(device, &cpci, nullptr, &f.pool));
-        set_debug_name(device, VK_OBJECT_TYPE_COMMAND_POOL, f.pool, std::format("base_app_cmd_pool_{}", i));
-
-        VkCommandBufferAllocateInfo cbai{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                .commandPool = f.pool,
-                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                .commandBufferCount = 1,
-        };
-        vk_check(vkAllocateCommandBuffers(device, &cbai, &f.cmd));
-        set_debug_name(device, VK_OBJECT_TYPE_COMMAND_BUFFER, f.cmd, std::format("base_app_cmd_{}", i));
-    }
-}
-
 auto BaseApplication::wait_frame(u32 fi) -> void {
-    auto &f = m_impl->frames[fi];
+    auto &impl = *m_impl;
+    auto &f = impl.frames[fi];
+
     if (f.frame_done_value == 0)
         return;
 
     VkSemaphoreWaitInfo wi{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .pNext = nullptr,
+            .flags = 0,
             .semaphoreCount = 1,
-            .pSemaphores = &m_impl->tl_graphics.timeline,
+            .pSemaphores = &impl.tl_graphics.timeline,
             .pValues = &f.frame_done_value,
     };
     vk_check(vkWaitSemaphores(device, &wi, UINT64_MAX));
+
+    impl.tl_graphics.completed = std::max(impl.tl_graphics.completed, f.frame_done_value);
 }
 
-// ---------------------------------------------------------------------------
-// render_frame
-// ---------------------------------------------------------------------------
 auto BaseApplication::render_frame(u32 fi, float dt) -> tl::expected<void, Error> {
     auto &impl = *m_impl;
     auto &f = impl.frames[fi];
@@ -398,107 +388,75 @@ auto BaseApplication::render_frame(u32 fi, float dt) -> tl::expected<void, Error
     VkImageView view = swap.image_view(image_idx);
     const VkExtent2D extent = swap.extent();
 
-    vk_check(vkResetCommandPool(device, f.pool, 0));
-
-    VkCommandBufferBeginInfo bi{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-    };
-    vk_check(vkBeginCommandBuffer(f.cmd, &bi));
-
-    // Undefined → color attachment
-    {
-        auto barrier = create_info<VkImageMemoryBarrier2>();
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
-        barrier.srcAccessMask = 0;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        barrier.image = swap_image;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        auto dep = create_info<VkDependencyInfo>();
-        dep.imageMemoryBarrierCount = 1;
-        dep.pImageMemoryBarriers = &barrier;
-        vkCmdPipelineBarrier2(f.cmd, &dep);
-    }
-
     impl.gui->begin_frame(ImGuiFramebuffer(extent, swap.format(), swap.format(), swap.color_space()));
-    on_frame(dt);
+    on_frame(Timestep{dt});
     impl.gui->end_frame();
 
-    VkRenderingAttachmentInfo color_att{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = {.color = {.float32 = {0.1f, 0.1f, 0.1f, 1.0f}}},
-    };
-    VkRenderingInfo ri{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .renderArea = {{0, 0}, extent},
-            .layerCount = 1,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &color_att,
-    };
-    vkCmdBeginRendering(f.cmd, &ri);
-    impl.gui->render(f.cmd);
-    vkCmdEndRendering(f.cmd);
-
-    // Color attachment → present src
-    {
-        auto barrier = create_info<VkImageMemoryBarrier2>();
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-        barrier.dstAccessMask = 0;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        barrier.image = swap_image;
-        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        auto dep = create_info<VkDependencyInfo>();
-        dep.imageMemoryBarrierCount = 1;
-        dep.pImageMemoryBarriers = &barrier;
-        vkCmdPipelineBarrier2(f.cmd, &dep);
-    }
-
-    vk_check(vkEndCommandBuffer(f.cmd));
-
-    const u64 signal_value = ++tl.value;
-    f.frame_done_value = signal_value;
-
-    VkSemaphoreSubmitInfo wait_bin{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+    const BinaryWait image_available_wait{
             .semaphore = sync.image_available,
-            .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
     };
-    VkSemaphoreSubmitInfo sig_bin{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+    const BinarySignal render_finished_signal{
             .semaphore = sync.render_finished,
-            .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
     };
-    VkSemaphoreSubmitInfo sig_tl{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .semaphore = tl.timeline,
-            .value = signal_value,
-            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-    };
-    VkCommandBufferSubmitInfo cmd_si{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-            .commandBuffer = f.cmd,
-    };
-    const std::array signals = {sig_bin, sig_tl};
-    VkSubmitInfo2 si{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-            .waitSemaphoreInfoCount = 1,
-            .pWaitSemaphoreInfos = &wait_bin,
-            .commandBufferInfoCount = 1,
-            .pCommandBufferInfos = &cmd_si,
-            .signalSemaphoreInfoCount = static_cast<u32>(signals.size()),
-            .pSignalSemaphoreInfos = signals.data(),
-    };
-    vk_check(vkQueueSubmit2(impl.graphics_queue, 1, &si, VK_NULL_HANDLE));
+
+    f.frame_done_value = submit_stage(
+            tl, device,
+            [&](VkCommandBuffer cmd) {
+                // Undefined → color attachment
+                {
+                    auto barrier = create_info<VkImageMemoryBarrier2>();
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT;
+                    barrier.srcAccessMask = 0;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    barrier.image = swap_image;
+                    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    auto dep = create_info<VkDependencyInfo>();
+                    dep.imageMemoryBarrierCount = 1;
+                    dep.pImageMemoryBarriers = &barrier;
+                    vkCmdPipelineBarrier2(cmd, &dep);
+                }
+
+                auto color_att = create_info<VkRenderingAttachmentInfo>();
+                color_att.imageView = view;
+                color_att.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                color_att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                color_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                color_att.clearValue = {.color = {.float32 = {0.1f, 0.1f, 0.1f, 1.0f}}};
+                auto ri = create_info<VkRenderingInfo>();
+                ri.renderArea = {{0, 0}, extent};
+                ri.layerCount = 1;
+                ri.colorAttachmentCount = 1;
+                ri.pColorAttachments = &color_att;
+                vkCmdBeginRendering(cmd, &ri);
+                impl.gui->render(cmd);
+                vkCmdEndRendering(cmd);
+
+                // Color attachment → present src
+                {
+                    auto barrier = create_info<VkImageMemoryBarrier2>();
+                    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                    barrier.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+                    barrier.dstAccessMask = 0;
+                    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                    barrier.image = swap_image;
+                    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    auto dep = create_info<VkDependencyInfo>();
+                    dep.imageMemoryBarrierCount = 1;
+                    dep.pImageMemoryBarriers = &barrier;
+                    vkCmdPipelineBarrier2(cmd, &dep);
+                }
+            },
+            SubmitSynchronisation{
+                    .binary_waits = std::array{image_available_wait},
+                    .binary_signals = std::array{render_finished_signal},
+            });
 
     impl.ctx.destroy_queue.retire(tl.completed);
     impl.bindless.repopulate_if_needed(impl.ctx.textures, impl.ctx.samplers, impl.ctx.comparison_samplers);
@@ -507,7 +465,10 @@ auto BaseApplication::render_frame(u32 fi, float dt) -> tl::expected<void, Error
     if (present_res == VK_ERROR_OUT_OF_DATE_KHR || present_res == VK_SUBOPTIMAL_KHR) {
         int w = 0, h = 0;
         glfwGetFramebufferSize(window, &w, &h);
-        std::ignore = swap.recreate({static_cast<u32>(w), static_cast<u32>(h)});
+        std::ignore = swap.recreate({
+                static_cast<u32>(w),
+                static_cast<u32>(h),
+        });
     } else {
         vk_check(present_res);
     }

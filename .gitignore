@@ -26,3 +26,6 @@ assets/meshes
 !assets/**/*.scene
 
 scripts
+
+# mkstemp
+/?*[RSTUVWXYZ]

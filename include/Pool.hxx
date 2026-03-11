@@ -104,7 +104,8 @@ public:
     }
     Holder() = default;
 
-    Holder(Holder &&other) : context(other.context), handle(other.handle) {}
+    Holder(Holder &&other) noexcept :
+        context(std::exchange(other.context, nullptr)), handle(std::exchange(other.handle, {})) {}
     auto operator=(const Holder &) -> Holder & = delete;
     auto operator=(Holder &&other) -> Holder & {
         std::swap(context, other.context);
@@ -226,7 +227,15 @@ public:
 
     template<typename Fn>
     auto for_each_live(Fn &&fn) -> void {
-        for (u32 i = 0; i < entries.size(); ++i) {
+        for (u32 i = 0u; i < entries.size(); ++i) {
+            if (!entries[i].live)
+                continue;
+            fn(get_handle(i), entries[i].object);
+        }
+    }
+    template<typename Fn>
+    auto for_each_live_with_skip(Fn &&fn, u32 skip = 3U) -> void {
+        for (u32 i = skip; i < entries.size(); ++i) {
             if (!entries[i].live)
                 continue;
             fn(get_handle(i), entries[i].object);

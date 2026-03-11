@@ -1601,6 +1601,7 @@ gpu.bindless.need_repopulate = true;
                     .font_path = "assets/editor/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf",
                     .size = 13.0f,
             });
+    ui.gui->set_app_name("BHEngine");
 
     auto gui_pipeline_node = gpu.window_resize_graph.add_node(
             "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },

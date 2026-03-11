@@ -5,6 +5,7 @@
 #include <tl/expected.hpp>
 
 #include "Error.hxx"
+#include "Material.hxx"
 #include "Numeric.hxx"
 
 #include <array>
@@ -176,7 +177,7 @@ namespace Tooling {
         u32 emissive_map = 0xFFFFFFFFu;
         std::array<float, 3> emissive_factor{0, 0, 0};
 
-        u32 flags = 0;
+        MaterialFlags flags = MaterialFlags::None;
         u32 reserved0 = 0;
     };
 

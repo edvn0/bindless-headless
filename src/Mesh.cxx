@@ -803,10 +803,6 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
 
 namespace {
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
     auto read_raw(const std::filesystem::path &path) -> tl::expected<std::vector<std::byte>, Error> {
         std::ifstream f(path, std::ios::binary);
         if (!f)
@@ -831,7 +827,6 @@ namespace {
     }
 
     auto bzip2_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
-        // We don't know the original size, so grow until it fits.
         size_t dst_cap = src.size() * 8;
         for (int attempt = 0; attempt < 6; ++attempt) {
             std::vector<std::byte> dst(dst_cap);
@@ -869,12 +864,8 @@ namespace {
         if (offset >= string_blob.size())
             return {};
         const char *p = reinterpret_cast<const char *>(string_blob.data() + offset);
-        return std::string_view{p}; // null-terminated
+        return std::string_view{p};
     }
-
-    // -------------------------------------------------------------------------
-    // KTX2 -> LoadedTextureCpu  (mirrors load_ktx2_cpu_bc7 in Mesh.cxx)
-    // -------------------------------------------------------------------------
 
     auto decode_ktx2_bytes(std::span<const std::byte> ktx_bytes, TextureLoadPacket::Type type,
                            TextureLoadPacket::Class tex_class, std::string_view debug_name) -> LoadedTextureCpu {
@@ -1009,12 +1000,10 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Invalid scene file extension"));
     }
 
-    // 1. Read compressed file bytes
     auto compressed = read_raw(scene_path);
     if (!compressed)
         return tl::unexpected(compressed.error());
 
-    // 2. Bzip2 decompress
     auto file_bytes_exp = bzip2_decompress(*compressed);
     if (!file_bytes_exp)
         return tl::unexpected(file_bytes_exp.error());
@@ -1093,9 +1082,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
             continue;
         }
 
-        // Copy the KTX2 bytes so the async lambda owns them.
-        // (file_bytes_owned is referenced by the span but we can't safely share
-        //  ownership here without extra machinery; a small copy is simplest.)
         std::vector<std::byte> ktx_copy(file.begin() + static_cast<ptrdiff_t>(ktx_off),
                                         file.begin() + static_cast<ptrdiff_t>(ktx_off + ktx_sz));
 
@@ -1114,9 +1100,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     for (auto &fut: tex_futures)
         cpu_textures.emplace_back(fut.get());
 
-    // -------------------------------------------------------------------------
-    // 7. Upload textures to GPU, collect TextureHandles
-    // -------------------------------------------------------------------------
     std::vector<TextureHandle> tex_handles;
     tex_handles.reserve(cpu_textures.size());
 
@@ -1128,10 +1111,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         tex_handles.emplace_back(ctx.textures.create(std::move(img)));
     }
 
-    // -------------------------------------------------------------------------
-    // 8. Convert file GPUMaterial -> runtime GPUMaterialData
-    //    The file stores texture indices; we remap to bindless descriptor indices.
-    // -------------------------------------------------------------------------
     const DefaultTextureHandles defs = get_default_texture_handles(ctx);
     constexpr u32 k_none = 0xFFFFFFFFu;
 
@@ -1169,18 +1148,11 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         out.emissive_factor = {fm.emissive_factor[0], fm.emissive_factor[1], fm.emissive_factor[2]};
         out.set_emissive_map(out.emissive_map != defs.black.index());
 
-        out.set_is_alpha_tested((fm.flags & GPUMaterialData::FLAG_ALPHA_TESTED) != 0);
+        out.set_is_alpha_tested(has(fm.flags, MaterialFlags::AlphaTested));
 
         gpu_materials.emplace_back(out);
     }
 
-    // -------------------------------------------------------------------------
-    // 9. Convert file Vertex -> runtime Vertex
-    //    File: float[3] position, float[2] uv0, u32 normal, u32 tangent, u32 reserved
-    //    Runtime: glm::vec3 position, u32 uvs, u32 normal, u32 tangent, u32 bitangent
-    //    Bitangent is absent in the file — we'll regenerate it below via
-    //    compute_tangent_basis (same path as OBJ loading).
-    // -------------------------------------------------------------------------
     MeshData mesh{};
     mesh.vertices.resize(file_vertices.size());
 
@@ -1203,9 +1175,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     mesh.indices.assign(file_indices.begin(), file_indices.end());
 
 
-    // -------------------------------------------------------------------------
-    // 10. Convert file Submesh -> runtime Submesh
-    // -------------------------------------------------------------------------
     mesh.submeshes.reserve(file_submeshes.size());
     std::vector<u32> submesh_material_ids;
     submesh_material_ids.reserve(file_submeshes.size());
@@ -1213,7 +1182,7 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     for (const auto &fs: file_submeshes) {
         const u32 mat_idx = (fs.material_index < static_cast<u32>(gpu_materials.size())) ? fs.material_index : 0u;
         const bool alpha = (mat_idx < static_cast<u32>(file_materials.size()))
-                                   ? ((file_materials[mat_idx].flags & GPUMaterialData::FLAG_ALPHA_TESTED) != 0)
+                                   ? has(file_materials[mat_idx].flags, MaterialFlags::AlphaTested)
                                    : false;
 
         Submesh sm{};
@@ -1242,25 +1211,12 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
                                  sizeof(Vertex), 1.05f);
     }
 
-    // -------------------------------------------------------------------------
-    // 11. Regenerate bitangents
-    // Not necessary anymore since GLTF export now includes them.
-    // -------------------------------------------------------------------------
-    // compute_tangent_basis(mesh);
-
-    // -------------------------------------------------------------------------
-    // 12. AABB
-    // -------------------------------------------------------------------------
     auto aabb_result = create_mesh_aabb_data(ctx.allocator, mesh, scene_path.filename().string());
     if (!aabb_result)
         return tl::unexpected(aabb_result.error());
     auto aabb_data = std::move(aabb_result.value());
 
-    // -------------------------------------------------------------------------
-    // 13. GPU buffer uploads
-    // -------------------------------------------------------------------------
     const std::string stem = scene_path.stem().string();
-
     auto vertex_buffer = Buffer::from_slice<Vertex>(ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                                                     std::span<const Vertex>{mesh.vertices.data(), mesh.vertices.size()},
                                                     std::format("vertex_buffer_{}", stem))

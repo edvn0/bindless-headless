@@ -6,21 +6,8 @@
 //   --textures     Print per-texture KTX2 metadata (format, dims, mips, supercompression)
 //   --dump-ktx <dir>  Write raw KTX2 blobs to <dir>/<name>.ktx2 for external inspection
 //
-// Build (adjust include/lib paths to match your vcpkg/CMake setup):
-//
-//   g++ -std=c++23 -O2 SceneInspector.cxx \
-//       -I<path/to/SceneLoader.hxx dir> \
-//       -lbz2 -lktx \
-//       -o scene_inspect
-//
-// Or drop it into your CMakeLists.txt as an executable target that links
-// against the same deps as your tooling library:
-//
-//   add_executable(scene_inspect SceneInspector.cxx)
-//   target_link_libraries(scene_inspect PRIVATE ktx bzlib BindlessEngine)
-//   target_include_directories(scene_inspect PRIVATE <your includes>)
-
-#include "SceneLoader.hxx" // FileHeader, Submesh, Vertex, GPUMaterial, Texture, BlobRange, k_magic, k_version, k_lod_count
+#include "Material.hxx"
+#include "SceneLoader.hxx"
 
 #include <bit>
 #include <cassert>
@@ -246,8 +233,10 @@ static auto inspect_ktx2(std::span<const std::byte> bytes, std::string_view name
 // AABB over the vertex buffer
 // ---------------------------------------------------------------------------
 struct Aabb {
-    std::array<float, 3> min_v{FLT_MAX, FLT_MAX, FLT_MAX};
-    std::array<float, 3> max_v{-FLT_MAX, -FLT_MAX, -FLT_MAX};
+    std::array<float, 3> min_v{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                               std::numeric_limits<float>::max()};
+    std::array<float, 3> max_v{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
+                               -std::numeric_limits<float>::max()};
 
     auto extend(const std::array<float, 3> &p) -> void {
         for (int i = 0; i < 3; ++i) {
@@ -264,11 +253,6 @@ static auto compute_aabb(std::span<const Tooling::Vertex> verts) -> Aabb {
     return a;
 }
 
-// ---------------------------------------------------------------------------
-// Material flag decoder
-// ---------------------------------------------------------------------------
-// Match GPUMaterialData flag constants from your engine (Material.hxx).
-// We read them straight from GPUMaterial::flags in the file.
 static constexpr u32 FLAG_ALBEDO_MAP = 1 << 0;
 static constexpr u32 FLAG_NORMAL_MAP = 1 << 1;
 static constexpr u32 FLAG_ROUGHNESS_MAP = 1 << 2;
@@ -296,6 +280,9 @@ static auto decode_material_flags(u32 flags) -> std::string {
     add(FLAG_EMISSIVE_MAP, "emissive_map");
     add(FLAG_ALPHA_TESTED, "alpha_tested");
     return out;
+}
+static auto decode_material_flags(MaterialFlags flags) -> std::string {
+    return decode_material_flags(static_cast<u32>(flags));
 }
 
 // ---------------------------------------------------------------------------

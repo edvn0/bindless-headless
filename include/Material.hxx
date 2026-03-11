@@ -13,10 +13,12 @@
 #include <tl/expected.hpp>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <glm/glm.hpp>
 
+#include "Bitfield.hxx"
 #include "Numeric.hxx"
 
 struct MaterialData {
@@ -34,6 +36,19 @@ struct MaterialData {
     bool is_alpha_tested{false};
 };
 
+enum class MaterialFlags : u32 {
+    None = 0,
+    Albedo = 1 << 0,
+    Normal = 1 << 1,
+    Roughness = 1 << 2,
+    Metallic = 1 << 3,
+    Occlusion = 1 << 4,
+    Emissive = 1 << 5,
+    AlphaTested = 1 << 6,
+    All = 0xFFFFFFFF
+};
+MAKE_BITFIELD(MaterialFlags)
+
 struct GPUMaterialData {
     u32 albedo_map{};
     glm::vec4 albedo_factor{1.0f};
@@ -45,64 +60,56 @@ struct GPUMaterialData {
     u32 occlusion_map{};
     u32 emissive_map{};
     glm::vec3 emissive_factor{0.0f};
-    u32 flags{};
+    MaterialFlags flags;
 
     constexpr auto set_albedo_map(bool has_map) -> void {
         if (has_map)
-            flags |= FLAG_ALBEDO_MAP;
+            flags |= MaterialFlags::Albedo;
         else
-            flags &= ~FLAG_ALBEDO_MAP;
+            flags &= ~MaterialFlags::Albedo;
     }
     constexpr auto set_normal_map(bool has_map) -> void {
         if (has_map)
-            flags |= FLAG_NORMAL_MAP;
+            flags |= MaterialFlags::Normal;
         else
-            flags &= ~FLAG_NORMAL_MAP;
+            flags &= ~MaterialFlags::Normal;
     }
     constexpr auto set_roughness_map(bool has_map) -> void {
         if (has_map)
-            flags |= FLAG_ROUGHNESS_MAP;
+            flags |= MaterialFlags::Roughness;
         else
-            flags &= ~FLAG_ROUGHNESS_MAP;
+            flags &= ~MaterialFlags::Roughness;
     }
     constexpr auto set_metallic_map(bool has_map) -> void {
         if (has_map)
-            flags |= FLAG_METALLIC_MAP;
+            flags |= MaterialFlags::Metallic;
         else
-            flags &= ~FLAG_METALLIC_MAP;
+            flags &= ~MaterialFlags::Metallic;
     }
     constexpr auto set_occlusion_map(bool has_map) -> void {
         if (has_map)
-            flags |= FLAG_OCCLUSION_MAP;
+            flags |= MaterialFlags::Occlusion;
         else
-            flags &= ~FLAG_OCCLUSION_MAP;
+            flags &= ~MaterialFlags::Occlusion;
     }
     constexpr auto set_emissive_map(bool has_map) -> void {
         if (has_map)
-            flags |= FLAG_EMISSIVE_MAP;
+            flags |= MaterialFlags::Emissive;
         else
-            flags &= ~FLAG_EMISSIVE_MAP;
+            flags &= ~MaterialFlags::Emissive;
     }
     constexpr auto set_is_alpha_tested(bool is_alpha) -> void {
         if (is_alpha)
-            flags |= FLAG_ALPHA_TESTED;
+            flags |= MaterialFlags::AlphaTested;
         else
-            flags &= ~FLAG_ALPHA_TESTED;
+            flags &= ~MaterialFlags::AlphaTested;
     }
 
-    constexpr auto has_albedo_map() const -> bool { return (flags & FLAG_ALBEDO_MAP) != 0; }
-    constexpr auto has_normal_map() const -> bool { return (flags & FLAG_NORMAL_MAP) != 0; }
-    constexpr auto has_roughness_map() const -> bool { return (flags & FLAG_ROUGHNESS_MAP) != 0; }
-    constexpr auto has_metallic_map() const -> bool { return (flags & FLAG_METALLIC_MAP) != 0; }
-    constexpr auto has_occlusion_map() const -> bool { return (flags & FLAG_OCCLUSION_MAP) != 0; }
-    constexpr auto has_emissive_map() const -> bool { return (flags & FLAG_EMISSIVE_MAP) != 0; }
-    constexpr auto is_alpha_tested() const -> bool { return (flags & FLAG_ALPHA_TESTED) != 0; }
-
-    constexpr static u32 FLAG_ALBEDO_MAP = 1 << 0;
-    constexpr static u32 FLAG_NORMAL_MAP = 1 << 1;
-    constexpr static u32 FLAG_ROUGHNESS_MAP = 1 << 2;
-    constexpr static u32 FLAG_METALLIC_MAP = 1 << 3;
-    constexpr static u32 FLAG_OCCLUSION_MAP = 1 << 4;
-    constexpr static u32 FLAG_EMISSIVE_MAP = 1 << 5;
-    constexpr static u32 FLAG_ALPHA_TESTED = 1 << 6;
+    constexpr auto has_albedo_map() const -> bool { return has(flags, MaterialFlags::Albedo); }
+    constexpr auto has_normal_map() const -> bool { return has(flags, MaterialFlags::Normal); }
+    constexpr auto has_roughness_map() const -> bool { return has(flags, MaterialFlags::Roughness); }
+    constexpr auto has_metallic_map() const -> bool { return has(flags, MaterialFlags::Metallic); }
+    constexpr auto has_occlusion_map() const -> bool { return has(flags, MaterialFlags::Occlusion); }
+    constexpr auto has_emissive_map() const -> bool { return has(flags, MaterialFlags::Emissive); }
+    constexpr auto is_alpha_tested() const -> bool { return has(flags, MaterialFlags::AlphaTested); }
 };

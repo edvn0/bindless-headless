@@ -23,6 +23,7 @@
 #include "StringPool.hxx"
 
 using VmaAllocation = struct VmaAllocation_T *;
+struct VmaAllocationInfo;
 
 inline constexpr u32 frames_in_flight = 3; // renderer-side DAG cycle
 inline constexpr u32 max_in_flight = 2; // GPU submit throttle depth
@@ -102,6 +103,7 @@ struct OffscreenTarget {
     VkImageView attachment_view{};
     VkFormat format{};
     VmaAllocation allocation{};
+    std::unique_ptr<VmaAllocationInfo> allocation_info{};
     u32 width{};
     u32 height{};
     u32 mip_levels{1};
@@ -415,6 +417,13 @@ struct LatestBuffer {
     auto begin() const { return data.begin(); }
     auto end() const { return data.end(); }
 };
+
+
+constexpr std::size_t next_power_of_two(std::size_t n) {
+    if (n == 0)
+        return 1;
+    return std::bit_ceil(n);
+}
 
 constexpr auto matches(const auto &needle, const auto &&...haystack) { return ((needle == haystack) || ...); }
 

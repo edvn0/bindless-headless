@@ -1,8 +1,3 @@
-#include <GLFW/glfw3.h>
-#include <chrono>
-#include <csignal>
-#include <limits>
-#include <thread>
 #include "ArgumentParse.hxx"
 #include "BindlessHeadless.hxx"
 #include "BindlessSet.hxx"
@@ -20,15 +15,21 @@
 
 #include "framework/BaseApplication.hxx"
 
+#include <GLFW/glfw3.h>
+#include <chrono>
+#include <csignal>
 #include <filesystem>
 #include <imgui.h>
+#include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 class ImageViewer final : public BaseApplication {
     using B = BaseApplication;
 
 public:
+    ImageViewer() : BaseApplication(AppInfo{.version = {0, 0, 1}, .name = "ImageViewer"}) {}
     ~ImageViewer() override = default;
 
 protected:
@@ -37,10 +38,12 @@ protected:
         return {};
     }
 
-    auto on_frame(float /*dt*/) -> void override {
-        // ---------------------------------------------------------------
-        // Menu bar: open a .scene.bz2
-        // ---------------------------------------------------------------
+    auto on_frame(Timestep) -> void override {
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE)) {
+            set_should_exit_app(true);
+            return;
+        }
+
         if (ImGui::BeginMainMenuBar()) {
             if (ImGui::BeginMenu("File")) {
                 if (ImGui::MenuItem("Open scene…"))
@@ -50,7 +53,6 @@ protected:
             ImGui::EndMainMenuBar();
         }
 
-        // Simple inline path input (replace with a real file dialog if you have one)
         if (m_show_open_dialog) {
             ImGui::SetNextWindowSize({500, 120}, ImGuiCond_Always);
             if (ImGui::Begin("Open scene", &m_show_open_dialog)) {
@@ -66,9 +68,6 @@ protected:
             ImGui::End();
         }
 
-        // ---------------------------------------------------------------
-        // Texture browser
-        // ---------------------------------------------------------------
         ImGui::SetNextWindowSize({900, 700}, ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Textures")) {
             if (m_textures.empty()) {
@@ -77,7 +76,6 @@ protected:
                 ImGui::Text("%zu texture(s)", m_textures.size());
                 ImGui::Separator();
 
-                // Sidebar: list of names
                 ImGui::BeginChild("list", {200, 0}, true);
                 for (u32 i = 0; i < static_cast<u32>(m_textures.size()); ++i) {
                     const bool selected = (m_selected == i);
@@ -88,7 +86,6 @@ protected:
 
                 ImGui::SameLine();
 
-                // Main area: selected texture
                 ImGui::BeginChild("preview", {0, 0});
                 if (m_selected < m_textures.size()) {
                     const auto &t = m_textures[m_selected];
@@ -96,8 +93,6 @@ protected:
                     ImGui::Text("  %u x %u  |  %u mips  |  format %u", t.width, t.height, t.levels,
                                 static_cast<u32>(t.vk_format));
 
-                    // ImGui image: pass the bindless descriptor index as ID.
-                    // Your ImGuiRenderer must support this (pass index as ImTextureID).
                     if (t.handle.index() != 0) {
                         const float avail = ImGui::GetContentRegionAvail().x;
                         const float aspect = static_cast<float>(t.width) / static_cast<float>(std::max(1u, t.height));
@@ -114,7 +109,16 @@ protected:
         ImGui::End();
     }
 
-    auto on_shutdown() -> void override { m_textures.clear(); }
+    auto on_shutdown() -> void override {
+        if (m_scene) {
+            destroy(*ctx, m_scene->vertex_buffer);
+            destroy(*ctx, m_scene->pos_uv_buffer);
+            destroy(*ctx, m_scene->index_buffer);
+            destroy(*ctx, m_scene->aabb_buffer);
+            m_scene.reset();
+        }
+        m_textures.clear();
+    }
 
 private:
     struct Entry {
@@ -123,6 +127,9 @@ private:
         VkFormat vk_format{};
         TextureHandle handle{};
     };
+
+    std::optional<StaticMesh> m_scene;
+
 
     auto load(const std::filesystem::path &scene_path) -> void {
         m_textures.clear();
@@ -133,15 +140,15 @@ private:
             warn("ImageViewer: failed to load '{}': {}", scene_path.string(), mesh_result.error().message);
             return;
         }
+        m_scene = mesh_result ? std::optional{std::move(*mesh_result)} : std::nullopt;
         ctx->bindless_set->need_repopulate = true;
         ctx->bindless_set->repopulate_if_needed(ctx->textures, ctx->samplers, ctx->comparison_samplers);
+        gui->set_should_recompile();
 
-        ctx->textures.for_each_live([&](const auto &handle, const OffscreenTarget &t) {
+        ctx->textures.for_each_live_with_skip([&](const auto &handle, const OffscreenTarget &t) {
             Entry e{};
 
-            VmaAllocationInfo info{};
-            vmaGetAllocationInfo(allocator, t.allocation, &info);
-
+            auto &info = *t.allocation_info;
             e.name = info.pName ? std::string{info.pName} : std::format("texture_{}", handle.index());
             e.width = t.width;
             e.height = t.height;

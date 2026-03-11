@@ -381,7 +381,7 @@ namespace Tooling {
         };
 
         struct TextureCache {
-            std::unordered_map<std::string, u32, string_hash, string_eq> key_to_index;
+            StringMap<u32> key_to_index;
             std::vector<TextureBuild> textures;
         };
 
@@ -400,23 +400,17 @@ namespace Tooling {
     auto SceneLoader::convert_gltf(const std::filesystem::path &scene_path, const std::filesystem::path &output_path)
             -> tl::expected<void, Error> {
 
-        // --- Path model (single source of truth) ---
-        // m_meshes_root is the root for mesh assets, e.g. "assets/meshes".
-        // scene_path is relative to that root, e.g. "myMesh/myMesh.gltf".
         const std::filesystem::path scene_abs = resolve_under(m_meshes_root, scene_path);
         const std::filesystem::path gltf_dir_abs = scene_abs.parent_path();
 
-        // Output path is relative to meshes_root by default (unless absolute).
         const std::filesystem::path out_abs_no_normalize = resolve_under(m_meshes_root, output_path);
         const std::filesystem::path out_abs = normalize_scene_out_path(out_abs_no_normalize);
 
-        // Hash the source glTF file bytes for up-to-date skipping.
         auto src_bytes = read_file_bytes(scene_abs);
         if (!src_bytes)
             return tl::unexpected(make_error(std::format("Failed to read source for hashing: {}", scene_abs.string())));
         const u64 src_hash = fnv1a_64(*src_bytes);
 
-        // Early-out if output exists and hash matches.
         if (std::filesystem::exists(out_abs)) {
             if (const u64 existing_hash = read_existing_src_hash(out_abs); existing_hash == src_hash) {
                 info("Scene up to date, skipping conversion: {}", out_abs.string());
@@ -437,7 +431,6 @@ namespace Tooling {
         constexpr auto opts = fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages |
                               fastgltf::Options::DecomposeNodeMatrices | fastgltf::Options::GenerateMeshIndices;
 
-        // IMPORTANT: glTF base dir must be the directory containing the glTF file.
         auto asset_exp = parser.loadGltfBinary(data, gltf_dir_abs, opts, fastgltf::Category::All);
         if (!asset_exp) {
             asset_exp = parser.loadGltf(data, gltf_dir_abs, opts);
@@ -454,7 +447,7 @@ namespace Tooling {
         TextureCache tex_cache;
         StringTable strings;
 
-        auto convert_image_to_ktx2 = [&](u32 image_index, std::string debug_uri_name,
+        auto convert_image_to_ktx2 = [&](u32 image_index, const std::string_view debug_uri_name,
                                          TextureUsage usage) -> tl::expected<u32, Error> {
             if (image_index >= asset.images.size())
                 return tl::unexpected(make_error("Invalid image index"));
@@ -487,7 +480,7 @@ namespace Tooling {
 
             TextureBuild tb{};
             tb.original_path = key;
-            tb.name = std::move(debug_uri_name);
+            tb.name = std::string(debug_uri_name);
             tb.ktx2_bytes = std::move(*ktx2_exp);
 
             return ensure_texture(tex_cache, key, std::move(tb));
@@ -512,7 +505,7 @@ namespace Tooling {
             }
 
             if (m.alphaMode == fastgltf::AlphaMode::Mask || m.alphaMode == fastgltf::AlphaMode::Blend) {
-                out.flags |= GPUMaterialData::FLAG_ALPHA_TESTED;
+                out.flags |= MaterialFlags::AlphaTested;
             }
 
             auto resolve_tex_to_image = [&](const std::optional<fastgltf::TextureInfo> &ti) -> std::optional<u32> {
@@ -528,53 +521,62 @@ namespace Tooling {
             };
 
             if (auto img_idx = resolve_tex_to_image(m.pbrData.baseColorTexture); img_idx.has_value()) {
-                auto texp = convert_image_to_ktx2(*img_idx, "baseColor", TextureUsage::Albedo);
+                const auto &name = asset.textures[*img_idx].name;
+                auto texp = convert_image_to_ktx2(*img_idx, name, TextureUsage::Albedo);
                 if (!texp)
                     return tl::unexpected(texp.error());
                 out.albedo_map = *texp;
-                out.flags |= GPUMaterialData::FLAG_ALBEDO_MAP;
+                out.flags |= MaterialFlags::Albedo;
             }
 
             if (m.normalTexture.has_value()) {
                 const u32 tex_idx = static_cast<u32>(m.normalTexture->textureIndex);
                 if (tex_idx < asset.textures.size() && asset.textures[tex_idx].imageIndex.has_value()) {
-                    auto texp = convert_image_to_ktx2(static_cast<u32>(*asset.textures[tex_idx].imageIndex), "normal",
+                    const auto &name = asset.textures[tex_idx].name;
+
+                    auto texp = convert_image_to_ktx2(static_cast<u32>(*asset.textures[tex_idx].imageIndex), name,
                                                       TextureUsage::Normal);
                     if (!texp)
                         return tl::unexpected(texp.error());
                     out.normal_map = *texp;
-                    out.flags |= GPUMaterialData::FLAG_NORMAL_MAP;
+                    out.flags |= MaterialFlags::Normal;
                 }
             }
 
             if (auto img_idx = resolve_tex_to_image(m.pbrData.metallicRoughnessTexture); img_idx.has_value()) {
-                auto texp = convert_image_to_ktx2(*img_idx, "metalRough", TextureUsage::MetallicRoughnessCombined);
+                const auto &name = asset.textures[*img_idx].name;
+
+                auto texp = convert_image_to_ktx2(*img_idx, name, TextureUsage::MetallicRoughnessCombined);
                 if (!texp)
                     return tl::unexpected(texp.error());
                 out.roughness_map = *texp;
                 out.metallic_map = *texp;
-                out.flags |= GPUMaterialData::FLAG_ROUGHNESS_MAP;
-                out.flags |= GPUMaterialData::FLAG_METALLIC_MAP;
+                out.flags |= MaterialFlags::Roughness;
+                out.flags |= MaterialFlags::Metallic;
             }
 
             if (m.occlusionTexture.has_value()) {
                 const auto tex_idx = static_cast<u32>(m.occlusionTexture->textureIndex);
                 if (tex_idx < asset.textures.size() && asset.textures[tex_idx].imageIndex.has_value()) {
-                    auto texp = convert_image_to_ktx2(static_cast<u32>(*asset.textures[tex_idx].imageIndex),
-                                                      "occlusion", TextureUsage::Occlusion);
+                    const auto &name = asset.textures[tex_idx].name;
+
+                    auto texp = convert_image_to_ktx2(static_cast<u32>(*asset.textures[tex_idx].imageIndex), name,
+                                                      TextureUsage::Occlusion);
                     if (!texp)
                         return tl::unexpected(texp.error());
                     out.occlusion_map = *texp;
-                    out.flags |= GPUMaterialData::FLAG_OCCLUSION_MAP;
+                    out.flags |= MaterialFlags::Occlusion;
                 }
             }
 
             if (auto img_idx = resolve_tex_to_image(m.emissiveTexture); img_idx.has_value()) {
-                auto texp = convert_image_to_ktx2(*img_idx, "emissive", TextureUsage::Emissive);
+                const auto &name = asset.textures[*img_idx].name;
+
+                auto texp = convert_image_to_ktx2(*img_idx, name, TextureUsage::Emissive);
                 if (!texp)
                     return tl::unexpected(texp.error());
                 out.emissive_map = *texp;
-                out.flags |= GPUMaterialData::FLAG_EMISSIVE_MAP;
+                out.flags |= MaterialFlags::Emissive;
             }
 
             gpu_materials.emplace_back(out);
