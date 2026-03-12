@@ -73,7 +73,8 @@ struct BindlessSet {
               u32 initial_comparison_samplers, u32 initial_storage_images, u32 initial_accel_structs) -> void;
     auto destroy() -> void;
     auto grow_if_needed(u32 req_textures, u32 req_samplers, u32 req_storage, u32 req_accel) -> bool;
-    auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers, SamplerPool &comparison_samplers) -> bool;
+    auto repopulate_if_needed(TexturePool &textures, SamplerPool &samplers, ComparisonSamplerPool &comparison_samplers)
+            -> bool;
 
 
 private:

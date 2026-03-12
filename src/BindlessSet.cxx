@@ -67,8 +67,8 @@ auto BindlessSet::grow_if_needed(u32 req_textures, u32 req_samplers, u32 req_sto
     return true;
 }
 
-auto BindlessSet::repopulate_if_needed(TexturePool &textures, SamplerPool &samplers, SamplerPool &comparison_samplers)
-        -> bool {
+auto BindlessSet::repopulate_if_needed(TexturePool &textures, SamplerPool &samplers,
+                                       ComparisonSamplerPool &comparison_samplers) -> bool {
     if (!need_repopulate) [[likely]]
         return false;
 

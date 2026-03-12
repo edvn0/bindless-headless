@@ -31,14 +31,15 @@ struct RenderContext {
 
     TexturePool textures{};
     auto create_texture(OffscreenTarget &&) -> TextureHandle;
+    auto create_texture_owned(OffscreenTarget &&) -> Holder<TextureHandle>;
 
     SamplerPool samplers{};
     auto create_sampler(VkSampler &&) -> SamplerHandle;
     auto create_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
 
-    SamplerPool comparison_samplers{};
-    auto create_comparison_sampler(VkSampler &&) -> SamplerHandle;
-    auto create_comparison_sampler(VkSamplerCreateInfo, std::string_view) -> SamplerHandle;
+    ComparisonSamplerPool comparison_samplers{};
+    auto create_comparison_sampler(VkSampler &&) -> ComparisonSamplerHandle;
+    auto create_comparison_sampler(VkSamplerCreateInfo, std::string_view) -> ComparisonSamplerHandle;
 
     BufferPool buffers{};
     auto create_buffer(Buffer &&) -> BufferHandle;
@@ -56,8 +57,8 @@ struct RenderContext {
     auto create_material(GPUMaterialData &&) -> MaterialHandle;
     auto update_material(MaterialHandle, const GPUMaterialData &) -> void;
 
-    auto device_address(BufferHandle) -> DeviceAddress;
-    auto flush_mapped_memory(BufferHandle, std::size_t offset, std::size_t size) const -> void;
+    auto flush_mapped_memory(BufferHandle, usize offset, usize size) const -> void;
+    [[nodiscard]] auto device_address(BufferHandle) -> DeviceAddress;
     [[nodiscard]] auto texture_format(TextureHandle) const -> VkFormat;
     [[nodiscard]] auto device_address(BufferHandle) const -> DeviceAddress;
     [[nodiscard]] auto get_mapped_pointer(BufferHandle) const -> tl::expected<void *, Error>;
@@ -71,6 +72,7 @@ struct RenderContext {
 
 auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value = UINT64_MAX) -> void;
+auto destroy(RenderContext &ctx, ComparisonSamplerHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value = UINT64_MAX) -> void;
 auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value = UINT64_MAX) -> void;

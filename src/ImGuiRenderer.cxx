@@ -202,7 +202,6 @@ ImGuiRenderer::~ImGuiRenderer() {
     }
     viewport_targets.clear();
 
-    sampler.reset();
 
     ImGui_ImplGlfw_Shutdown();
 

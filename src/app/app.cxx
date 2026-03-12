@@ -1577,7 +1577,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 gpu.bindless.need_repopulate = true;
     }*/
     {
-        res.environment_cubemap = gpu.ctx.create_texture(
+        res.environment_cubemap = gpu.ctx.create_texture_owned(
                 load_cubemap_ktx(gpu.allocator, *gpu.ctx.command_ctx, gpu.device, gpu.physical_device,
                                  gpu.graphics_queue, std::filesystem::path("assets/editor/cubemaps/nasa/sky.ktx2"),
                                  "environment_cubemap")

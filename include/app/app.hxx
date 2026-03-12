@@ -14,6 +14,7 @@
 #include "ImGuiRenderer.hxx"
 #include "Mesh.hxx"
 #include "Numeric.hxx"
+#include "Pool.hxx"
 #include "Profiler.hxx"
 #include "RenderSubmission.hxx"
 #include "ResizeableGraph.hxx"
@@ -112,7 +113,7 @@ struct AppPipelines {
     SamplerHandle linear_repeat{};
     SamplerHandle linear_clamp{};
     SamplerHandle noise_sampler{};
-    SamplerHandle depth_compare_filter{};
+    ComparisonSamplerHandle depth_compare_filter{};
 };
 
 struct ShadowConfig {
@@ -214,7 +215,7 @@ struct AppResources {
     TextureHandle ssao_blurred{};
     TextureHandle ssao_blurred_temp{};
 
-    TextureHandle environment_cubemap{};
+    Holder<TextureHandle> environment_cubemap{};
     TextureHandle perlin_noise{};
 
     BufferHandle noise_ssao_kernel{};

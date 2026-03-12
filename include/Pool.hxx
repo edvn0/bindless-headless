@@ -98,6 +98,9 @@ class Holder final {
 
 public:
     explicit Holder(RenderContext &ctx, T h) : context(&ctx), handle(h) {}
+    explicit Holder(RenderContext *ctx, T h) : context(ctx), handle(h) {
+        ASSERT(context != nullptr, "Context was null for some reason?");
+    }
     ~Holder() {
         if (context)
             destroy(*context, handle);
@@ -281,6 +284,8 @@ using TextureHandle = Handle<struct TextureTag>;
 using TexturePool = Pool<TextureTag, OffscreenTarget>;
 using SamplerHandle = Handle<struct SamplerTag>;
 using SamplerPool = Pool<SamplerTag, VkSampler>;
+using ComparisonSamplerHandle = Handle<struct ComparisonSamplerTag>;
+using ComparisonSamplerPool = Pool<ComparisonSamplerTag, VkSampler>;
 using BufferHandle = Handle<struct BufferTag>;
 using BufferPool = Pool<BufferTag, Buffer>;
 using QueryPoolHandle = Handle<struct QueryPoolTag>;

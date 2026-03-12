@@ -1040,33 +1040,16 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
     t.allocation = allocation;
     t.initialized = true;
 
-    auto srv_ci = create_info<VkImageViewCreateInfo>();
-    srv_ci.image = image;
-    srv_ci.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-    srv_ci.format = vkFormat;
-    srv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, 6};
-    vk_check(vkCreateImageView(device, &srv_ci, nullptr, &t.sampled_view));
-    set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
-
-    if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
-        auto uav_ci = create_info<VkImageViewCreateInfo>();
-        uav_ci.image = image;
-        uav_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        uav_ci.format = vkFormat;
-        uav_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, 6};
-        vk_check(vkCreateImageView(device, &uav_ci, nullptr, &t.storage_view));
-        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
-    }
-
     const u32 cube_layers = std::max(1u, ktx->numLayers);
     const bool is_cubemap = ktx->isCubemap != 0;
-    const u32 face_layers = is_cubemap ? (cube_layers * 6u) : cube_layers;
+    const u32 total_layers = is_cubemap ? (cube_layers * 6u) : cube_layers;
 
-    srv_ci = create_info<VkImageViewCreateInfo>();
+    auto srv_ci = create_info<VkImageViewCreateInfo>();
     srv_ci.image = image;
     srv_ci.viewType = (cube_layers > 1) ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE;
     srv_ci.format = vkFormat;
-    srv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
+    srv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, total_layers};
+
     vk_check(vkCreateImageView(device, &srv_ci, nullptr, &t.sampled_view));
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.sampled_view, std::format("{}_sampled_view", name));
     t.sampled_view_type = srv_ci.viewType;
@@ -1074,9 +1057,10 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
     if (format_supports_storage_image(physical_device, vkFormat, VK_IMAGE_TILING_OPTIMAL)) {
         auto uav_ci = create_info<VkImageViewCreateInfo>();
         uav_ci.image = image;
-        uav_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        uav_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY; // Usually prefer 2D_ARRAY for storage/compute
         uav_ci.format = vkFormat;
-        uav_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
+        uav_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, total_layers};
+
         vk_check(vkCreateImageView(device, &uav_ci, nullptr, &t.storage_view));
         set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.storage_view, std::format("{}_storage_view", name));
         t.storage_view_type = uav_ci.viewType;
@@ -1089,13 +1073,13 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
     rtv_ci.image = image;
     rtv_ci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     rtv_ci.format = vkFormat;
-    rtv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, face_layers};
+    rtv_ci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, ktx->numLevels, 0, total_layers};
+
     vk_check(vkCreateImageView(device, &rtv_ci, nullptr, &t.attachment_view));
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, t.attachment_view, std::format("{}_attachment_view", name));
     t.attachment_view_type = rtv_ci.viewType;
 
     ktxTexture_Destroy(ktxTexture(ktx));
-
     return t;
 }
 

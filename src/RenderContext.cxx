@@ -27,6 +27,11 @@ auto RenderContext::create_texture(OffscreenTarget &&target) -> TextureHandle {
     return textures.create(std::move(target));
 }
 
+auto RenderContext::create_texture_owned(OffscreenTarget &&target) -> Holder<TextureHandle> {
+    bindless_set->need_repopulate = true;
+    return Holder{this, textures.create(std::move(target))};
+}
+
 auto RenderContext::create_sampler(VkSampler &&sampler) -> SamplerHandle {
     bindless_set->need_repopulate = true;
     return samplers.create(std::move(sampler));
@@ -43,13 +48,13 @@ auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::st
     return create_sampler(::create_sampler(allocator, ci, name));
 }
 
-auto RenderContext::create_comparison_sampler(VkSampler &&sampler) -> SamplerHandle {
+auto RenderContext::create_comparison_sampler(VkSampler &&sampler) -> ComparisonSamplerHandle {
     bindless_set->need_repopulate = true;
     return comparison_samplers.create(std::move(sampler));
 }
 
 auto RenderContext::create_comparison_sampler(const VkSamplerCreateInfo info, const std::string_view name)
-        -> SamplerHandle {
+        -> ComparisonSamplerHandle {
     bindless_set->need_repopulate = true;
 
     VkSamplerCreateInfo ci{info};
@@ -181,35 +186,35 @@ auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void
 }
 
 auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void {
-    if (handle.empty())
-        return;
-
-    VkSampler sampler_to_destroy = VK_NULL_HANDLE;
-    bool is_comparison = false;
-
-    if (ctx.comparison_samplers.maybe_get_handle(handle.index()) == handle) {
-        sampler_to_destroy = *ctx.comparison_samplers.get(handle);
-        is_comparison = true;
-    } else if (ctx.samplers.maybe_get_handle(handle.index()) == handle) {
-        sampler_to_destroy = *ctx.samplers.get(handle);
-        is_comparison = false;
-    }
-
-    if (sampler_to_destroy == VK_NULL_HANDLE) {
+    auto impl = ctx.samplers.get(handle);
+    if (!impl) {
         return;
     }
 
-    ctx.bindless_set->need_repopulate = true;
+    auto sampled = *impl;
 
-    ctx.destroy_queue.enqueue(retire_value, [device = ctx.get_device(), sampler = sampler_to_destroy]() {
-        vkDestroySampler(device, sampler, nullptr);
+    ctx.destroy_queue.enqueue(retire_value, [dev = ctx.get_device(), s = sampled]() {
+        if (s != VK_NULL_HANDLE) {
+            vkDestroySampler(dev, s, nullptr);
+        }
     });
+    ctx.samplers.destroy(handle);
+}
 
-    if (is_comparison) {
-        ctx.comparison_samplers.destroy(handle);
-    } else {
-        ctx.samplers.destroy(handle);
+auto destroy(RenderContext &ctx, ComparisonSamplerHandle handle, u64 retire_value) -> void {
+    auto impl = ctx.comparison_samplers.get(handle);
+    if (!impl) {
+        return;
     }
+
+    auto sampled = *impl;
+
+    ctx.destroy_queue.enqueue(retire_value, [dev = ctx.get_device(), s = sampled]() {
+        if (s != VK_NULL_HANDLE) {
+            vkDestroySampler(dev, s, nullptr);
+        }
+    });
+    ctx.comparison_samplers.destroy(handle);
 }
 
 auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value) -> void {
