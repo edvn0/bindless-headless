@@ -1475,6 +1475,8 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                 // us[i] has the same extent as ds[i], so use the downsample
                 // extents we can recompute cheaply.
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, upsample_pipe->pipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, upsample_pipe->layout, 0, 1,
+                                        &gpu.bindless.set, 0, nullptr);
 
                 // src starts at the smallest downsample level
                 u32 us_src_index = res.bloom_downsample[mip_count - 1].index();

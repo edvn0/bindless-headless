@@ -43,6 +43,15 @@ namespace Tooling {
 
     namespace {
 
+        auto ensure_directory(const std::filesystem::path &path) -> bool {
+            std::error_code ec;
+            const bool created = std::filesystem::create_directory(path, ec);
+
+            ASSERT(!ec && ec.message().c_str(), "Could not create directory, and did not exist");
+
+            return created;
+        }
+
         constexpr u64 k_align = 16;
         constexpr u64 k_prefix_magic = 0x454E4543534E5331ULL; // 'SNS1CENE'
 
@@ -812,7 +821,7 @@ namespace Tooling {
         w.patch_pod<FileHeader>(header_offset, header);
 
         const auto root = out_abs_no_normalize.parent_path();
-        ASSERT(std::filesystem::create_directory(root), "Could not create root directory for this scene");
+        ensure_directory(root);
         return write_file_bytes_abs(out_abs_no_normalize, w.data(), src_hash);
     }
 

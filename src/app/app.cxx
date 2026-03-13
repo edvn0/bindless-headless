@@ -32,6 +32,7 @@
 #include "app/ui.hxx"
 #include "scene/Components.hxx"
 #include "scene/Scene.hxx"
+#include "vulkan/vulkan_core.h"
 
 extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 
@@ -809,12 +810,10 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             set_debug_name(gpu.device, VK_OBJECT_TYPE_QUERY_POOL, compute_stats,
                            std::format("compute_stats_query_pool_frame_{}", fi));
 
-            if (reset_flags == 0) {
-                vkResetQueryPool(gpu.device, qpc, 0, compute_query_count);
-                vkResetQueryPool(gpu.device, qpg, 0, graphics_query_count);
-                vkResetQueryPool(gpu.device, stats_pool, 0, stats_graphics_count);
-                vkResetQueryPool(gpu.device, compute_stats, 0, stats_compute_count);
-            }
+            vkResetQueryPool(gpu.device, qpc, 0, compute_query_count);
+            vkResetQueryPool(gpu.device, qpg, 0, graphics_query_count);
+            vkResetQueryPool(gpu.device, stats_pool, 0, stats_graphics_count);
+            vkResetQueryPool(gpu.device, compute_stats, 0, stats_compute_count);
         }
     }
 
@@ -1924,7 +1923,7 @@ gpu.bindless.need_repopulate = true;
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::Skybox)],
                             .semaphore = gpu.tl_graphics.timeline,
-                            .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
             fs.timeline_values[stage_index(Stage::Bloom)] = run_bloom_pass(

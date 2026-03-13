@@ -19,9 +19,10 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 
+#include <volk.h>
+
 #include <ktx.h>
 #include <ktxvulkan.h>
-#include <volk.h>
 
 #include <Magick++.h>
 
