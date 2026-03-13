@@ -162,7 +162,6 @@ auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void
     }
     ctx.bindless_set->need_repopulate = true;
 
-    // Extract only the Vulkan handles needed for cleanup
     VkImage image = impl->image;
     VmaAllocation allocation = impl->allocation;
     VkImageView attachment_view = impl->attachment_view;
@@ -223,7 +222,6 @@ auto destroy(RenderContext &ctx, BufferHandle handle, u64 retire_value) -> void 
         return;
     }
 
-    // Extract buffer and allocation handles
     VkBuffer buffer = impl->buffer();
     VmaAllocation allocation = impl->allocation();
 
@@ -241,7 +239,6 @@ auto destroy(RenderContext &ctx, QueryPoolHandle handle, u64 retire_value) -> vo
         return;
     }
 
-    // Extract only the VkQueryPool handle
     VkQueryPool query_pool = impl->pool;
 
     ctx.destroy_queue.enqueue(retire_value, [alloc = ctx.allocator, query_pool]() {
@@ -258,7 +255,6 @@ auto destroy(RenderContext &ctx, PipelineHandle handle, u64 retire_value) -> voi
         return;
     }
 
-    // Extract pipeline and layout handles
     VkPipeline pipeline = impl->pipeline;
     VkPipelineLayout layout = impl->layout;
 

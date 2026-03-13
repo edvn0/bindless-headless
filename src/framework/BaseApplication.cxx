@@ -68,7 +68,7 @@ namespace {
     }
 } // namespace
 
-auto BaseApplication::on_init() -> tl::expected<void, Error> {
+auto BaseApplication::on_init(const Arguments &) -> tl::expected<void, Error> {
     auto &impl = *this->m_impl;
     {
         {
@@ -197,7 +197,12 @@ auto run_application(BaseApplication &app, int argc, char **argv) -> int {
         return 1;
     }
 
-    if (auto r = app.on_init(); !r) {
+    std::vector<std::string_view> args{};
+    for (auto i = 0; i < argc; i++) {
+        args.emplace_back(std::string_view{argv[i]});
+    }
+
+    if (auto r = app.on_init(args); !r) {
         error("BaseApplication: on_init failed: {}", r.error().message);
         return 1;
     }

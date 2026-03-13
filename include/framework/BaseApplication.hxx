@@ -38,6 +38,8 @@ struct Timestep {
     float ts{0.0F};
 };
 
+using Arguments = std::vector<std::string_view>;
+
 class BaseApplication {
 public:
     BaseApplication(AppInfo);
@@ -45,7 +47,7 @@ public:
 
 protected:
     // Override points ---------------------------------------------------
-    virtual auto on_init() -> tl::expected<void, Error>;
+    virtual auto on_init(const Arguments &) -> tl::expected<void, Error>;
     virtual auto on_frame(Timestep) -> void = 0;
     virtual auto on_shutdown() -> void {}
 

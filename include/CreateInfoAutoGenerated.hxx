@@ -1,6 +1,6 @@
 // AUTO-GENERATED FILE — DO NOT EDIT
 #pragma once
-#include <vulkan/vulkan.h>
+#include <volk.h>
 
 template<typename T>
 struct CreateInfoFor;

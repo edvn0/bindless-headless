@@ -893,18 +893,7 @@ namespace {
         if (rc != KTX_SUCCESS || !ktx2)
             return make_error_tex();
 
-        // Check for normal map metadata (same lambda pattern as Mesh.cxx)
-        bool is_normal_map = false;
-        {
-            char *value = nullptr;
-            u32 length = 0;
-            if (KTX_SUCCESS ==
-                ktxHashList_FindValue(&ktx2->kvDataHead, "KTXwriterScParams", &length, (void **) &value)) {
-                std::string_view params(value, length);
-                is_normal_map = (params.find("--normal-mode") != std::string_view::npos);
-            }
-        }
-
+        bool is_normal_map = is_normal_mode(ktx2);
         if (ktxTexture2_NeedsTranscoding(ktx2)) {
             rc = ktxTexture2_TranscodeBasis(ktx2, KTX_TTF_BC7_RGBA, 0);
             if (rc != KTX_SUCCESS) {
@@ -921,14 +910,17 @@ namespace {
         out.height = static_cast<u32>(ktx2->baseHeight);
         out.levels = static_cast<u32>(ktx2->numLevels);
 
-        if (ktxTexture2_NeedsTranscoding(ktx2) == KTX_FALSE) {
-            // Already transcoded above, set format
-            if (is_normal_map) {
-                out.vk_format = VK_FORMAT_BC7_UNORM_BLOCK;
-            } else {
-                out.vk_format =
-                        (type == TextureLoadPacket::Type::SRGB) ? VK_FORMAT_BC7_SRGB_BLOCK : VK_FORMAT_BC7_UNORM_BLOCK;
+        const bool needs_transcode = ktxTexture2_NeedsTranscoding(ktx2);
+
+        if (needs_transcode) {
+            rc = ktxTexture2_TranscodeBasis(ktx2, KTX_TTF_BC7_RGBA, 0);
+            if (rc != KTX_SUCCESS) {
+                ktxTexture2_Destroy(ktx2);
+                return make_error_tex();
             }
+            out.vk_format = is_normal_map                             ? VK_FORMAT_BC7_UNORM_BLOCK
+                            : (type == TextureLoadPacket::Type::SRGB) ? VK_FORMAT_BC7_SRGB_BLOCK
+                                                                      : VK_FORMAT_BC7_UNORM_BLOCK;
         } else {
             out.vk_format = static_cast<VkFormat>(ktx2->vkFormat);
         }
@@ -964,12 +956,6 @@ namespace {
         ktxTexture_Destroy(reinterpret_cast<ktxTexture *>(ktx2));
         return out;
     }
-
-    // -------------------------------------------------------------------------
-    // Derive TextureLoadPacket::Type / Class from GPUMaterialData flag context.
-    // We check which map slot this texture index occupies to pick type/class.
-    // Simpler approach: pass them in from the material loop directly.
-    // -------------------------------------------------------------------------
 
     struct TexSlot {
         TextureLoadPacket::Type type;
@@ -1055,9 +1041,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         }
     }
 
-    // -------------------------------------------------------------------------
-    // 6. Decode all KTX2 textures in parallel
-    // -------------------------------------------------------------------------
     std::vector<std::future<LoadedTextureCpu>> tex_futures;
     tex_futures.reserve(header.texture_count);
 
@@ -1068,7 +1051,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         const size_t ktx_sz = static_cast<size_t>(t.ktx2_size);
 
         if (ktx_off + ktx_sz > file.size()) {
-            // Degenerate entry — push a placeholder future
             tex_futures.emplace_back(std::async(std::launch::deferred, []() -> LoadedTextureCpu {
                 LoadedTextureCpu bad{};
                 bad.width = bad.height = 1;
@@ -1197,18 +1179,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         }
 
         mesh.submeshes.push_back(sm);
-    }
-
-    for (auto &sm: mesh.submeshes) {
-        const size_t index_count = sm.index_count;
-        const size_t vertex_count = mesh.vertices.size();
-
-        u32 *idx_begin = mesh.indices.data() + sm.index_offset;
-
-        meshopt_optimizeVertexCache(idx_begin, idx_begin, index_count, vertex_count);
-
-        meshopt_optimizeOverdraw(idx_begin, idx_begin, index_count, &mesh.vertices[0].position.x, vertex_count,
-                                 sizeof(Vertex), 1.05f);
     }
 
     auto aabb_result = create_mesh_aabb_data(ctx.allocator, mesh, scene_path.filename().string());

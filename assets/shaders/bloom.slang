@@ -100,6 +100,7 @@ void bloom_downsample_cs(
 struct UpsamplePC {
     uint  src_index;
     uint  accumulate_index;
+    uint accumulate_ds_index;  // bloom_downsample[i]
     uint  sampler_index;
     float filter_radius;
     float strength;
@@ -133,5 +134,6 @@ void bloom_upsample_cs(
         + (2.0 / 16.0) * sample_texture_lod(uv + float2( 0,    r.y), pc.src_index, 0.0, pc.sampler_index)
         + (1.0 / 16.0) * sample_texture_lod(uv + float2( r.x,  r.y), pc.src_index, 0.0, pc.sampler_index);
 
-    dst[dispatch_id.xy] = dst[dispatch_id.xy] + result * pc.strength;
+    float4 ds_sample = get_storage_image(pc.accumulate_ds_index)[dispatch_id.xy];
+    dst[dispatch_id.xy] = ds_sample + result * pc.strength;
 }

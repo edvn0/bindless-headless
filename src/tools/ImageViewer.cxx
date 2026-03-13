@@ -33,8 +33,8 @@ public:
     ~ImageViewer() override = default;
 
 protected:
-    auto on_init() -> tl::expected<void, Error> override {
-        std::ignore = B::on_init();
+    auto on_init(const Arguments &args) -> tl::expected<void, Error> override {
+        std::ignore = B::on_init(args);
         return {};
     }
 

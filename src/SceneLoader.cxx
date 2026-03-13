@@ -5,6 +5,7 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <glm/gtc/packing.hpp>
 #include <iterator>
@@ -27,6 +28,7 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
 
+#include "Assert.hxx"
 #include "Logger.hxx"
 #include "Material.hxx"
 #include "Types.hxx"
@@ -486,6 +488,19 @@ namespace Tooling {
             return ensure_texture(tex_cache, key, std::move(tb));
         };
 
+        auto get_image_debug_name = [&](u32 image_index) -> std::string {
+            const auto &img = asset.images[image_index];
+            if (!img.name.empty()) {
+                return std::string(img.name);
+            }
+            if (auto *uri = std::get_if<fastgltf::sources::URI>(&img.data)) {
+                if (uri->uri.valid() && !uri->uri.isDataUri()) {
+                    return std::filesystem::path(uri->uri.fspath()).filename().string();
+                }
+            }
+            return std::format("image_{}", image_index);
+        };
+
         gpu_materials.reserve(asset.materials.size());
         for (u32 mi = 0; mi < static_cast<u32>(asset.materials.size()); ++mi) {
             const auto &m = asset.materials[mi];
@@ -521,7 +536,7 @@ namespace Tooling {
             };
 
             if (auto img_idx = resolve_tex_to_image(m.pbrData.baseColorTexture); img_idx.has_value()) {
-                const auto &name = asset.textures[*img_idx].name;
+                const auto name = get_image_debug_name(*img_idx);
                 auto texp = convert_image_to_ktx2(*img_idx, name, TextureUsage::Albedo);
                 if (!texp)
                     return tl::unexpected(texp.error());
@@ -532,10 +547,9 @@ namespace Tooling {
             if (m.normalTexture.has_value()) {
                 const u32 tex_idx = static_cast<u32>(m.normalTexture->textureIndex);
                 if (tex_idx < asset.textures.size() && asset.textures[tex_idx].imageIndex.has_value()) {
-                    const auto &name = asset.textures[tex_idx].name;
-
-                    auto texp = convert_image_to_ktx2(static_cast<u32>(*asset.textures[tex_idx].imageIndex), name,
-                                                      TextureUsage::Normal);
+                    const u32 img_idx = static_cast<u32>(*asset.textures[tex_idx].imageIndex);
+                    const auto name = get_image_debug_name(img_idx);
+                    auto texp = convert_image_to_ktx2(img_idx, name, TextureUsage::Normal);
                     if (!texp)
                         return tl::unexpected(texp.error());
                     out.normal_map = *texp;
@@ -544,8 +558,7 @@ namespace Tooling {
             }
 
             if (auto img_idx = resolve_tex_to_image(m.pbrData.metallicRoughnessTexture); img_idx.has_value()) {
-                const auto &name = asset.textures[*img_idx].name;
-
+                const auto &name = get_image_debug_name(*img_idx);
                 auto texp = convert_image_to_ktx2(*img_idx, name, TextureUsage::MetallicRoughnessCombined);
                 if (!texp)
                     return tl::unexpected(texp.error());
@@ -558,10 +571,9 @@ namespace Tooling {
             if (m.occlusionTexture.has_value()) {
                 const auto tex_idx = static_cast<u32>(m.occlusionTexture->textureIndex);
                 if (tex_idx < asset.textures.size() && asset.textures[tex_idx].imageIndex.has_value()) {
-                    const auto &name = asset.textures[tex_idx].name;
-
-                    auto texp = convert_image_to_ktx2(static_cast<u32>(*asset.textures[tex_idx].imageIndex), name,
-                                                      TextureUsage::Occlusion);
+                    const u32 img_idx = static_cast<u32>(*asset.textures[tex_idx].imageIndex);
+                    const auto name = get_image_debug_name(img_idx);
+                    auto texp = convert_image_to_ktx2(img_idx, name, TextureUsage::Occlusion);
                     if (!texp)
                         return tl::unexpected(texp.error());
                     out.occlusion_map = *texp;
@@ -570,8 +582,7 @@ namespace Tooling {
             }
 
             if (auto img_idx = resolve_tex_to_image(m.emissiveTexture); img_idx.has_value()) {
-                const auto &name = asset.textures[*img_idx].name;
-
+                const auto &name = get_image_debug_name(*img_idx);
                 auto texp = convert_image_to_ktx2(*img_idx, name, TextureUsage::Emissive);
                 if (!texp)
                     return tl::unexpected(texp.error());
@@ -580,6 +591,7 @@ namespace Tooling {
             }
 
             gpu_materials.emplace_back(out);
+            info("Loaded material {} out of {}", mi + 1, asset.materials.size());
         }
 
         for (const auto &mesh: asset.meshes) {
@@ -627,25 +639,26 @@ namespace Tooling {
                     fastgltf::copyFromAccessor<glm::u32>(asset, idx_acc, local_indices.data());
                 } else {
                     local_indices.resize(positions.size());
-                    std::iota(local_indices.begin(), local_indices.end(), 0);
+                    std::iota(local_indices.begin(), local_indices.end(), 0u);
                 }
 
                 u32 material_index = 0;
                 if (prim.materialIndex.has_value())
                     material_index = static_cast<u32>(*prim.materialIndex);
-                if (material_index >= gpu_materials.size())
+                if (material_index >= static_cast<u32>(gpu_materials.size()))
                     material_index = 0;
 
                 const auto vertex_offset = static_cast<u32>(vertices.size());
+                const size_t prim_vertex_count = positions.size();
 
-                vertices.reserve(vertices.size() + positions.size());
-                for (size_t i = 0; i < positions.size(); ++i) {
+                // ── Pack raw vertices ────────────────────────────────────────
+                vertices.reserve(vertices.size() + prim_vertex_count);
+                for (size_t i = 0; i < prim_vertex_count; ++i) {
                     Vertex v{};
                     v.position = {positions[i].x, positions[i].y, positions[i].z};
 
-                    auto uv_prior_to_packing = (i < uvs.size()) ? std::array<float, 2>{uvs[i].x, uvs[i].y}
-                                                                : std::array<float, 2>{0.0f, 0.0f};
-                    v.uvs = glm::packHalf2x16(glm::vec2(uv_prior_to_packing[0], uv_prior_to_packing[1]));
+                    const auto uv = (i < uvs.size()) ? uvs[i] : glm::vec2{0.0f, 0.0f};
+                    v.uvs = glm::packHalf2x16(uv);
 
                     const glm::vec3 n = glm::normalize((i < normals.size()) ? normals[i] : glm::vec3(0, 0, 1));
                     v.normal = glm::packSnorm3x10_1x2(glm::vec4(n, 0.0f));
@@ -657,30 +670,41 @@ namespace Tooling {
                     vertices.emplace_back(v);
                 }
 
-                indices.reserve(indices.size() + local_indices.size());
-                const size_t prim_vertex_count = positions.size();
-
+                // ── Remap + compact vertices, then optimise ──────────────────
+                // opt_indices declared outside the block so the LOD loop can see it.
                 std::vector<u32> opt_indices(local_indices.size());
+                size_t unique_vertex_count = prim_vertex_count;
                 {
                     std::vector<u32> remap(prim_vertex_count);
-                    const size_t unique = meshopt_generateVertexRemap(
+                    unique_vertex_count = meshopt_generateVertexRemap(
                             remap.data(), local_indices.data(), local_indices.size(), vertices.data() + vertex_offset,
                             prim_vertex_count, sizeof(Vertex));
 
                     meshopt_remapIndexBuffer(opt_indices.data(), local_indices.data(), local_indices.size(),
                                              remap.data());
-                    meshopt_optimizeVertexCache(opt_indices.data(), opt_indices.data(), opt_indices.size(), unique);
+
+                    // Compact the vertex buffer to match the remapped index space.
+                    std::vector<Vertex> remapped_verts(unique_vertex_count);
+                    meshopt_remapVertexBuffer(remapped_verts.data(), vertices.data() + vertex_offset, prim_vertex_count,
+                                              sizeof(Vertex), remap.data());
+
+                    vertices.resize(vertex_offset);
+                    vertices.insert(vertices.end(), remapped_verts.begin(), remapped_verts.end());
+
+                    meshopt_optimizeVertexCache(opt_indices.data(), opt_indices.data(), opt_indices.size(),
+                                                unique_vertex_count);
                     meshopt_optimizeOverdraw(opt_indices.data(), opt_indices.data(), opt_indices.size(),
-                                             &vertices[vertex_offset].position[0], prim_vertex_count, sizeof(Vertex),
+                                             &vertices[vertex_offset].position[0], unique_vertex_count, sizeof(Vertex),
                                              1.05f);
                 }
 
+                // ── LOD chain ────────────────────────────────────────────────
                 constexpr std::array<float, k_lod_count> k_lod_ratios = {1.0f, 0.5f, 0.25f, 0.125f};
                 constexpr float k_target_error = 1e-2f;
 
                 Submesh sm{};
                 sm.vertex_offset = vertex_offset;
-                sm.vertex_count = static_cast<u32>(prim_vertex_count);
+                sm.vertex_count = static_cast<u32>(unique_vertex_count);
                 sm.material_index = material_index;
 
                 for (u32 lod = 0; lod < k_lod_count; ++lod) {
@@ -700,13 +724,13 @@ namespace Tooling {
 
                         const size_t simplified_count =
                                 meshopt_simplify(simplified.data(), opt_indices.data(), opt_indices.size(),
-                                                 &vertices[vertex_offset].position[0], prim_vertex_count,
+                                                 &vertices[vertex_offset].position[0], unique_vertex_count,
                                                  sizeof(Vertex), target_count, k_target_error, 0, &result_error);
 
                         simplified.resize(simplified_count);
 
                         meshopt_optimizeVertexCache(simplified.data(), simplified.data(), simplified_count,
-                                                    prim_vertex_count);
+                                                    unique_vertex_count);
 
                         for (u32 idx: simplified)
                             indices.push_back(vertex_offset + idx);
@@ -722,6 +746,7 @@ namespace Tooling {
             }
         }
 
+        // ── Serialise ────────────────────────────────────────────────────────
         BinaryWriter w;
         FileHeader header{};
         header.submesh_count = static_cast<u32>(submeshes.size());
@@ -786,7 +811,8 @@ namespace Tooling {
 
         w.patch_pod<FileHeader>(header_offset, header);
 
-        // Final write.
+        const auto root = out_abs_no_normalize.parent_path();
+        ASSERT(std::filesystem::create_directory(root), "Could not create root directory for this scene");
         return write_file_bytes_abs(out_abs_no_normalize, w.data(), src_hash);
     }
 

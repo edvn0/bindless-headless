@@ -883,12 +883,14 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     }
 
     {
+        auto _ = NanoProfiler{"Perlin noise"};
         auto noise = generate_perlin(2048, 2048);
         res.perlin_noise =
                 gpu.ctx.create_texture(create_image_from_span_v2(gpu.allocator, *gpu.ctx.command_ctx, 2048u, 2048u,
                                                                  VK_FORMAT_R8_UNORM, std::span{noise}, "perlin_noise"));
     }
     {
+        auto _ = NanoProfiler{"SSAO Kernels"};
         auto ssao_hemisphere_kernel = []() -> std::array<glm::vec4, 32> {
             std::uniform_real_distribution<float> dist(0.0f, 1.0f);
             std::default_random_engine rng{std::random_device{}()};
@@ -1715,7 +1717,6 @@ gpu.bindless.need_repopulate = true;
             }
         }
 
-        std::vector<DrawRanges> all_mesh_ranges;
         submit_mesh_instances(scene.scene, scene.render_queue);
         flush_render_queue(scene.render_queue, res, gpu.ctx, bounded_frame_index);
         flush_material_pool(gpu.ctx);
@@ -1725,9 +1726,12 @@ gpu.bindless.need_repopulate = true;
                 .cmd_ring = res.indirect_ring,
                 .material_id_ring = res.draw_material_id_ring,
         };
+        std::vector<DrawRanges> all_mesh_ranges;
         all_mesh_ranges.reserve(res.mesh_instance_ranges.size());
         for (const auto &mir: res.mesh_instance_ranges) {
             auto &mesh = res.meshes.at(mir.mesh_index);
+            if (mir.instance_count == 0)
+                continue;
             all_mesh_ranges.push_back(write_mesh_indirect(gpu.ctx, bounded_frame_index, write_buffers, mesh.mesh,
                                                           MeshDrawInfo{
                                                                   .mesh_index = mir.mesh_index,
@@ -1916,11 +1920,23 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
-            const std::array billboard_waits{
+            const std::array bloom_waits{
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::Skybox)],
                             .semaphore = gpu.tl_graphics.timeline,
                             .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    },
+            };
+            fs.timeline_values[stage_index(Stage::Bloom)] = run_bloom_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = bloom_waits});
+        }
+
+        {
+            const std::array billboard_waits{
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::Bloom)],
+                            .semaphore = gpu.tl_compute.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
             fs.timeline_values[stage_index(Stage::Billboard)] =
@@ -1929,22 +1945,10 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
-            const std::array bloom_waits{
+            const std::array tonemap_waits{
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::Billboard)],
                             .semaphore = gpu.tl_graphics.timeline,
-                            .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                    },
-            };
-            fs.timeline_values[stage_index(Stage::Bloom)] = run_bloom_pass(
-                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = bloom_waits});
-        }
-
-        {
-            const std::array tonemap_waits{
-                    TimelineWait{
-                            .value = fs.timeline_values[stage_index(Stage::Bloom)],
-                            .semaphore = gpu.tl_compute.timeline,
                             .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };

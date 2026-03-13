@@ -301,6 +301,7 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                 auto *indirect = gpu.ctx.buffers.get(res.indirect_ring.handle());
 
                 for (auto i = 0U; i < mesh_instance_ranges.size(); ++i) {
+
                     const auto &mir = mesh_instance_ranges[i];
                     const auto &range = ranges[i];
                     const auto &mesh = res.meshes[mir.mesh_index];
@@ -1347,41 +1348,67 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
     return submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
-                TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "Bloom");
-                auto _ = RP::begin_compute(cmd, ComputeIndex::Bloom);
-
                 auto *threshold_pipe = gpu.ctx.pipeline_pool.get(pipes.bloom_threshold_pipeline);
                 auto *downsample_pipe = gpu.ctx.pipeline_pool.get(pipes.bloom_downsample_pipeline);
                 auto *upsample_pipe = gpu.ctx.pipeline_pool.get(pipes.bloom_upsample_pipeline);
 
                 const u32 mip_count = res.bloom_mip_count;
 
+                // ── Acquire lit_hdr from graphics queue ──────────────────────────────
                 auto *lit = gpu.ctx.textures.get(res.lit_hdr);
-                const VkImageMemoryBarrier2 acquire_lit{
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                        .pNext = nullptr,
-                        .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                        .srcAccessMask = VK_ACCESS_2_NONE,
-                        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-                        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                        .srcQueueFamilyIndex = gpu.queue_family_indices.graphics,
-                        .dstQueueFamilyIndex = gpu.queue_family_indices.compute,
-                        .image = lit->image,
-                        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-                };
+                auto acquire_lit = create_info<VkImageMemoryBarrier2>();
+                acquire_lit.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                acquire_lit.srcAccessMask = VK_ACCESS_2_NONE;
+                acquire_lit.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                acquire_lit.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+                acquire_lit.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+                acquire_lit.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                acquire_lit.srcQueueFamilyIndex = gpu.queue_family_indices.graphics;
+                acquire_lit.dstQueueFamilyIndex = gpu.queue_family_indices.compute;
+                acquire_lit.image = lit->image;
+                acquire_lit.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
                 auto dep_acquire = create_info<VkDependencyInfo>();
-                dep_acquire.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
                 dep_acquire.imageMemoryBarrierCount = 1;
                 dep_acquire.pImageMemoryBarriers = &acquire_lit;
                 vkCmdPipelineBarrier2(cmd, &dep_acquire);
 
+                // ── Clear bloom_threshold + all upsample targets ─────────────────────
+                const VkClearColorValue zero_clear{.float32 = {0.0f, 0.0f, 0.0f, 0.0f}};
+                const VkImageSubresourceRange full_range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
                 auto *thresh_tex = gpu.ctx.textures.get(res.bloom_threshold);
                 thresh_tex->transition_if_not_initialised(
-                        cmd, VK_IMAGE_LAYOUT_GENERAL,
-                        {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
+                        cmd, VK_IMAGE_LAYOUT_GENERAL, {VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT});
+                vkCmdClearColorImage(cmd, thresh_tex->image, VK_IMAGE_LAYOUT_GENERAL, &zero_clear, 1, &full_range);
 
+                for (i32 i = static_cast<i32>(mip_count) - 2; i >= 0; --i) {
+                    auto *us_tex = gpu.ctx.textures.get(res.bloom_upsample[i]);
+                    us_tex->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT});
+                    vkCmdClearColorImage(cmd, us_tex->image, VK_IMAGE_LAYOUT_GENERAL, &zero_clear, 1, &full_range);
+                }
+
+                for (u32 i = 0; i < mip_count; ++i) {
+                    auto *ds_tex = gpu.ctx.textures.get(res.bloom_downsample[i]);
+                    ds_tex->transition_if_not_initialised(
+                            cmd, VK_IMAGE_LAYOUT_GENERAL,
+                            {VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_CLEAR_BIT});
+                    vkCmdClearColorImage(cmd, ds_tex->image, VK_IMAGE_LAYOUT_GENERAL, &zero_clear, 1, &full_range);
+                }
+
+                // Single barrier: all clears visible to compute reads + writes
+                auto clear_barrier = create_info<VkMemoryBarrier2>();
+                clear_barrier.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+                clear_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                clear_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                clear_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+                auto dep_clear = create_info<VkDependencyInfo>();
+                dep_clear.memoryBarrierCount = 1;
+                dep_clear.pMemoryBarriers = &clear_barrier;
+                vkCmdPipelineBarrier2(cmd, &dep_clear);
+
+                // ── Threshold dispatch ───────────────────────────────────────────────
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, threshold_pipe->pipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, threshold_pipe->layout, 0, 1,
                                         &gpu.bindless.set, 0, nullptr);
@@ -1443,31 +1470,6 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                     src_h = dst_h;
                 }
 
-                const VkClearColorValue zero_clear{.float32 = {0.0f, 0.0f, 0.0f, 0.0f}};
-                const VkImageSubresourceRange full_range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-                for (i32 i = static_cast<i32>(mip_count) - 2; i >= 0; --i) {
-                    auto *us_tex = gpu.ctx.textures.get(res.bloom_upsample[i]);
-                    us_tex->transition_if_not_initialised(
-                            cmd, VK_IMAGE_LAYOUT_GENERAL,
-                            {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
-                    vkCmdClearColorImage(cmd, us_tex->image, VK_IMAGE_LAYOUT_GENERAL, &zero_clear, 1, &full_range);
-                }
-
-                // Barrier: clears visible to shader writes/reads
-                auto clear_barrier = create_info<VkMemoryBarrier2>();
-                clear_barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
-                clear_barrier.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
-                clear_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                clear_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-                clear_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-                auto dep_clear = create_info<VkDependencyInfo>();
-                dep_clear.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-                dep_clear.memoryBarrierCount = 1;
-                dep_clear.pMemoryBarriers = &clear_barrier;
-                vkCmdPipelineBarrier2(cmd, &dep_clear);
-
-
                 // ── Upsample chain ───────────────────────────────────────────
                 // Walk back up: ds[N-1] → us[N-2] → ... → us[0]
                 // us[i] has the same extent as ds[i], so use the downsample
@@ -1502,6 +1504,7 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                     const BloomUpsamplePushConstants us_pc{
                             .src_index = us_src_index,
                             .accumulate_index = res.bloom_upsample[i].index(),
+                            .accumulate_ds_index = res.bloom_downsample[i].index(),
                             .sampler_index = pipes.linear_clamp.index(),
                             .filter_radius = ui.bloom_config.radius,
                             .strength = ui.bloom_config.strength,

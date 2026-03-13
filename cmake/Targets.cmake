@@ -287,3 +287,77 @@ if(NOT C__fsanitize_address_VALID OR NOT CXX__fsanitize_address_VALID)
 endif()
 
 cmake_pop_check_state()
+
+find_path(MagickPP_INCLUDE_DIR
+  NAMES Magick++.h
+  PATH_SUFFIXES ImageMagick-7 ImageMagick
+)
+ 
+find_library(MagickPP_LIBRARY
+  NAMES Magick++-7.Q16HDRI
+)
+ 
+find_library(MagickCore_LIBRARY
+  NAMES MagickCore-7.Q16HDRI
+)
+ 
+find_library(MagickWand_LIBRARY
+  NAMES MagickWand-7.Q16HDRI
+)
+ 
+if(MagickPP_INCLUDE_DIR AND MagickPP_LIBRARY AND MagickCore_LIBRARY AND MagickWand_LIBRARY)
+  add_library(ImageMagick::MagickCore IMPORTED SHARED)
+  set_target_properties(ImageMagick::MagickCore PROPERTIES
+    IMPORTED_LOCATION             "${MagickCore_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${MagickPP_INCLUDE_DIR}"
+  )
+ 
+  add_library(ImageMagick::MagickWand IMPORTED SHARED)
+  set_target_properties(ImageMagick::MagickWand PROPERTIES
+    IMPORTED_LOCATION             "${MagickWand_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${MagickPP_INCLUDE_DIR}"
+    INTERFACE_LINK_LIBRARIES      "ImageMagick::MagickCore"
+  )
+ 
+  add_library(ImageMagick::Magick++ IMPORTED SHARED)
+  set_target_properties(ImageMagick::Magick++ PROPERTIES
+    IMPORTED_LOCATION             "${MagickPP_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${MagickPP_INCLUDE_DIR}"
+    INTERFACE_LINK_LIBRARIES      "ImageMagick::MagickWand;ImageMagick::MagickCore"
+  )
+ 
+  add_executable(tex_convert "src/tools/TextureConvert.cxx")
+ 
+  target_include_directories(tex_convert PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+  )
+ 
+  # ktx is already found by the rest of the build (used by BindlessEngine/SceneLoader)
+  target_link_libraries(tex_convert PRIVATE
+    ktx
+    ImageMagick::Magick++
+    CLI11::CLI11
+    volk_headers
+    volk
+  )
+ 
+  target_compile_definitions(tex_convert PRIVATE
+    MAGICKCORE_QUANTUM_DEPTH=16
+    MAGICKCORE_HDRI_ENABLE=1
+  )
+ 
+  DEFAULT_COMPILE_OPTIONS(tex_convert)
+ 
+  message(STATUS "tex_convert enabled")
+  message(STATUS "  include:    ${MagickPP_INCLUDE_DIR}")
+  message(STATUS "  Magick++:   ${MagickPP_LIBRARY}")
+  message(STATUS "  MagickCore: ${MagickCore_LIBRARY}")
+  message(STATUS "  MagickWand: ${MagickWand_LIBRARY}")
+else()
+  message(STATUS "tex_convert disabled - set -DMAGICK_ROOT=/path/to/imagemagick")
+  message(STATUS "  include:    ${MagickPP_INCLUDE_DIR}")
+  message(STATUS "  Magick++:   ${MagickPP_LIBRARY}")
+  message(STATUS "  MagickCore: ${MagickCore_LIBRARY}")
+  message(STATUS "  MagickWand: ${MagickWand_LIBRARY}")
+endif()

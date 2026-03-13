@@ -136,7 +136,6 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
                     VkExtent2D window_extent, VkExtent2D &last_window_extent, VkExtent2D &render_scene_extent) -> bool {
     const u64 safe_retire = max_in_flight_retire_value(ctx.res);
 
-    // --- window resize / shader triggers ---
     const bool window_resized =
             (window_extent.width != last_window_extent.width) || (window_extent.height != last_window_extent.height);
 
@@ -151,13 +150,11 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
         window_resize_graph.rebuild(window_extent, ResizeContext{.ctx = ctx.gpu.ctx, .retire_value = safe_retire},
                                     trigger);
         last_window_extent = window_extent;
-        return true; // skip rest of frame
+        return true;
     }
 
-    // Pull scene manual triggers once
     ResizeTrigger scene_manual = scene_resize_graph.get_and_clear_triggers();
 
-    // --- scene resize debounce ---
     auto &pr = ctx.ui.pending_resize;
 
     const bool lmb_down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
@@ -169,7 +166,6 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
 
     pr.was_down = lmb_down;
 
-    // Build combined scene trigger set
     ResizeTrigger scene_trigger = scene_manual;
     VkExtent2D target_extent = render_scene_extent;
 
@@ -196,7 +192,6 @@ auto commit_resizes(AppContext &ctx, ResizeGraph &window_resize_graph, ResizeGra
 
 
 auto choose_render_scene_extent(AppUI const &ui, VkExtent2D desired_scene_extent) -> VkExtent2D {
-    // Must be <= attachments this frame.
     if (ui.last_viewport_extent.width != 0 && ui.last_viewport_extent.height != 0) {
         return ui.last_viewport_extent;
     }

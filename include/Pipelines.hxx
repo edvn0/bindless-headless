@@ -189,6 +189,7 @@ struct BloomDownsamplePushConstants {
 struct BloomUpsamplePushConstants {
     u32 src_index; // current level
     u32 accumulate_index; // level below (being written into)
+    u32 accumulate_ds_index; // the downsampled image.
     u32 sampler_index;
     float filter_radius; // tent radius in UV space, ~0.005
     float strength; // blend weight on upsample accumulation
