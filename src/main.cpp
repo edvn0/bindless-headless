@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "Logger.hxx"
+#include "RenderDoc.hxx"
 #include "SceneLoader.hxx"
 
 #include "BindlessHeadless.hxx"
@@ -50,11 +51,18 @@ namespace {
 auto main(int argc, char **argv) -> int {
     BindlessApp app;
 
+    auto renderdoc = renderdoc_init();
+
     if (glfwPlatformSupported(GLFW_PLATFORM_WAYLAND)) {
         glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_WAYLAND);
     } else {
         error("Could not initialise");
         return 1;
+    }
+
+    if (renderdoc.is_active()) {
+        glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+        info("RenderDoc prefers X11.");
     }
 
     if (auto init = glfwInit(); init != GLFW_TRUE) {
@@ -100,7 +108,7 @@ auto main(int argc, char **argv) -> int {
         instance.messenger = VK_NULL_HANDLE;
     }
 
-    auto result = app.run(opts, instance);
+    auto result = app.run(opts, instance, &renderdoc);
     if (!result) {
         error("Application error: {}", result.error());
         return 1;

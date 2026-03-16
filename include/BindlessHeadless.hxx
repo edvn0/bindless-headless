@@ -205,6 +205,41 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 auto load_cubemap_ktx(VmaAllocator, GlobalCommandContext &, VkDevice, VkPhysicalDevice, VkQueue transfer_queue,
                       const std::filesystem::path &, std::string_view) -> tl::expected<OffscreenTarget, Error>;
 
+struct StagingBuffer {
+    VmaAllocator allocator{};
+    VkBuffer buffer{VK_NULL_HANDLE};
+    VmaAllocation allocation{};
+
+    StagingBuffer() = default;
+    StagingBuffer(VmaAllocator a, VkBuffer b, VmaAllocation alloc) : allocator{a}, buffer{b}, allocation{alloc} {}
+
+    ~StagingBuffer() {
+        if (buffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(allocator, buffer, allocation);
+    }
+
+    StagingBuffer(const StagingBuffer &) = delete;
+    StagingBuffer &operator=(const StagingBuffer &) = delete;
+
+    StagingBuffer(StagingBuffer &&o) noexcept :
+        allocator{o.allocator}, buffer{std::exchange(o.buffer, VK_NULL_HANDLE)}, allocation{o.allocation} {}
+
+    StagingBuffer &operator=(StagingBuffer &&o) noexcept {
+        if (this != &o) {
+            this->~StagingBuffer();
+            new (this) StagingBuffer{std::move(o)};
+        }
+        return *this;
+    }
+};
+struct StagedImage {
+    OffscreenTarget target;
+    StagingBuffer staging; // keep alive until fence signals
+};
+
+auto stage_image(VmaAllocator allocator, VkCommandBuffer cmd, u32 width, u32 height, VkFormat format,
+                 std::span<const u8> pixels, std::string_view debug_name) -> tl::expected<StagedImage, Error>;
+
 struct InstanceWithDebug {
     VkInstance instance{VK_NULL_HANDLE};
     VkDebugUtilsMessengerEXT messenger{VK_NULL_HANDLE};

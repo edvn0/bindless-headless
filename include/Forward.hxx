@@ -16,6 +16,8 @@ class Swapchain;
 
 struct FrameUBO;
 
+struct RenderDocContext;
+
 extern "C" {
 struct GLFWwindow;
 struct ImDrawData;

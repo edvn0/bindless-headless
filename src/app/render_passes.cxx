@@ -498,6 +498,8 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
     return submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
+                auto _ = RP::begin_compute(cmd, ComputeIndex::LightClustering);
+
                 {
                     auto barrier = create_info<VkMemoryBarrier2>();
                     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
@@ -513,12 +515,6 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
                 }
 
                 TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "ClusteredLightCulling");
-
-                auto &&[cqs, css] = gpu.ctx.query_pools.get_multiple(pipes.compute_query_pool[bounded_frame_index],
-                                                                     pipes.compute_stats_pool[bounded_frame_index]);
-
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightClusteringBegin);
-                begin_stats(cmd, *css, ComputeIndex::LightClustering);
 
                 const ClusteredLightCullingPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
@@ -595,11 +591,6 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
                 const u32 gx = (hm_width + 7) / 8;
                 const u32 gy = (hm_height + 7) / 8;
                 vkCmdDispatch(cmd, gx, gy, 1);
-                // ----------------------------------------
-
-
-                end_stats(cmd, *css, ComputeIndex::LightClustering);
-                write_ts(cmd, *cqs, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, ComputeStamp::LightClusteringEnd);
             },
             sync);
 }
@@ -870,13 +861,8 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
     return submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
+                auto _ = RP::begin_compute(cmd, ComputeIndex::Ssao);
                 TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "SSAO");
-
-                auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
-                        pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
-
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::SsaoBegin);
-                begin_stats(cmd, *stats_pool, ComputeIndex::Ssao);
 
                 auto *ssao_tex = gpu.ctx.textures.get(res.ssao_output);
                 auto *g0 = gpu.ctx.textures.get(res.gbuffer0);
@@ -965,8 +951,6 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
                 const u32 group_y = (frame_extent.height + 7u) / 8u;
                 vkCmdDispatch(cmd, group_x, group_y, 1);
 
-                // Release-side barrier: make the SSAO write visible before the timeline signal,
-                // so deferred lighting's acquire on the graphics queue sees it.
                 const VkImageMemoryBarrier2 release_barrier{
                         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                         .pNext = nullptr,
@@ -987,27 +971,18 @@ auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex b
                 dep_release.imageMemoryBarrierCount = 1;
                 dep_release.pImageMemoryBarriers = &release_barrier;
                 vkCmdPipelineBarrier2(cmd, &dep_release);
-
-                end_stats(cmd, *stats_pool, ComputeIndex::Ssao);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::SsaoEnd);
             },
             sync);
 }
 
-auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
-                        const SubmitSynchronisation &sync) -> TimelineValue {
+auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchronisation &sync) -> TimelineValue {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
 
     return submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
+                auto _ = RP::begin_compute(cmd, ComputeIndex::SsaoBlur);
                 TRACY_GPU_ZONE(gpu.tracy_compute.ctx, cmd, "SSAO Blur");
-
-                auto &&[ts, stats_pool] = gpu.ctx.query_pools.get_multiple(
-                        pipes.compute_query_pool[bounded_frame_index], pipes.compute_stats_pool[bounded_frame_index]);
-
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ComputeStamp::SsaoBlurBegin);
-                begin_stats(cmd, *stats_pool, ComputeIndex::SsaoBlur);
 
                 auto *ssao_in = gpu.ctx.textures.get(res.ssao_output);
                 auto *blur_tmp = gpu.ctx.textures.get(res.ssao_blurred_temp);
@@ -1066,7 +1041,6 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 const auto group_x = (frame_extent.width + 7u) / 8u;
                 const auto group_y = (frame_extent.height + 7u) / 8u;
 
-                // --- Horizontal pass: ssao_output -> ssao_blurred_temp ---
                 const SSAOBlurPushConstants pc_h{
                         .ssao_input_index = res.ssao_output.index(),
                         .ssao_output_index = res.ssao_blurred_temp.index(),
@@ -1077,7 +1051,6 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc_h), &pc_h);
                 vkCmdDispatch(cmd, group_x, group_y, 1);
 
-                // Barrier: tmp written by horizontal, read by vertical
                 const VkImageMemoryBarrier2 mid_barrier{
                         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                         .pNext = nullptr,
@@ -1098,7 +1071,6 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 dep_mid.pImageMemoryBarriers = &mid_barrier;
                 vkCmdPipelineBarrier2(cmd, &dep_mid);
 
-                // --- Vertical pass: ssao_blurred_temp -> ssao_blurred ---
                 const SSAOBlurPushConstants pc_v{
                         .ssao_input_index = res.ssao_blurred_temp.index(),
                         .ssao_output_index = res.ssao_blurred.index(),
@@ -1109,7 +1081,6 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc_v), &pc_v);
                 vkCmdDispatch(cmd, group_x, group_y, 1);
 
-                // Release ssao_blurred to graphics queue for deferred lighting
                 const VkImageMemoryBarrier2 release_barrier{
                         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
                         .pNext = nullptr,
@@ -1129,9 +1100,6 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 dep_release.imageMemoryBarrierCount = 1;
                 dep_release.pImageMemoryBarriers = &release_barrier;
                 vkCmdPipelineBarrier2(cmd, &dep_release);
-
-                end_stats(cmd, *stats_pool, ComputeIndex::SsaoBlur);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ComputeStamp::SsaoBlurEnd);
             },
             sync);
 }
@@ -1143,17 +1111,11 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
+                auto _ = RP::begin_graphics(cmd, GraphicsIndex::Deferred);
                 TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "DeferredLighting(FS)");
-
-                auto &&ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::DeferredBegin);
-                auto *pool = begin_query_for_index(ctx.gpu.ctx, cmd, GraphicsIndex::Deferred,
-                                                   pipes.graphics_stats_pool[bounded_frame_index]);
 
                 auto &&[mrt_lighting, debug_point_light] = gpu.ctx.pipeline_pool.get_multiple(
                         pipes.gbuffer_pipeline_lighting, pipes.debug_point_light_pipeline);
-
-                // auto *indirect_buffer = gpu.ctx.buffers.get(res.mesh_indirect_ring.handle());
 
                 auto *g0 = gpu.ctx.textures.get(res.gbuffer0);
                 auto *g1 = gpu.ctx.textures.get(res.gbuffer1);
@@ -1335,9 +1297,6 @@ auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, 
                 dep2.imageMemoryBarrierCount = 1;
                 dep2.pImageMemoryBarriers = &lit_to_read;
                 vkCmdPipelineBarrier2(cmd, &dep2);
-
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::DeferredEnd);
-                end_query_for_index(cmd, GraphicsIndex::Deferred, pool);
             },
             sync);
 }
@@ -1348,13 +1307,13 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
     return submit_stage(
             gpu.tl_compute, gpu.device,
             [&](VkCommandBuffer cmd) {
+                auto _ = RP::begin_compute(cmd, ComputeIndex::Bloom);
                 auto *threshold_pipe = gpu.ctx.pipeline_pool.get(pipes.bloom_threshold_pipeline);
                 auto *downsample_pipe = gpu.ctx.pipeline_pool.get(pipes.bloom_downsample_pipeline);
                 auto *upsample_pipe = gpu.ctx.pipeline_pool.get(pipes.bloom_upsample_pipeline);
 
                 const u32 mip_count = res.bloom_mip_count;
 
-                // ── Acquire lit_hdr from graphics queue ──────────────────────────────
                 auto *lit = gpu.ctx.textures.get(res.lit_hdr);
                 auto acquire_lit = create_info<VkImageMemoryBarrier2>();
                 acquire_lit.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -1372,7 +1331,6 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                 dep_acquire.pImageMemoryBarriers = &acquire_lit;
                 vkCmdPipelineBarrier2(cmd, &dep_acquire);
 
-                // ── Clear bloom_threshold + all upsample targets ─────────────────────
                 const VkClearColorValue zero_clear{.float32 = {0.0f, 0.0f, 0.0f, 0.0f}};
                 const VkImageSubresourceRange full_range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
@@ -1397,7 +1355,6 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                     vkCmdClearColorImage(cmd, ds_tex->image, VK_IMAGE_LAYOUT_GENERAL, &zero_clear, 1, &full_range);
                 }
 
-                // Single barrier: all clears visible to compute reads + writes
                 auto clear_barrier = create_info<VkMemoryBarrier2>();
                 clear_barrier.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
                 clear_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -1470,15 +1427,10 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                     src_h = dst_h;
                 }
 
-                // ── Upsample chain ───────────────────────────────────────────
-                // Walk back up: ds[N-1] → us[N-2] → ... → us[0]
-                // us[i] has the same extent as ds[i], so use the downsample
-                // extents we can recompute cheaply.
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, upsample_pipe->pipeline);
                 vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, upsample_pipe->layout, 0, 1,
                                         &gpu.bindless.set, 0, nullptr);
 
-                // src starts at the smallest downsample level
                 u32 us_src_index = res.bloom_downsample[mip_count - 1].index();
 
                 for (i32 i = static_cast<i32>(mip_count) - 2; i >= 0; --i) {
@@ -1499,7 +1451,6 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                     dep_us.pMemoryBarriers = &us_barrier;
                     vkCmdPipelineBarrier2(cmd, &dep_us);
 
-                    // Extent of upsample[i] matches downsample[i]
                     const u32 dst_w = std::max(1u, frame_extent.width >> (i + 1));
                     const u32 dst_h = std::max(1u, frame_extent.height >> (i + 1));
 
@@ -1636,11 +1587,16 @@ auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
 
+                u32 icon{white_texture_index};
+                if (res.icons_map.contains("point-light")) {
+                    icon = res.icons_map.at("point-light").index();
+                }
+
                 const BillboardPushConstants pc{
                         .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
                         .point_lights = res.point_lights_ring.slot_device_address(bounded_frame_index),
                         .light_count = light_count,
-                        .texture_index = res.icons_map.at("point-light").index(),
+                        .texture_index = icon,
                         .sampler_index = pipes.linear_clamp.index(),
                         .world_size = 0.25f,
                 };

@@ -2,6 +2,7 @@
 option(HAS_TRACY "Enable Tracy integration" OFF)
 option(HAS_HOT_RELOADING "Enable MSVC hot reloading" OFF)
 option(HAS_IMAGE_WRITERS "Enable writing images to output" ON)
+set(RENDERDOC_INCLUDE_PATH "" CACHE PATH "Path to directory containing renderdoc_app.h")
 
 message(STATUS "HAS_TRACY = ${HAS_TRACY}")
 message(STATUS "HAS_HOT_RELOADING = ${HAS_HOT_RELOADING}")

@@ -17,12 +17,15 @@
 #include <random>
 #include <ranges>
 #include <thread>
+#include <tl/expected.hpp>
 #include <unordered_map>
 
 #include "Constants.hxx"
+#include "DeviceThreadPool.hxx"
 #include "ImGuizmo.h"
 #include "Logger.hxx"
 #include "Pipelines.hxx"
+#include "RenderDoc.hxx"
 #include "RenderSubmission.hxx"
 #include "SceneLoader.hxx"
 #include "Types.hxx"
@@ -41,6 +44,23 @@ static void sig_handler(int) { keep_running = 0; }
 
 
 namespace {
+    constexpr auto poll_streamer = [](AppResources &res, AppGpuState &gpu) {
+        if (res.icons_loaded)
+            return;
+
+        auto result = res.asset_streamer->poll(gpu.graphics_queue);
+        if (!result) {
+            error("Asset streaming failed: {}", result.error().message);
+            res.icons_loaded = true;
+            return;
+        }
+
+        if (*result) {
+            res.icons_loaded = true;
+            info("All assets streamed");
+        }
+    };
+
     [[nodiscard]] auto stbi_channels_for(IconLoadDescription::Channels channels) -> int {
         switch (channels) {
             case IconLoadDescription::Channels::r:
@@ -426,6 +446,10 @@ namespace {
                     ui.debug_mode = AppUI::ClusterDebugMode::None;
                     return true;
                 }
+                if (event.key == GLFW_KEY_F11) {
+                    ui.capture_next_frame = true;
+                    return true;
+                }
 
                 return false;
             });
@@ -586,7 +610,8 @@ namespace {
     }
 } // namespace
 
-auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<int, Error> {
+auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocContext *renderdoc)
+        -> tl::expected<int, Error> {
     signal(SIGINT, sig_handler);
 
     AppGpuState gpu{};
@@ -711,6 +736,15 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
 
     gpu.bindless.init(gpu.device, query_bindless_caps(gpu.physical_device), 8u, 8u, 8u, 8u, 0u);
     gpu.bindless.grow_if_needed(300u, 40u, 32u, 8u);
+
+    {
+        res.asset_streamer = std::make_unique<AssetStreamer>(AssetStreamer::Config{
+                .device = gpu.device,
+                .queue_family = gpu.queue_family_indices.graphics,
+                .submissions_per_frame = 2,
+                .chunk_size = 4,
+        });
+    }
 
     {
         const VkSampleCountFlagBits requested = msaa_from_cli(opts.msaa);
@@ -849,7 +883,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
     }
 
     {
-        auto _ = NanoProfiler{"Loading icons"};
+        auto _ = NanoProfiler{"Submitting icons"};
         for (const auto &icon: std::filesystem::directory_iterator("assets/editor/icons")) {
             if (icon.path().extension() != ".png")
                 continue;
@@ -857,28 +891,39 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
             const auto stem = icon.path().stem().string();
             auto parse_result = IconFilenameParser{stem}.parse();
             if (!parse_result) {
-                error("Failed to parse icon filename '{}': {} (at pos {})", stem, parse_result.error().message,
-                      parse_result.error().pos);
                 continue;
             }
 
-            const auto &name = parse_result->name;
-            const auto &desc = parse_result->desc;
+            const auto name = parse_result->name;
+            const auto desc = parse_result->desc;
+            const auto path = icon.path();
+            auto staged = std::make_shared<std::optional<StagedImage>>();
 
-            i32 w{}, h{}, c{};
-            auto *pixels = stbi_load(icon.path().string().c_str(), &w, &h, &c, stbi_channels_for(desc.channels));
-            if (pixels) {
-                const auto pixel_count = static_cast<usize>(w * h * desc.bytes_per_pixel());
-                auto img = create_image_from_span_v2(
-                        gpu.allocator, *gpu.ctx.command_ctx, static_cast<u32>(w), static_cast<u32>(h), desc.vk_format(),
-                        std::span<const u8>(pixels, pixel_count), std::format("icon_{}", name));
-                res.icons_map[name] = gpu.ctx.create_texture(std::move(img));
-                info("Loaded icon '{}' ({}x{}, {} channels)", name, w, h, c);
-            } else {
-                error("Failed to load icon '{}'", icon.path().string());
-            }
-            stbi_image_free(pixels);
+            res.asset_streamer->submit(
+                    [=, &gpu](VkCommandBuffer cmd) mutable -> tl::expected<void, Error> {
+                        i32 w{}, h{}, c{};
+                        auto *pixels = stbi_load(path.string().c_str(), &w, &h, &c, stbi_channels_for(desc.channels));
+                        if (!pixels)
+                            return tl::unexpected{Error::make_error(Error::Type::RenderError,
+                                                                    "Failed to load icon '{}'", path.string())};
+
+                        const auto pixel_count = static_cast<usize>(w * h * desc.bytes_per_pixel());
+                        TRY_PROPAGATE(result,
+                                      stage_image(gpu.allocator, cmd, static_cast<u32>(w), static_cast<u32>(h),
+                                                  desc.vk_format(), std::span{pixels, pixel_count},
+                                                  std::format("icon_{}", name)),
+                                      "Could not stage icon");
+
+                        stbi_image_free(pixels);
+                        *staged = std::move(result);
+                        return {};
+                    },
+                    [=, &res, &gpu]() {
+                        res.icons_map[name] = gpu.ctx.create_texture(std::move(staged->value().target));
+                        gpu.bindless.need_repopulate = true;
+                    });
         }
+        info("Queued {} icons for streaming", res.asset_streamer->pending_count());
     }
 
     {
@@ -1033,9 +1078,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expe
         res.light_count = static_cast<u32>(res.all_point_lights.size());
 
         const auto mesh_aabb = res.meshes.at(0).mesh_aabb;
-        info("Mesh AABB: min({}, {}, {}) max({}, {}, {})", mesh_aabb.min.x, mesh_aabb.min.y, mesh_aabb.min.z,
-             mesh_aabb.max.x, mesh_aabb.max.y, mesh_aabb.max.z);
-
         spawn_lights_in_aabb(mesh_aabb, res.all_point_lights);
 
 
@@ -1631,8 +1673,12 @@ gpu.bindless.need_repopulate = true;
     glfwFocusWindow(gpu.window);
 
 
+    // Precompute device addresses used in push constants
+    const auto point_lights_base_addr = gpu.ctx.device_address(res.point_lights_base);
+
     while (!glfwWindowShouldClose(gpu.window) && keep_running) {
         glfwPollEvents();
+        poll_streamer(res, gpu);
         handle_bindless_repopulation(app_context, gpu.window_resize_graph);
 
 
@@ -1652,6 +1698,11 @@ gpu.bindless.need_repopulate = true;
         if (commit_resizes(app_context, gpu.window_resize_graph, gpu.scene_resize_graph, ui_frame.window_extent,
                            last_window_extent, render_scene_extent)) {
             continue;
+        }
+
+        if (ui.capture_next_frame) {
+            renderdoc->begin_frame_capture(instance.instance);
+            ui.capture_next_frame = false;
         }
 
 
@@ -1798,8 +1849,6 @@ gpu.bindless.need_repopulate = true;
 
         RP::setup_render_passes_for_frame(app_context, bounded_frame_index);
 
-        // Precompute device addresses used in push constants
-        const auto point_lights_base_addr = gpu.ctx.device_address(res.point_lights_base);
 
         {
             fs.timeline_values[stage_index(Stage::CubeRotation)] =
@@ -1877,9 +1926,8 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::SSAOBlur)] =
-                    run_ssao_blur_pass(app_context, render_scene_extent, bounded_frame_index,
-                                       SubmitSynchronisation{.timeline_waits = ssao_blur_waits});
+            fs.timeline_values[stage_index(Stage::SSAOBlur)] = run_ssao_blur_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = ssao_blur_waits});
         }
 
         {
@@ -1999,6 +2047,8 @@ gpu.bindless.need_repopulate = true;
             vk_check(present_res);
         }
 
+        renderdoc->end_frame_capture(instance.instance);
+
         FrameMark;
         ui.frame_index++;
     }
@@ -2013,7 +2063,7 @@ gpu.bindless.need_repopulate = true;
 
     vkDeviceWaitIdle(gpu.device);
 
-
+    res.asset_streamer.reset();
     ui.gui.reset();
     gpu.ctx.clear_all();
 

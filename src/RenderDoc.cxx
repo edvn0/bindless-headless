@@ -1,0 +1,165 @@
+#include "RenderDoc.hxx"
+
+// renderdoc_app.h is the single-header public API shipped with every RenderDoc
+// installation. Vendor it under 3PP/ or point to the system copy.
+// The header is pure C, so no link-time dependency is introduced.
+#include <renderdoc_app.h>
+
+#include "Logger.hxx" // info() / warn() — same helpers used throughout the engine
+#include "Numeric.hxx"
+
+#include <cstring>
+#include <string_view>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+struct RenderDocApi {
+    RENDERDOC_API_1_7_0 *rdoc{nullptr};
+};
+
+namespace {
+    [[nodiscard]] auto load_renderdoc_module() -> void * {
+#ifdef _WIN32
+        return static_cast<void *>(GetModuleHandleA("renderdoc.dll"));
+#else
+        return dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
+#endif
+    }
+
+    [[nodiscard]] auto get_api_proc(void *module) -> pRENDERDOC_GetAPI {
+#ifdef _WIN32
+        return reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(static_cast<HMODULE>(module), "RENDERDOC_GetAPI"));
+#else
+        return reinterpret_cast<pRENDERDOC_GetAPI>(dlsym(module, "RENDERDOC_GetAPI"));
+#endif
+    }
+} // namespace
+
+// ---------------------------------------------------------------------------
+// renderdoc_init
+// ---------------------------------------------------------------------------
+
+auto renderdoc_init() -> RenderDocContext {
+    void *mod = load_renderdoc_module();
+    if (!mod) {
+        return RenderDocContext{};
+    }
+
+    pRENDERDOC_GetAPI get_api = get_api_proc(mod);
+    if (!get_api) {
+        warn("RenderDoc module found but RENDERDOC_GetAPI symbol is missing — skipping.");
+        return RenderDocContext{};
+    }
+
+    auto *storage = new RenderDocApi{};
+    const int ok = get_api(eRENDERDOC_API_Version_1_7_0, reinterpret_cast<void **>(&storage->rdoc));
+    if (ok != 1 || !storage->rdoc) {
+        warn("RenderDoc: RENDERDOC_GetAPI failed (ret={}) — capture disabled.", ok);
+        delete storage;
+        return RenderDocContext{};
+    }
+
+    auto *rdoc = storage->rdoc;
+
+    rdoc->MaskOverlayBits(eRENDERDOC_Overlay_All, eRENDERDOC_Overlay_All);
+
+    rdoc->SetCaptureOptionU32(eRENDERDOC_Option_CaptureCallstacks, 1u);
+
+    rdoc->SetCaptureOptionU32(eRENDERDOC_Option_CaptureAllCmdLists, 1u);
+
+    rdoc->SetCaptureOptionU32(eRENDERDOC_Option_APIValidation, 0u);
+
+    rdoc->SetCaptureOptionU32(eRENDERDOC_Option_DebugOutputMute, 0u);
+
+    int major{}, minor{}, patch{};
+    rdoc->GetAPIVersion(&major, &minor, &patch);
+    info("RenderDoc in-application API active — version {}.{}.{}", major, minor, patch);
+
+    return RenderDocContext{.api = storage};
+}
+
+// ---------------------------------------------------------------------------
+// RenderDocContext member implementations
+// ---------------------------------------------------------------------------
+
+auto RenderDocContext::is_capturing() const -> bool {
+    if (!api || !api->rdoc)
+        return false;
+    return api->rdoc->IsFrameCapturing() != 0u;
+}
+
+auto RenderDocContext::begin_frame_capture(void *vk_instance, void *wnd_handle) const -> void {
+    if (!api || !api->rdoc)
+        return;
+    if (api->rdoc->IsFrameCapturing())
+        return;
+    const RENDERDOC_DevicePointer dev_ptr =
+            vk_instance ? RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(vk_instance) : nullptr;
+
+    api->rdoc->StartFrameCapture(dev_ptr, static_cast<RENDERDOC_WindowHandle>(wnd_handle));
+    info("RenderDoc: frame capture started.");
+}
+
+auto RenderDocContext::end_frame_capture(void *vk_instance, void *wnd_handle) const -> void {
+    if (!api || !api->rdoc)
+        return;
+    if (!api->rdoc->IsFrameCapturing())
+        return;
+
+    const RENDERDOC_DevicePointer dev_ptr =
+            vk_instance ? RENDERDOC_DEVICEPOINTER_FROM_VKINSTANCE(vk_instance) : nullptr;
+
+    const u32 ok = api->rdoc->EndFrameCapture(dev_ptr, static_cast<RENDERDOC_WindowHandle>(wnd_handle));
+
+    if (ok) {
+        u32 num = api->rdoc->GetNumCaptures();
+        info("RenderDoc: frame capture ended. Total captures: {}", num);
+    } else {
+        warn("RenderDoc: EndFrameCapture reported failure.");
+    }
+}
+
+auto RenderDocContext::trigger_capture() const -> void {
+    if (!api || !api->rdoc)
+        return;
+    api->rdoc->TriggerCapture();
+    info("RenderDoc: one-shot capture triggered.");
+}
+
+auto RenderDocContext::launch_replay_ui() const -> bool {
+    if (!api || !api->rdoc)
+        return false;
+
+    u32 num = api->rdoc->GetNumCaptures();
+    if (num == 0u) {
+        warn("RenderDoc: launch_replay_ui called but no captures exist.");
+        return false;
+    }
+
+    u32 path_len{};
+    api->rdoc->GetCapture(num - 1u, nullptr, &path_len, nullptr);
+
+    std::string path(path_len, '\0');
+    api->rdoc->GetCapture(num - 1u, path.data(), &path_len, nullptr);
+
+    const u32 ok = api->rdoc->LaunchReplayUI(1u, path.c_str());
+    if (!ok) {
+        warn("RenderDoc: failed to launch replay UI.");
+        return false;
+    }
+
+    info("RenderDoc: launched replay UI with '{}'.", path);
+    return true;
+}
+
+auto RenderDocContext::set_capture_path(std::string_view path_template) const -> void {
+    if (!api || !api->rdoc)
+        return;
+    const std::string tmp{path_template};
+    api->rdoc->SetCaptureFilePathTemplate(tmp.c_str());
+}

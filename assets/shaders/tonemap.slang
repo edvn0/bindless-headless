@@ -37,7 +37,6 @@ void fs_main(VSOut i, uniform TonemapPushConstants pc, out PSOut o) {
 
     float3 combined = hdr * pc.exposure + bloom * pc.bloom_strength;
 
-    // Luminance-preserving filmic curve (Hable-shaped, applied per-luminance)
     const float a = 2.51;
     const float b = 0.03;
     const float c = 2.43;

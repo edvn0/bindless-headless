@@ -809,6 +809,80 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
             ImGui::EndDisabled();
         }
     });
+
+    widget("Icon Browser", [&] {
+        static char filter_buf[128]{};
+        static float icon_size = 32.0f;
+        static bool show_labels = true;
+
+        // Toolbar
+        ImGui::SetNextItemWidth(180.f);
+        ImGui::InputText("##icon_filter", filter_buf, sizeof(filter_buf));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100.f);
+        ImGui::SliderFloat("Size", &icon_size, 16.f, 96.f, "%.0fpx");
+        ImGui::SameLine();
+        ImGui::Checkbox("Labels", &show_labels);
+        ImGui::Separator();
+
+        const std::string_view filter{filter_buf};
+        const float panel_w = ImGui::GetContentRegionAvail().x;
+        const int cols = std::max(1, static_cast<int>(panel_w / (icon_size + ImGui::GetStyle().ItemSpacing.x + 4.f)));
+
+        ImGui::BeginChild("##icon_scroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+
+        // Sort names for stable display order
+        std::vector<std::string_view> names;
+        names.reserve(ctx.res.icons_map.size());
+        for (const auto &[name, _]: ctx.res.icons_map)
+            if (filter.empty() || name.find(filter) != std::string::npos)
+                names.push_back(name);
+        std::ranges::sort(names);
+
+        int col = 0;
+        for (const auto &name: names) {
+            const auto &handle = ctx.res.icons_map.at(std::string{name});
+
+            ImGui::PushID(name.data());
+
+            if (col > 0 && col < cols)
+                ImGui::SameLine();
+            if (col >= cols)
+                col = 0;
+
+            ImGui::BeginGroup();
+
+            const bool clicked =
+                    ImGui::ImageButton("##icon_btn", ImTextureRef{handle.index()}, ImVec2{icon_size, icon_size});
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%.*s", static_cast<int>(name.size()), name.data());
+
+            if (clicked)
+                ImGui::SetClipboardText(name.data());
+
+            if (show_labels) {
+                // Truncate label to fit under the icon
+                const float max_w = icon_size + 4.f;
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + max_w);
+                ImGui::TextUnformatted(name.data(), name.data() + std::min(name.size(), usize{12}));
+                ImGui::PopTextWrapPos();
+            }
+
+            ImGui::EndGroup();
+            ImGui::PopID();
+
+            ++col;
+        }
+
+        if (names.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
+            ImGui::TextUnformatted(filter.empty() ? "No icons loaded." : "No icons match filter.");
+            ImGui::PopStyleColor();
+        }
+
+        ImGui::EndChild();
+    });
 }
 
 auto run_ui_frame(AppContext &ctx) -> UiFrameResult {

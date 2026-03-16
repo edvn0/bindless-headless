@@ -501,9 +501,104 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
     return t;
 }
 
+auto stage_image(VmaAllocator allocator, VkCommandBuffer cmd, u32 width, u32 height, VkFormat format,
+                 std::span<const u8> pixels, std::string_view debug_name) -> tl::expected<StagedImage, Error> {
+
+    if (width == 0 || height == 0)
+        return tl::unexpected{Error::make_error(Error::Type::InvalidArgument,
+                                                "stage_image: width ({}) and height ({}) must be non-zero", width,
+                                                height)};
+
+    auto target = create_offscreen_target(allocator, width, height, format, VK_SAMPLE_COUNT_1_BIT, {}, debug_name);
+
+    if (pixels.empty())
+        return StagedImage{std::move(target), {}};
+
+    // --- staging buffer ---
+    auto bci = create_info<VkBufferCreateInfo>();
+    bci.size = pixels.size_bytes();
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo staging_aci{};
+    staging_aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+    staging_aci.usage = VMA_MEMORY_USAGE_AUTO;
+
+    VkBuffer staging_buf{};
+    VmaAllocation staging_alloc{};
+
+    if (const auto result = vmaCreateBuffer(allocator, &bci, &staging_aci, &staging_buf, &staging_alloc, nullptr);
+        result != VK_SUCCESS)
+        return tl::unexpected{Error::make_error(Error::Type::CouldNotCreateBuffer,
+                                                "stage_image: vmaCreateBuffer failed: {}", static_cast<i32>(result))};
+
+    void *mapped{};
+    if (const auto result = vmaMapMemory(allocator, staging_alloc, &mapped); result != VK_SUCCESS) {
+        vmaDestroyBuffer(allocator, staging_buf, staging_alloc);
+        return tl::unexpected{Error::make_error(Error::Type::CouldNotMapMemory, "stage_image: vmaMapMemory failed: {}",
+                                                static_cast<i32>(result))};
+    }
+
+    std::memcpy(mapped, pixels.data(), pixels.size_bytes());
+    vmaUnmapMemory(allocator, staging_alloc);
+
+    auto pre = create_info<VkImageMemoryBarrier2>();
+    pre.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    pre.srcAccessMask = 0;
+    pre.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    pre.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    pre.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    pre.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    pre.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre.image = target.image;
+    pre.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    auto di_pre = create_info<VkDependencyInfo>();
+    di_pre.imageMemoryBarrierCount = 1;
+    di_pre.pImageMemoryBarriers = &pre;
+
+    vkCmdPipelineBarrier2(cmd, &di_pre);
+
+    const VkBufferImageCopy region{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {width, height, 1},
+    };
+
+    vkCmdCopyBufferToImage(cmd, staging_buf, target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    auto post = create_info<VkImageMemoryBarrier2>();
+    post.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+    post.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    post.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    post.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    post.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    post.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    post.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    post.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    post.image = target.image;
+    post.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    auto di_post = create_info<VkDependencyInfo>();
+    di_post.imageMemoryBarrierCount = 1;
+    di_post.pImageMemoryBarriers = &post;
+
+    vkCmdPipelineBarrier2(cmd, &di_post);
+
+    target.initialized = true;
+
+    return StagedImage{
+            .target = std::move(target),
+            .staging = StagingBuffer{allocator, staging_buf, staging_alloc},
+    };
+}
+
 auto create_depth_target(VmaAllocator &alloc, u32 width, u32 height, VkFormat format, VkSampleCountFlagBits samples,
-                         bool want_sampled, // usually true only for single-sample depth you intend to sample later
-                         std::string_view name) -> OffscreenTarget {
+                         bool want_sampled, std::string_view name) -> OffscreenTarget {
     OffscreenTarget t{};
     t.width = width;
     t.height = height;

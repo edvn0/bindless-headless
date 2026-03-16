@@ -94,7 +94,6 @@ struct ClusterViewData {
     float z_near;
     float z_far;
     float4x4 inv_projection;
-    float4x4 view;
 }
 
 struct ViewAABB {
@@ -105,14 +104,14 @@ struct ViewAABB {
 ViewAABB get_cluster_view_aabb(uint x, uint y, uint z, ClusterViewData pc) {
     // Map tile indices to NDC [-1, 1]
     // Vulkan Y is down: tile 0 is top (NDC -1), tile pc.tiles_y is bottom (NDC 1)
-    float2 ndc_min = float2(
-        (float(x) / pc.tiles_x) * 2.0 - 1.0,
-        (float(y) / pc.tiles_y) * 2.0 - 1.0
-    );
-    float2 ndc_max = float2(
-        (float(x + 1) / pc.tiles_x) * 2.0 - 1.0,
-        (float(y + 1) / pc.tiles_y) * 2.0 - 1.0
-    );
+float2 ndc_min = float2(
+     (float(x)     / pc.tiles_x) * 2.0 - 1.0,
+    -(float(y + 1) / pc.tiles_y) * 2.0 + 1.0
+);
+float2 ndc_max = float2(
+     (float(x + 1) / pc.tiles_x) * 2.0 - 1.0,
+    -(float(y)     / pc.tiles_y) * 2.0 + 1.0
+);
 
     // Calculate view-space distances (positive) using your exponential scale
 float z_near_dist = pc.z_near * pow(2.0, float(z)     / pc.log_z_scale);

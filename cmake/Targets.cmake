@@ -168,6 +168,9 @@ add_library(BindlessEngine STATIC
   "src/ImGuiRenderer.cxx"
   "src/StringPool.cxx"
   "src/RenderSubmission.cxx"
+  "src/DeviceThreadPool.cxx"
+
+  "src/RenderDoc.cxx"
 
   "src/scene/Scene.cxx"
 )
@@ -177,6 +180,11 @@ target_precompile_headers(BindlessEngine PRIVATE PCH.hxx)
 target_include_directories(BindlessEngine PUBLIC
   ${CMAKE_SOURCE_DIR}
   ${CMAKE_SOURCE_DIR}/include
+)
+
+set_target_properties(BindlessEngine PROPERTIES
+  BUILD_RPATH   "${SLANG_ROOT}/lib;$ENV{VULKAN_SDK}/lib"
+  INSTALL_RPATH "${SLANG_ROOT}/lib;$ENV{VULKAN_SDK}/lib"
 )
 
 target_link_libraries(BindlessEngine PUBLIC
@@ -209,6 +217,18 @@ endif()
 if(HAS_TRACY)
   target_link_libraries(BindlessEngine PRIVATE Tracy::TracyClient)
   target_compile_definitions(BindlessEngine PRIVATE TRACY_ENABLE TRACY_VK_USE_SYMBOL_TABLE)
+endif()
+
+if(RENDERDOC_INCLUDE_PATH)
+    if(NOT EXISTS "${RENDERDOC_INCLUDE_PATH}/renderdoc_app.h")
+        message(FATAL_ERROR
+            "RENDERDOC_INCLUDE_PATH is set to '${RENDERDOC_INCLUDE_PATH}' "
+            "but renderdoc_app.h was not found there.")
+    endif()
+    target_include_directories(BindlessEngine PRIVATE "${RENDERDOC_INCLUDE_PATH}")
+    message(STATUS "RenderDoc: using header from ${RENDERDOC_INCLUDE_PATH}")
+else()
+    message(STATUS "RenderDoc: using renderdoc_app.h from default include paths")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -279,6 +299,14 @@ DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
 add_library(SceneLoader STATIC
   "src/SceneLoader.cxx"
 )
+
+set_target_properties(BindlessHeadless PROPERTIES
+  BUILD_RPATH   "${SLANG_ROOT}/lib"
+  INSTALL_RPATH "${SLANG_ROOT}/lib"
+  BUILD_RPATH_USE_ORIGIN ON   # emits $ORIGIN-relative paths, more portable
+)
+target_link_options(BindlessHeadless PRIVATE "-Wl,--disable-new-dtags")
+
 
 target_include_directories(SceneLoader PUBLIC
   ${CMAKE_SOURCE_DIR}

@@ -187,57 +187,72 @@ if(HAS_TRACY)
 endif()
 
 function(FIND_SLANG)
-find_package(Slang CONFIG REQUIRED)
 
-# Ensure SLANG_ROOT is set if find_package didn't set it automatically
-set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
-set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
+  if(NOT DEFINED SLANG_ROOT OR SLANG_ROOT STREQUAL "")
+    message(FATAL_ERROR
+      "SLANG_ROOT is not set. Pass it on the command line or in your user preset:\n"
+      "  -DSLANG_ROOT=/path/to/slang\n"
+      "Expected layout: <SLANG_ROOT>/include/slang.h, <SLANG_ROOT>/lib/libslang.so")
+  endif()
 
-add_library(slang-compiler SHARED IMPORTED)
-add_library(slang-rt SHARED IMPORTED)
+  if(NOT EXISTS "${SLANG_ROOT}/include/slang.h")
+    message(FATAL_ERROR
+      "SLANG_ROOT is set to '${SLANG_ROOT}' but include/slang.h was not found there. "
+      "Check that the path points to the root of a Slang installation.")
+  endif()
 
-set_target_properties(slang-compiler PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
-  INTERFACE_COMPILE_DEFINITIONS "SLANG_DYNAMIC"
-)
-set_target_properties(slang-rt PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
-  INTERFACE_COMPILE_DEFINITIONS "SLANG_DYNAMIC"
-)
+  find_package(Slang CONFIG REQUIRED)
+  find_package(Slang CONFIG REQUIRED)
 
-if(WIN32)
-  # Typical layout: import libs in lib/, DLLs sometimes in bin/ (depends on the package)
-  # Adjust BIN dir if your package puts DLLs elsewhere.
-  set(SLANG_BIN_DIR "${SLANG_ROOT}/bin")
+  # Ensure SLANG_ROOT is set if find_package didn't set it automatically
+  set(SLANG_LIB_DIR "${SLANG_ROOT}/lib")
+  set(SLANG_INCLUDE_DIR "${SLANG_ROOT}/include")
+
+  add_library(slang-compiler SHARED IMPORTED)
+  add_library(slang-rt SHARED IMPORTED)
 
   set_target_properties(slang-compiler PROPERTIES
-    IMPORTED_IMPLIB "${SLANG_LIB_DIR}/slang-compiler.lib"
-    IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-compiler.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+    INTERFACE_COMPILE_DEFINITIONS "SLANG_DYNAMIC"
   )
   set_target_properties(slang-rt PROPERTIES
-    IMPORTED_IMPLIB "${SLANG_LIB_DIR}/slang-rt.lib"
-    IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-rt.dll"
+    INTERFACE_INCLUDE_DIRECTORIES "${SLANG_INCLUDE_DIR}"
+    INTERFACE_COMPILE_DEFINITIONS "SLANG_DYNAMIC"
   )
 
-elseif(APPLE)
-  set_target_properties(slang-compiler PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.dylib"
-  )
-  set_target_properties(slang-rt PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.dylib"
-  )
+  if(WIN32)
+    # Typical layout: import libs in lib/, DLLs sometimes in bin/ (depends on the package)
+    # Adjust BIN dir if your package puts DLLs elsewhere.
+    set(SLANG_BIN_DIR "${SLANG_ROOT}/bin")
 
-else() # Linux
-  set_target_properties(slang-compiler PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.so"
-  )
-  set_target_properties(slang-rt PROPERTIES
-    IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.so"
-  )
-endif()
+    set_target_properties(slang-compiler PROPERTIES
+      IMPORTED_IMPLIB "${SLANG_LIB_DIR}/slang-compiler.lib"
+      IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-compiler.dll"
+    )
+    set_target_properties(slang-rt PROPERTIES
+      IMPORTED_IMPLIB "${SLANG_LIB_DIR}/slang-rt.lib"
+      IMPORTED_LOCATION "${SLANG_BIN_DIR}/slang-rt.dll"
+    )
 
-message(STATUS "Slang root: ${SLANG_ROOT}")
-message(STATUS "Slang lib dir: ${SLANG_LIB_DIR}")
+  elseif(APPLE)
+    set_target_properties(slang-compiler PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.dylib"
+    )
+    set_target_properties(slang-rt PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.dylib"
+    )
+
+  else() # Linux
+    set_target_properties(slang-compiler PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-compiler.so"
+    )
+    set_target_properties(slang-rt PROPERTIES
+      IMPORTED_LOCATION "${SLANG_LIB_DIR}/libslang-rt.so"
+    )
+  endif()
+
+  message(STATUS "Slang root: ${SLANG_ROOT}")
+  message(STATUS "Slang lib dir: ${SLANG_LIB_DIR}")
 endfunction()
 
 FIND_SLANG()

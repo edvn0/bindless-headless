@@ -8,7 +8,9 @@
 #include "BindlessSet.hxx"
 #include "Compiler.hxx"
 #include "Constants.hxx"
+#include "DeviceThreadPool.hxx"
 #include "EventSystem.hxx"
+#include "Forward.hxx"
 #include "FrameQuery.hxx"
 #include "GlobalCommandContext.hxx"
 #include "ImGuiRenderer.hxx"
@@ -21,6 +23,7 @@
 #include "Swapchain.hxx"
 
 #include "app/frame.hxx"
+#include "app/icon_parser.hxx"
 #include "app/listeners.hxx"
 #include "app/math.hxx"
 #include "app/render.hxx"
@@ -165,11 +168,19 @@ struct InstanceData {
 
     static auto empty() -> InstanceData { return InstanceData{glm::identity<glm::mat4x3>(), 0}; }
 };
-// Lets align InstanceData
 static_assert(sizeof(InstanceData) % 16 == 0, "Unexpected padding in InstanceData");
+
+struct PendingIcon {
+    std::string name;
+    IconLoadDescription desc;
+    std::filesystem::path path;
+};
+
 
 struct AppResources {
     std::array<FrameState, frames_in_flight> frames{};
+
+    std::unique_ptr<AssetStreamer> asset_streamer;
 
     std::unique_ptr<FrameUBO> frame_ubo{std::make_unique<FrameUBO>()};
 
@@ -237,6 +248,7 @@ struct AppResources {
     } draw_stream{};
 
     StringMap<TextureHandle> icons_map{};
+    bool icons_loaded{false};
 };
 
 struct OutlinerState {
@@ -313,6 +325,8 @@ struct AppUI {
     double dt{0.0};
     double total_time{0.0};
 
+    bool capture_next_frame{false};
+
     VkExtent2D last_viewport_extent = {0, 0};
     PendingResize pending_resize{};
 
@@ -359,5 +373,5 @@ struct AppContext {
 
 class BindlessApp {
 public:
-    auto run(CLIOptions &opts, InstanceWithDebug &instance) -> tl::expected<i32, Error>;
+    auto run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocContext * = nullptr) -> tl::expected<i32, Error>;
 };
