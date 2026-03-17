@@ -35,7 +35,6 @@
 #include "app/ui.hxx"
 #include "scene/Components.hxx"
 #include "scene/Scene.hxx"
-#include "vulkan/vulkan_core.h"
 
 extern auto ImGui_KeyToImGuiKey(int key) -> ImGuiKey;
 

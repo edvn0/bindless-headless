@@ -1,6 +1,14 @@
 repos:
-- repo: https://github.com/pre-commit/mirrors-clang-format
-  rev: v22.1.0
-  hooks:
-    - id: clang-format
-      exclude: ^3PP/
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v22.1.1
+    hooks:
+      - id: clang-format
+        exclude: ^3PP/
+  - repo: local
+    hooks:
+      - id: no_vulkan_direct_includes
+        name: "No direct Vulkan headers — use volk.h"
+        language: pygrep
+        entry: '#\s*include\s*[<"]vulkan/'
+        files: \.(cpp|cxx|cc|c|h|hpp|hxx)$
+        types: [text]
