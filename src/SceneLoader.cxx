@@ -21,7 +21,10 @@
 #include <vector>
 
 #include <ktx.h>
+#include <lz4frame.h>
+#include <lz4hc.h>
 #include <volk.h>
+#include <zstd.h>
 
 #include <fastgltf/core.hpp>
 #include <fastgltf/glm_element_traits.hpp>
@@ -112,8 +115,9 @@ namespace Tooling {
             return out_path;
         }
 
-        auto write_file_bytes_abs(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes,
-                                  u64 src_hash) -> tl::expected<void, Error> {
+        [[maybe_unused]] auto write_file_bytes_abs(const std::filesystem::path &out_path_no_normalize,
+                                                   std::span<std::byte> bytes, u64 src_hash)
+                -> tl::expected<void, Error> {
             auto out_path = normalize_scene_out_path(out_path_no_normalize);
             info("Writing output scene file: {}", out_path.string());
 
@@ -129,6 +133,72 @@ namespace Tooling {
 
             if (bz_rc != BZ_OK)
                 return tl::unexpected(make_error(std::format("BZ2_bzBuffToBuffCompress failed: {}", bz_rc)));
+
+            std::ofstream f(out_path, std::ios::binary);
+            if (!f)
+                return tl::unexpected(make_error("Failed to open file for writing: " + out_path.string()));
+
+            f.write(std::bit_cast<const char *>(&k_prefix_magic), 8);
+            f.write(std::bit_cast<const char *>(&src_hash), 8);
+            f.write(compressed.data(), static_cast<std::streamsize>(compressed_size));
+
+            if (!f)
+                return tl::unexpected(make_error("Failed to write file: " + out_path.string()));
+
+            return {};
+        }
+
+        [[maybe_unused]] auto write_file_bytes_zstd(const std::filesystem::path &out_path_no_normalize,
+                                                    std::span<std::byte> bytes, u64 src_hash)
+                -> tl::expected<void, Error> {
+            auto out_path = normalize_scene_out_path(out_path_no_normalize);
+            info("Writing output scene file: {}", out_path.string());
+
+            const size_t bound = ZSTD_compressBound(bytes.size());
+            std::vector<char> compressed(bound);
+
+            // Level 3 is the zstd sweet spot: near-bzip2 ratio, ~10x faster compress,
+            // ~25x faster decompress. Bump to 6 if you want smaller files at cost of
+            // slower conversion (still decompresses at the same speed).
+            const size_t compressed_size = ZSTD_compress(compressed.data(), bound, bytes.data(), bytes.size(),
+                                                         /*level=*/3);
+
+            if (ZSTD_isError(compressed_size))
+                return tl::unexpected(
+                        make_error(std::format("ZSTD_compress failed: {}", ZSTD_getErrorName(compressed_size))));
+
+            std::ofstream f(out_path, std::ios::binary);
+            if (!f)
+                return tl::unexpected(make_error("Failed to open file for writing: " + out_path.string()));
+
+            f.write(std::bit_cast<const char *>(&k_prefix_magic), 8);
+            f.write(std::bit_cast<const char *>(&src_hash), 8);
+            f.write(compressed.data(), static_cast<std::streamsize>(compressed_size));
+
+            if (!f)
+                return tl::unexpected(make_error("Failed to write file: " + out_path.string()));
+
+            return {};
+        }
+
+        auto write_file_bytes_lz4(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes,
+                                  u64 src_hash) -> tl::expected<void, Error> {
+            auto out_path = normalize_scene_out_path(out_path_no_normalize);
+            info("Writing output scene file: {}", out_path.string());
+
+            LZ4F_preferences_t prefs = LZ4F_INIT_PREFERENCES;
+            prefs.frameInfo.contentSize = bytes.size();
+            prefs.compressionLevel = LZ4HC_CLEVEL_DEFAULT;
+
+            const size_t bound = LZ4F_compressFrameBound(bytes.size(), &prefs);
+            std::vector<char> compressed(bound);
+
+            const size_t compressed_size =
+                    LZ4F_compressFrame(compressed.data(), bound, bytes.data(), bytes.size(), &prefs);
+
+            if (LZ4F_isError(compressed_size))
+                return tl::unexpected(
+                        make_error(std::format("LZ4F_compressFrame failed: {}", LZ4F_getErrorName(compressed_size))));
 
             std::ofstream f(out_path, std::ios::binary);
             if (!f)
@@ -404,6 +474,19 @@ namespace Tooling {
             std::ignore = cache.key_to_index.try_emplace(key, idx);
             std::ignore = cache.textures.emplace_back(std::move(build));
             return idx;
+        }
+
+        auto write_file_bytes(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes,
+                              u64 src_hash) -> tl::expected<void, Error> {
+#if defined(SCENE_COMPRESSION_BZIP2)
+            return write_file_bytes_abs(out_path_no_normalize, bytes, src_hash);
+#elif defined(SCENE_COMPRESSION_ZSTD)
+            return write_file_bytes_zstd(out_path_no_normalize, bytes, src_hash);
+#elif defined(SCENE_COMPRESSION_LZ4)
+            return write_file_bytes_lz4(out_path_no_normalize, bytes, src_hash);
+#else
+#error "No scene compression backend defined. Set SCENE_COMPRESSION in CMake."
+#endif
         }
 
     } // namespace
@@ -822,7 +905,7 @@ namespace Tooling {
 
         const auto root = out_abs_no_normalize.parent_path();
         ensure_directory(root);
-        return write_file_bytes_abs(out_abs_no_normalize, w.data(), src_hash);
+        return write_file_bytes(out_abs_no_normalize, w.data(), src_hash);
     }
 
 } // namespace Tooling

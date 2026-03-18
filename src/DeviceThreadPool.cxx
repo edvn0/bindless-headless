@@ -80,6 +80,21 @@ void DeviceThreadPool::enqueue(RecordFunction record_fn, CompleteFunction comple
     impl_->queue_cv.notify_one();
 }
 
+void DeviceThreadPool::Impl::shutdown() {
+    {
+        std::lock_guard lock{queue_mutex};
+        stopping = true;
+        while (!task_queue.empty())
+            task_queue.pop();
+    }
+    queue_cv.notify_all();
+
+    for (auto &w: workers) {
+        if (w.thread.joinable())
+            w.thread.join();
+    }
+}
+
 void DeviceThreadPool::Impl::worker_fn(const usize worker_idx) {
     auto &worker = workers[worker_idx];
 
@@ -328,6 +343,23 @@ auto StreamingUploader::poll(VkQueue queue) -> tl::expected<bool, Error> {
 
     return all_done;
 }
+void StreamingUploader::abort() {
+    for (auto &chunk: chunks_) {
+        // Stop the threads
+        chunk.pool.impl_->shutdown();
+
+        // IMPORTANT: Manually trigger completion functions if they
+        // hold resources that need manual freeing (like shared_ptrs)
+        for (auto &r: chunk.pool.impl_->recorded) {
+            // Even if we don't finish the GPU work, we might need
+            // to run these to free CPU-side 'staged' handles
+            if (r.complete_fn)
+                r.complete_fn();
+        }
+    }
+    chunks_.clear();
+}
+
 
 AssetStreamer::AssetStreamer(Config cfg) : cfg_{cfg} {}
 
@@ -386,4 +418,25 @@ auto AssetStreamer::poll(VkQueue queue) -> tl::expected<bool, Error> {
 void AssetStreamer::reset() {
     pending_.clear();
     uploader_.reset();
+}
+void AssetStreamer::abort() {
+    pending_.clear();
+
+    if (uploader_) {
+        // 2. Tell the uploader to stop all thread activity
+        uploader_->abort();
+        uploader_.reset();
+    }
+}
+
+void AssetStreamer::emergency_shutdown() {
+    const size_t dropped = pending_.size();
+    pending_.clear();
+
+    if (uploader_) {
+        uploader_->abort();
+        uploader_.reset();
+    }
+
+    info("AssetStreamer: Emergency shutdown complete. Dropped {} pending items.", dropped);
 }

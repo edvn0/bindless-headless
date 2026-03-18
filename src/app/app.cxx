@@ -44,8 +44,9 @@ static void sig_handler(int) { keep_running = 0; }
 
 namespace {
     constexpr auto poll_streamer = [](AppResources &res, AppGpuState &gpu) {
-        if (res.icons_loaded)
+        if (res.icons_loaded) {
             return;
+        }
 
         auto result = res.asset_streamer->poll(gpu.graphics_queue);
         if (!result) {
@@ -919,7 +920,6 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocCo
                     },
                     [=, &res, &gpu]() {
                         res.icons_map[name] = gpu.ctx.create_texture(std::move(staged->value().target));
-                        gpu.bindless.need_repopulate = true;
                     });
         }
         info("Queued {} icons for streaming", res.asset_streamer->pending_count());
@@ -1637,25 +1637,31 @@ gpu.bindless.need_repopulate = true;
 
     ui.last_viewport_extent = last_scene_extent;
 
-    ui.gui = std::make_unique<ImGuiRenderer>(
-            gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx, *gpu.compiler,
-            FontChoice{
-                    .font_path = "assets/editor/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf",
-                    .size = 13.0f,
-            });
-    ui.gui->set_app_name("BHEngine");
+    {
+        NANO_SCOPE("Create ImGuiRenderer");
+        ui.gui = std::make_unique<ImGuiRenderer>(
+                gpu.window, static_cast<u32>(gpu.swapchain.image_count()), gpu.ctx, *gpu.compiler,
+                FontChoice{
+                        .font_path = "assets/editor/fonts/IBM_Plex_Mono/IBMPlexMono-Regular.ttf",
+                        .size = 13.0f,
+                });
+        ui.gui->set_app_name("BHEngine");
+    }
 
     auto gui_pipeline_node = gpu.window_resize_graph.add_node(
             "gui_pipeline", [&gui = *ui.gui](auto, const auto &) { gui.set_should_recompile(); },
             ResizeTrigger::Shaders);
     gpu.window_resize_graph.add_dependency(gui_pipeline_node, pipelines_node);
 
-    ui.watcher = std::unique_ptr<efsw::FileWatcher, Deleter>(new efsw::FileWatcher(false), Deleter{});
-    ui.listeners["update"] = std::unique_ptr<efsw::FileWatchListener, Deleter>(
-            new ShaderSourceCodeChangeListener(&gpu.window_resize_graph), Deleter{});
-    std::ignore = ui.watcher->addWatch("assets/shaders", ui.listeners["update"].get(), true,
-                                       {efsw::WatcherOption(efsw::Option::WinBufferSize, 128 * 1024)});
-    ui.watcher->watch();
+    {
+        NANO_SCOPE("Create file watcher");
+        ui.watcher = std::unique_ptr<efsw::FileWatcher, Deleter>(new efsw::FileWatcher(false), Deleter{});
+        ui.listeners["update"] = std::unique_ptr<efsw::FileWatchListener, Deleter>(
+                new ShaderSourceCodeChangeListener(&gpu.window_resize_graph), Deleter{});
+        std::ignore = ui.watcher->addWatch("assets/shaders", ui.listeners["update"].get(), true,
+                                           {efsw::WatcherOption(efsw::Option::WinBufferSize, 128 * 1024)});
+        ui.watcher->watch();
+    }
 
     // --- Graph setup ---
     if (!ui.graphs_initialized) {
@@ -1668,14 +1674,21 @@ gpu.bindless.need_repopulate = true;
     ui.last_frame_time = std::chrono::high_resolution_clock::now();
     auto stats = FrameStats{};
 
-    glfwShowWindow(gpu.window);
-    glfwFocusWindow(gpu.window);
-
+    {
+        NANO_SCOPE("Show window");
+        glfwShowWindow(gpu.window);
+        glfwFocusWindow(gpu.window);
+    }
 
     // Precompute device addresses used in push constants
     const auto point_lights_base_addr = gpu.ctx.device_address(res.point_lights_base);
 
     while (!glfwWindowShouldClose(gpu.window) && keep_running) {
+        if (!keep_running) {
+            res.asset_streamer->emergency_shutdown();
+            break;
+        }
+
         glfwPollEvents();
         poll_streamer(res, gpu);
         handle_bindless_repopulation(app_context, gpu.window_resize_graph);

@@ -7,11 +7,12 @@
 #include "SceneLoader.hxx" // FileHeader, Submesh (file), GPUMaterial, Texture, BlobRange, etc.
 #include "Types.hxx"
 
-
 #include <bzlib.h>
 #include <ktx.h>
 #include <ktxvulkan.h>
+#include <lz4frame.h>
 #include <volk.h>
+#include <zstd.h>
 
 #include <bit>
 #include <cstring>
@@ -826,7 +827,8 @@ namespace {
         return buf;
     }
 
-    auto bzip2_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
+    [[maybe_unused]] auto bzip2_decompress(std::span<const std::byte> src)
+            -> tl::expected<std::vector<std::byte>, Error> {
         size_t dst_cap = src.size() * 8;
         for (int attempt = 0; attempt < 6; ++attempt) {
             std::vector<std::byte> dst(dst_cap);
@@ -849,6 +851,65 @@ namespace {
                     Error::make_error(Error::Type::MeshLoadError, "bzip2 decompress failed: " + std::to_string(rc)));
         }
         return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "bzip2 output buffer never large enough"));
+    }
+
+    [[maybe_unused]] auto zstd_decompress(std::span<const std::byte> src)
+            -> tl::expected<std::vector<std::byte>, Error> {
+        const auto content_size = ZSTD_getFrameContentSize(src.data(), src.size());
+        if (content_size == ZSTD_CONTENTSIZE_ERROR)
+            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "zstd: not a valid zstd frame"));
+        if (content_size == ZSTD_CONTENTSIZE_UNKNOWN)
+            return tl::unexpected(
+                    Error::make_error(Error::Type::MeshLoadError, "zstd: content size unknown (streaming frame?)"));
+
+        std::vector<std::byte> dst(static_cast<size_t>(content_size));
+
+        const size_t result = ZSTD_decompress(dst.data(), dst.size(), src.data(), src.size());
+
+        if (ZSTD_isError(result))
+            return tl::unexpected(Error::make_error(
+                    Error::Type::MeshLoadError, std::format("zstd decompress failed: {}", ZSTD_getErrorName(result))));
+
+        return dst;
+    }
+
+    auto lz4_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
+        LZ4F_dctx *ctx = nullptr;
+        LZ4F_errorCode_t rc = LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION);
+        if (LZ4F_isError(rc))
+            return tl::unexpected(Error::make_error(
+                    Error::Type::MeshLoadError, std::format("lz4: failed to create ctx: {}", LZ4F_getErrorName(rc))));
+
+        LZ4F_frameInfo_t info = LZ4F_INIT_FRAMEINFO;
+        size_t consumed = src.size();
+        rc = LZ4F_getFrameInfo(ctx, &info, src.data(), &consumed);
+        if (LZ4F_isError(rc)) {
+            LZ4F_freeDecompressionContext(ctx);
+            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
+                                                    std::format("lz4: bad frame: {}", LZ4F_getErrorName(rc))));
+        }
+
+        if (info.contentSize == 0) {
+            LZ4F_freeDecompressionContext(ctx);
+            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
+                                                    "lz4: content size unknown (was frame compressed without it?)"));
+        }
+
+        std::vector<std::byte> dst(static_cast<size_t>(info.contentSize));
+        size_t dst_size = dst.size();
+        size_t src_remaining = src.size() - consumed;
+
+        rc = LZ4F_decompress(ctx, dst.data(), &dst_size, static_cast<const std::byte *>(src.data()) + consumed,
+                             &src_remaining, nullptr);
+
+        LZ4F_freeDecompressionContext(ctx);
+
+        if (LZ4F_isError(rc))
+            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
+                                                    std::format("lz4 decompress failed: {}", LZ4F_getErrorName(rc))));
+
+        dst.resize(dst_size);
+        return dst;
     }
 
     template<class T>
@@ -975,6 +1036,18 @@ namespace {
 // Public entry point
 // -----------------------------------------------------------------------------
 
+auto decompress_scene(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
+#if defined(SCENE_COMPRESSION_BZIP2)
+    return bzip2_decompress(src);
+#elif defined(SCENE_COMPRESSION_ZSTD)
+    return zstd_decompress(src);
+#elif defined(SCENE_COMPRESSION_LZ4)
+    return lz4_decompress(src);
+#else
+#error "No scene compression backend defined. Set SCENE_COMPRESSION in CMake."
+#endif
+}
+
 auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, float scale)
         -> tl::expected<StaticMesh, Error> {
     ZoneScopedNC("Load scene", 0xFFAA00);
@@ -990,9 +1063,11 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     if (!compressed)
         return tl::unexpected(compressed.error());
 
-    auto file_bytes_exp = bzip2_decompress(*compressed);
+    auto decompress = NanoProfiler{"Decompression"};
+    auto file_bytes_exp = decompress_scene(*compressed);
     if (!file_bytes_exp)
         return tl::unexpected(file_bytes_exp.error());
+    decompress.end();
 
     const std::vector<std::byte> file_bytes_owned = std::move(*file_bytes_exp);
     const std::span<const std::byte> file(file_bytes_owned);
@@ -1027,6 +1102,7 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     std::vector<TexSlot> tex_slots(header.texture_count, k_albedo_slot);
     {
         constexpr u32 k_none = 0xFFFFFFFFu;
+        NANO_SCOPE("Texture tagging");
         for (const auto &m: file_materials) {
             auto tag = [&](u32 idx, TexSlot slot) {
                 if (idx != k_none && idx < header.texture_count)
@@ -1044,37 +1120,41 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     std::vector<std::future<LoadedTextureCpu>> tex_futures;
     tex_futures.reserve(header.texture_count);
 
-    for (u32 i = 0; i < header.texture_count; ++i) {
-        const Tooling::Texture &t = file_textures[i];
+    {
+        auto _ = NanoProfiler{"Texture loading"};
+        for (u32 i = 0; i < header.texture_count; ++i) {
 
-        const size_t ktx_off = static_cast<size_t>(t.ktx2_offset);
-        const size_t ktx_sz = static_cast<size_t>(t.ktx2_size);
+            const Tooling::Texture &t = file_textures[i];
 
-        if (ktx_off + ktx_sz > file.size()) {
-            tex_futures.emplace_back(std::async(std::launch::deferred, []() -> LoadedTextureCpu {
-                LoadedTextureCpu bad{};
-                bad.width = bad.height = 1;
-                bad.levels = 1;
-                bad.vk_format = VK_FORMAT_R8G8B8A8_UNORM;
-                bad.data = {255, 0, 255, 255};
-                bad.level_offset = {0};
-                bad.level_size = {4};
-                return bad;
-            }));
-            continue;
-        }
+            const size_t ktx_off = static_cast<size_t>(t.ktx2_offset);
+            const size_t ktx_sz = static_cast<size_t>(t.ktx2_size);
 
-        std::vector<std::byte> ktx_copy(file.begin() + static_cast<ptrdiff_t>(ktx_off),
-                                        file.begin() + static_cast<ptrdiff_t>(ktx_off + ktx_sz));
-
-        const std::string debug_name = std::string(string_at(string_blob, t.name_str));
-        const TexSlot slot = tex_slots[i];
-
-        tex_futures.emplace_back(std::async(
-                std::launch::async,
-                [bytes = std::move(ktx_copy), slot, name = std::move(debug_name)]() mutable -> LoadedTextureCpu {
-                    return decode_ktx2_bytes(std::span<const std::byte>(bytes), slot.type, slot.tex_class, name);
+            if (ktx_off + ktx_sz > file.size()) {
+                tex_futures.emplace_back(std::async(std::launch::deferred, []() -> LoadedTextureCpu {
+                    LoadedTextureCpu bad{};
+                    bad.width = bad.height = 1;
+                    bad.levels = 1;
+                    bad.vk_format = VK_FORMAT_R8G8B8A8_UNORM;
+                    bad.data = {255, 0, 255, 255};
+                    bad.level_offset = {0};
+                    bad.level_size = {4};
+                    return bad;
                 }));
+                continue;
+            }
+
+            std::vector<std::byte> ktx_copy(file.begin() + static_cast<ptrdiff_t>(ktx_off),
+                                            file.begin() + static_cast<ptrdiff_t>(ktx_off + ktx_sz));
+
+            const std::string debug_name = std::string(string_at(string_blob, t.name_str));
+            const TexSlot slot = tex_slots[i];
+
+            tex_futures.emplace_back(std::async(
+                    std::launch::async,
+                    [bytes = std::move(ktx_copy), slot, name = std::move(debug_name)]() mutable -> LoadedTextureCpu {
+                        return decode_ktx2_bytes(std::span<const std::byte>(bytes), slot.type, slot.tex_class, name);
+                    }));
+        }
     }
 
     std::vector<LoadedTextureCpu> cpu_textures;
@@ -1085,14 +1165,30 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     std::vector<TextureHandle> tex_handles;
     tex_handles.reserve(cpu_textures.size());
 
-    for (const auto &cpu_tex: cpu_textures) {
-        auto img = create_texture_image_v2(ctx.allocator, *ctx.command_ctx, cpu_tex.width, cpu_tex.height,
-                                           cpu_tex.vk_format, std::span<const u8>{cpu_tex.data},
-                                           std::span<const u32>{cpu_tex.level_offset},
-                                           std::span<const u32>{cpu_tex.level_size}, cpu_tex.name);
-        tex_handles.emplace_back(ctx.textures.create(std::move(img)));
+    std::vector<PendingTextureUpload> pending;
+    pending.reserve(cpu_textures.size());
+
+    {
+        auto _ = NanoProfiler{"Prepare textures for upload"};
+        for (const auto &cpu_tex: cpu_textures) {
+            pending.emplace_back(prepare_texture_upload(ctx.allocator, cpu_tex.width, cpu_tex.height, cpu_tex.vk_format,
+                                                        std::span<const u8>{cpu_tex.data},
+                                                        std::span<const u32>{cpu_tex.level_offset},
+                                                        std::span<const u32>{cpu_tex.level_size}, cpu_tex.name));
+        }
     }
 
+    {
+        auto _ = NanoProfiler{"Flush pending textures"};
+        flush_texture_uploads(*ctx.command_ctx, pending);
+    }
+
+    {
+        auto _ = NanoProfiler{"Upload flushed textures"};
+
+        for (auto &p: pending)
+            tex_handles.emplace_back(ctx.textures.create(std::move(p.target)));
+    }
     const DefaultTextureHandles defs = get_default_texture_handles(ctx);
     constexpr u32 k_none = 0xFFFFFFFFu;
 
@@ -1181,6 +1277,8 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         mesh.submeshes.push_back(sm);
     }
 
+
+    auto _ = NanoProfiler{"Upload buffers"};
     auto aabb_result = create_mesh_aabb_data(ctx.allocator, mesh, scene_path.filename().string());
     if (!aabb_result)
         return tl::unexpected(aabb_result.error());

@@ -156,10 +156,23 @@ auto FrameStats::quantile(double p) const -> double {
     return sorted[i] * (1.0 - t) + sorted[j] * t;
 }
 
-NanoProfiler::NanoProfiler(const std::string_view n) : start_time(glfwGetTime()), scope_name(n) {}
+namespace {
+    thread_local int s_profiler_depth = 0;
+}
 
-NanoProfiler::~NanoProfiler() {
+NanoProfiler::NanoProfiler(const std::string_view n) :
+    start_time(glfwGetTime()), scope_name(n), depth(s_profiler_depth++) {}
+
+NanoProfiler::~NanoProfiler() { end(); }
+
+auto NanoProfiler::end() -> void {
+    if (has_ended)
+        return;
+    --s_profiler_depth;
     auto end_time = glfwGetTime();
     auto millis = (end_time - start_time) * 1000.0;
-    info("Scope [{}] took {:4.2f} ms", scope_name.c_str(), millis);
+    info("{:{}}"
+         "Scope [{}] took {:4.2f} ms",
+         "", depth * 2, scope_name.c_str(), millis);
+    has_ended = true;
 }

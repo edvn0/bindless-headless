@@ -86,10 +86,14 @@ private:
         BatchState batch_state{BatchState::idle};
 
         void worker_fn(usize worker_idx);
+        void shutdown();
         ~Impl();
     };
 
     std::unique_ptr<Impl> impl_;
+
+    friend class StreamingUploader;
+    friend class AssetStreamer;
 };
 
 class StreamingUploader {
@@ -107,6 +111,7 @@ public:
             -> tl::expected<void, Error>;
 
     [[nodiscard]] auto poll(VkQueue queue) -> tl::expected<bool, Error>;
+    void abort();
 
 private:
     auto ensure_active_chunk() -> tl::expected<void, Error>;
@@ -154,6 +159,9 @@ public:
     [[nodiscard]] auto is_idle() const -> bool { return pending_.empty() && !uploader_; }
 
     void reset();
+    void abort();
+
+    void emergency_shutdown();
 
 private:
     struct PendingItem {

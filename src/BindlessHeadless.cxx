@@ -1026,6 +1026,176 @@ auto create_image_from_mips_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
     return t;
 }
 
+auto prepare_texture_upload(VmaAllocator alloc, u32 width, u32 height, VkFormat format, std::span<const u8> data,
+                            std::span<const u32> mip_offsets, std::span<const u32> mip_sizes, std::string_view name)
+        -> PendingTextureUpload {
+    PendingTextureUpload out{};
+    out.allocator = alloc;
+    out.mip_levels = static_cast<u32>(mip_offsets.size());
+
+    {
+        VmaAllocatorInfo ai{};
+        vmaGetAllocatorInfo(alloc, &ai);
+
+        VkImageCreateInfo ici{};
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = format;
+        ici.extent = {width, height, 1};
+        ici.mipLevels = out.mip_levels;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        VmaAllocationCreateInfo aci{};
+        aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+
+        vk_check(vmaCreateImage(alloc, &ici, &aci, &out.target.image, &out.target.allocation, nullptr));
+
+        VkImageViewCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = out.target.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = format;
+        vci.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
+                          VK_COMPONENT_SWIZZLE_IDENTITY};
+        vci.subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = out.mip_levels,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+        };
+
+        vk_check(vkCreateImageView(ai.device, &vci, nullptr, &out.target.sampled_view));
+        out.target.attachment_view = VK_NULL_HANDLE;
+        out.target.storage_view = VK_NULL_HANDLE;
+        out.target.sampled_view_type = VK_IMAGE_VIEW_TYPE_2D;
+        out.target.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
+        out.target.attachment_view_type = VK_IMAGE_VIEW_TYPE_2D;
+        out.target.width = width;
+        out.target.height = height;
+        out.target.format = format;
+        out.target.allocation_info = std::make_unique<VmaAllocationInfo>();
+        vmaGetAllocationInfo(alloc, out.target.allocation, out.target.allocation_info.get());
+
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, out.target.image, name);
+        set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE_VIEW, out.target.sampled_view, std::format("{}_sampled_view", name));
+        vmaSetAllocationName(alloc, out.target.allocation, name.data());
+    }
+
+    {
+        auto bci = create_info<VkBufferCreateInfo>();
+        bci.size = data.size_bytes();
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo saci{};
+        saci.usage = VMA_MEMORY_USAGE_AUTO;
+        saci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+
+        vk_check(vmaCreateBuffer(alloc, &bci, &saci, &out.staging, &out.staging_alloc, nullptr));
+
+        void *mapped{};
+        vk_check(vmaMapMemory(alloc, out.staging_alloc, &mapped));
+        std::memcpy(mapped, data.data(), data.size_bytes());
+        vmaUnmapMemory(alloc, out.staging_alloc);
+    }
+
+    out.copies.reserve(out.mip_levels);
+    for (u32 level = 0; level < out.mip_levels; ++level) {
+        ASSERT(mip_offsets[level] + mip_sizes[level] <= data.size_bytes(), "Reading OOB");
+
+        out.copies.push_back(VkBufferImageCopy{
+                .bufferOffset = static_cast<VkDeviceSize>(mip_offsets[level]),
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource =
+                        {
+                                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                .mipLevel = level,
+                                .baseArrayLayer = 0,
+                                .layerCount = 1,
+                        },
+                .imageOffset = {0, 0, 0},
+                .imageExtent = {std::max(1u, width >> level), std::max(1u, height >> level), 1},
+        });
+    }
+
+    return out;
+}
+
+auto flush_texture_uploads(GlobalCommandContext &cmd_ctx, std::span<PendingTextureUpload> uploads) -> void {
+    if (uploads.empty())
+        return;
+
+    submit_one_time_cmd(
+            cmd_ctx,
+            [&](VkCommandBuffer cb) {
+                // ── All pre-barriers (UNDEFINED → TRANSFER_DST) ───────────────────
+                std::vector<VkImageMemoryBarrier2> pre_barriers;
+                pre_barriers.reserve(uploads.size());
+
+                for (const auto &u: uploads) {
+                    auto &b = pre_barriers.emplace_back();
+                    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+                    b.srcAccessMask = 0;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    b.image = u.target.image;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, u.mip_levels, 0, 1};
+                }
+
+                auto di_pre = create_info<VkDependencyInfo>();
+                di_pre.imageMemoryBarrierCount = static_cast<u32>(pre_barriers.size());
+                di_pre.pImageMemoryBarriers = pre_barriers.data();
+                vkCmdPipelineBarrier2(cb, &di_pre);
+
+                // ── All copies ────────────────────────────────────────────────────
+                for (const auto &u: uploads) {
+                    vkCmdCopyBufferToImage(cb, u.staging, u.target.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                           static_cast<u32>(u.copies.size()), u.copies.data());
+                }
+
+                // ── All post-barriers (TRANSFER_DST → GENERAL) ────────────────────
+                std::vector<VkImageMemoryBarrier2> post_barriers;
+                post_barriers.reserve(uploads.size());
+
+                for (const auto &u: uploads) {
+                    auto &b = post_barriers.emplace_back();
+                    b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                    b.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+                    b.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                    b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    b.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+                    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    b.image = u.target.image;
+                    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, u.mip_levels, 0, 1};
+                }
+
+                auto di_post = create_info<VkDependencyInfo>();
+                di_post.imageMemoryBarrierCount = static_cast<u32>(post_barriers.size());
+                di_post.pImageMemoryBarriers = post_barriers.data();
+                vkCmdPipelineBarrier2(cb, &di_post);
+            },
+            /*wait=*/true);
+
+    for (auto &u: uploads) {
+        if (u.staging != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(u.allocator, u.staging, u.staging_alloc);
+            u.staging = VK_NULL_HANDLE;
+        }
+        u.target.initialized = true;
+    }
+}
+
 auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevice device,
                       VkPhysicalDevice physical_device, VkQueue, const std::filesystem::path &path,
                       std::string_view name) -> tl::expected<OffscreenTarget, Error> {

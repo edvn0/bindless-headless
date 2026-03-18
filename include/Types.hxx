@@ -391,11 +391,18 @@ struct UIValueLatch {
 struct NanoProfiler {
     double start_time;
     std::string scope_name;
+    int depth{0};
+    bool has_ended{false};
 
     explicit NanoProfiler(std::string_view);
 
     ~NanoProfiler();
+    auto end() -> void;
 };
+#define NANO_CONCAT_INNER(a, b) a##b
+#define NANO_CONCAT(a, b) NANO_CONCAT_INNER(a, b)
+#define NANO_SCOPE(name)                                                                                               \
+    NanoProfiler NANO_CONCAT(_nano_profiler_, __LINE__) { name }
 
 template<typename T>
 struct LatestBuffer {

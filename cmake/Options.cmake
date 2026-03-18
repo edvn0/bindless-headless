@@ -16,3 +16,7 @@ if(POLICY CMP0141 AND HAS_HOT_RELOADING)
       $<$<CONFIG:Debug,RelWithDebInfo>:EditAndContinue>,\
       $<$<CONFIG:Debug,RelWithDebInfo>:ProgramDatabase>>")
 endif()
+
+set(SCENE_COMPRESSION "lz4" CACHE STRING "Scene file compression backend (bzip2, zstd, lz4)")
+set_property(CACHE SCENE_COMPRESSION PROPERTY STRINGS bzip2 zstd lz4)
+message(STATUS "Scene compression: ${SCENE_COMPRESSION}")

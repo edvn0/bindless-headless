@@ -37,6 +37,8 @@ auto BindlessSet::destroy() -> void {
 auto BindlessSet::grow_if_needed(u32 req_textures, u32 req_samplers, u32 req_storage, u32 req_accel) -> bool {
     bool grow = false;
 
+    NANO_SCOPE("Grow");
+
     auto grow_and_clamp = [&](u32 &current, u32 requested, u32 cap) {
         if (requested > current) {
             u32 doubled = current * 2u;
@@ -61,17 +63,127 @@ auto BindlessSet::grow_if_needed(u32 req_textures, u32 req_samplers, u32 req_sto
         return false;
     }
 
+    info("Bindless set growing: textures={}, samplers={}, comparison_samplers={}, storage={}, cubemaps={}, 3d={}, "
+         "accel={}",
+         max_textures, max_samplers, max_comparison_samplers, max_storage_images, max_cubemaps, max_3d_images,
+         max_accel_structs);
+
     destroy();
     need_repopulate = true;
     recreate();
     return true;
 }
 
+// BindlessSet — new flush path
+auto BindlessSet::flush_pending_writes(VkImageView dummy_sampled, VkImageView dummy_storage) -> void {
+    if (pending_texture_writes.empty())
+        return;
+
+    if (need_repopulate) {
+        pending_texture_writes.clear();
+        return;
+    }
+
+    for (const auto &pw: pending_texture_writes) {
+        if (pw.pool_index >= max_textures) {
+            need_repopulate = true;
+            pending_texture_writes.clear();
+            return;
+        }
+    }
+
+    NANO_SCOPE("Flush pending writes");
+
+    std::vector<VkDescriptorImageInfo> sampled_infos(pending_texture_writes.size());
+    std::vector<VkDescriptorImageInfo> storage_infos(pending_texture_writes.size());
+    std::vector<VkDescriptorImageInfo> cubemap_infos;
+    std::vector<u32> cubemap_indices;
+    std::vector<VkDescriptorImageInfo> image_3d_infos;
+    std::vector<u32> image_3d_indices;
+
+    std::vector<VkWriteDescriptorSet> writes;
+    writes.reserve(pending_texture_writes.size() * 2);
+
+    for (u32 i = 0; i < static_cast<u32>(pending_texture_writes.size()); ++i) {
+        const auto &pw = pending_texture_writes[i];
+
+        const VkImageView sv = (pw.sampled_view != VK_NULL_HANDLE) ? pw.sampled_view : dummy_sampled;
+        const VkImageView stv = (pw.storage_view != VK_NULL_HANDLE)   ? pw.storage_view
+                                : (pw.sampled_view != VK_NULL_HANDLE) ? pw.sampled_view
+                                                                      : dummy_storage;
+
+        sampled_infos[i] = {.sampler = VK_NULL_HANDLE, .imageView = sv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+        storage_infos[i] = {.sampler = VK_NULL_HANDLE, .imageView = stv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
+
+        auto ci = create_info<VkWriteDescriptorSet>();
+        ci.dstSet = set;
+        ci.dstBinding = 0;
+        ci.dstArrayElement = pw.pool_index;
+        ci.descriptorCount = 1;
+        ci.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        ci.pImageInfo = &sampled_infos[i];
+        writes.emplace_back(std::move(ci));
+
+        if (pw.pool_index < max_storage_images) {
+            auto ci = create_info<VkWriteDescriptorSet>();
+            ci.dstSet = set;
+            ci.dstBinding = 2;
+            ci.dstArrayElement = pw.pool_index;
+            ci.descriptorCount = 1;
+            ci.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            ci.pImageInfo = &storage_infos[i];
+            writes.emplace_back(std::move(ci));
+        }
+
+        if (is_cubemap_view(pw.view_type) && pw.pool_index < max_cubemaps) {
+            cubemap_indices.push_back(i);
+            cubemap_infos.push_back(sampled_infos[i]);
+            auto ci = create_info<VkWriteDescriptorSet>();
+            ci.dstSet = set;
+            ci.dstBinding = 4;
+            ci.dstArrayElement = pw.pool_index;
+            ci.descriptorCount = 1;
+            ci.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            ci.pImageInfo = &cubemap_infos.back();
+            writes.emplace_back(std::move(ci));
+        }
+
+        if (is_3d_view(pw.view_type) && pw.pool_index < max_3d_images) {
+            image_3d_infos.push_back(sampled_infos[i]);
+            auto ci = create_info<VkWriteDescriptorSet>();
+            ci.dstSet = set;
+            ci.dstBinding = 5;
+            ci.dstArrayElement = pw.pool_index;
+            ci.descriptorCount = 1;
+            ci.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            ci.pImageInfo = &image_3d_infos.back();
+            writes.emplace_back(std::move(ci));
+        }
+    }
+
+    vkUpdateDescriptorSets(device, static_cast<u32>(writes.size()), writes.data(), 0, nullptr);
+    pending_texture_writes.clear();
+}
+
 auto BindlessSet::repopulate_if_needed(TexturePool &textures, SamplerPool &samplers,
                                        ComparisonSamplerPool &comparison_samplers) -> bool {
-    if (!need_repopulate) [[likely]]
+    // Fast path: incremental only
+    if (!need_repopulate) [[likely]] {
+        if (!pending_texture_writes.empty()) {
+            // Need dummy views — grab from slot 0 as before
+            auto &dummy_texture = *textures.get(textures.get_handle(0));
+            const VkImageView dummy_sampled = dummy_texture.sampled_view;
+            const VkImageView dummy_storage = (dummy_texture.storage_view != VK_NULL_HANDLE)
+                                                      ? dummy_texture.storage_view
+                                                      : dummy_texture.sampled_view;
+            flush_pending_writes(dummy_sampled, dummy_storage);
+        }
         return false;
+    }
 
+    pending_texture_writes.clear();
+
+    NANO_SCOPE("Resize and grow bindless set.");
     const auto did_resize = grow_if_needed(textures.num_objects(), samplers.num_objects(), textures.num_objects(), 0u);
 
     auto &dummy_sampler = *samplers.get(samplers.get_handle(0));

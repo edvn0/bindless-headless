@@ -31,7 +31,7 @@ namespace RP {
 
     class Scope {
     public:
-        Scope(VkCommandBuffer cmd, Markers m, Specification s,
+        Scope(VkCommandBuffer &cmd, const Markers &m, Specification &&s,
               VkPipelineStageFlags2 ts_begin = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
               VkPipelineStageFlags2 ts_end = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
         Scope(Scope const &) = delete;
@@ -40,21 +40,21 @@ namespace RP {
         ~Scope();
 
     private:
-        VkCommandBuffer cmd_{};
-        Markers m_{};
-        Specification s_{};
+        VkCommandBuffer &cmd_;
+        const Markers &m_;
+        Specification s_;
         VkPipelineStageFlags2 ts_begin_{};
         VkPipelineStageFlags2 ts_end_{};
         bool active_{true};
     };
 
-    inline auto begin_graphics(VkCommandBuffer cmd, GraphicsIndex idx,
+    inline auto begin_graphics(VkCommandBuffer &cmd, GraphicsIndex idx,
                                VkPipelineStageFlags2 ts_begin = VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
                                VkPipelineStageFlags2 ts_end = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT) -> Scope {
         return {cmd, get_frame_markers().graphics, graphics_specification(idx), ts_begin, ts_end};
     }
 
-    inline auto begin_compute(VkCommandBuffer cmd, ComputeIndex idx,
+    inline auto begin_compute(VkCommandBuffer &cmd, ComputeIndex idx,
                               VkPipelineStageFlags2 ts_begin = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                               VkPipelineStageFlags2 ts_end = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT) -> Scope {
         return {cmd, get_frame_markers().compute, compute_specification(idx), ts_begin, ts_end};

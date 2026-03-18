@@ -23,13 +23,21 @@ auto RenderContext::get_instance() const -> VkInstance {
 }
 
 auto RenderContext::create_texture(OffscreenTarget &&target) -> TextureHandle {
-    bindless_set->need_repopulate = true;
-    return textures.create(std::move(target));
+    auto handle = textures.create(std::move(target));
+    const auto *tex = textures.get(handle);
+
+    bindless_set->pending_texture_writes.push_back({
+            .pool_index = handle.index(),
+            .sampled_view = tex->sampled_view,
+            .storage_view = tex->storage_view,
+            .view_type = tex->sampled_view_type,
+    });
+
+    return handle;
 }
 
 auto RenderContext::create_texture_owned(OffscreenTarget &&target) -> Holder<TextureHandle> {
-    bindless_set->need_repopulate = true;
-    return Holder{this, textures.create(std::move(target))};
+    return Holder{this, create_texture(std::move(target))};
 }
 
 auto RenderContext::create_sampler(VkSampler &&sampler) -> SamplerHandle {
@@ -37,9 +45,12 @@ auto RenderContext::create_sampler(VkSampler &&sampler) -> SamplerHandle {
     return samplers.create(std::move(sampler));
 }
 
-auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::string_view name) -> SamplerHandle {
+auto RenderContext::create_comparison_sampler(VkSampler &&sampler) -> ComparisonSamplerHandle {
     bindless_set->need_repopulate = true;
+    return comparison_samplers.create(std::move(sampler));
+}
 
+auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::string_view name) -> SamplerHandle {
     VkSamplerCreateInfo ci{info};
     ci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     ci.pNext = nullptr;
@@ -48,15 +59,8 @@ auto RenderContext::create_sampler(const VkSamplerCreateInfo info, const std::st
     return create_sampler(::create_sampler(allocator, ci, name));
 }
 
-auto RenderContext::create_comparison_sampler(VkSampler &&sampler) -> ComparisonSamplerHandle {
-    bindless_set->need_repopulate = true;
-    return comparison_samplers.create(std::move(sampler));
-}
-
 auto RenderContext::create_comparison_sampler(const VkSamplerCreateInfo info, const std::string_view name)
         -> ComparisonSamplerHandle {
-    bindless_set->need_repopulate = true;
-
     VkSamplerCreateInfo ci{info};
     ci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     ci.pNext = nullptr;
@@ -155,12 +159,20 @@ namespace {
         }
     }
 } // namespace
+
 auto destroy(RenderContext &ctx, TextureHandle handle, u64 retire_value) -> void {
     auto impl = ctx.textures.get(handle);
     if (!impl) {
         return;
     }
-    ctx.bindless_set->need_repopulate = true;
+
+    // Reset this slot to dummy incrementally rather than forcing a full repopulate
+    ctx.bindless_set->pending_texture_writes.push_back({
+            .pool_index = handle.index(),
+            .sampled_view = VK_NULL_HANDLE,
+            .storage_view = VK_NULL_HANDLE,
+            .view_type = VK_IMAGE_VIEW_TYPE_2D,
+    });
 
     VkImage image = impl->image;
     VmaAllocation allocation = impl->allocation;
@@ -191,7 +203,6 @@ auto destroy(RenderContext &ctx, SamplerHandle handle, u64 retire_value) -> void
     }
 
     auto sampled = *impl;
-
     ctx.destroy_queue.enqueue(retire_value, [dev = ctx.get_device(), s = sampled]() {
         if (s != VK_NULL_HANDLE) {
             vkDestroySampler(dev, s, nullptr);
@@ -207,7 +218,6 @@ auto destroy(RenderContext &ctx, ComparisonSamplerHandle handle, u64 retire_valu
     }
 
     auto sampled = *impl;
-
     ctx.destroy_queue.enqueue(retire_value, [dev = ctx.get_device(), s = sampled]() {
         if (s != VK_NULL_HANDLE) {
             vkDestroySampler(dev, s, nullptr);

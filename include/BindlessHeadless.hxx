@@ -205,6 +205,21 @@ auto create_image_from_span_v2(VmaAllocator alloc, GlobalCommandContext &cmd_ctx
 auto load_cubemap_ktx(VmaAllocator, GlobalCommandContext &, VkDevice, VkPhysicalDevice, VkQueue transfer_queue,
                       const std::filesystem::path &, std::string_view) -> tl::expected<OffscreenTarget, Error>;
 
+struct PendingTextureUpload {
+    OffscreenTarget target;
+
+    VkBuffer staging{VK_NULL_HANDLE};
+    VmaAllocation staging_alloc{};
+    VmaAllocator allocator{};
+
+    u32 mip_levels{};
+    std::vector<VkBufferImageCopy> copies;
+};
+auto prepare_texture_upload(VmaAllocator alloc, u32 width, u32 height, VkFormat format, std::span<const u8> data,
+                            std::span<const u32> mip_offsets, std::span<const u32> mip_sizes, std::string_view name)
+        -> PendingTextureUpload;
+auto flush_texture_uploads(GlobalCommandContext &cmd_ctx, std::span<PendingTextureUpload> uploads) -> void;
+
 struct StagingBuffer {
     VmaAllocator allocator{};
     VkBuffer buffer{VK_NULL_HANDLE};

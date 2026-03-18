@@ -50,6 +50,14 @@ inline auto query_bindless_caps(VkPhysicalDevice pd) -> BindlessCaps {
                         .max_accel_structs = accel_props.maxPerStageDescriptorAccelerationStructures};
 }
 
+struct PendingTextureWrite {
+    u32 pool_index;
+    VkImageView sampled_view; // VK_NULL_HANDLE = use dummy
+    VkImageView storage_view; // VK_NULL_HANDLE = use dummy
+    VkImageViewType view_type;
+};
+
+
 struct BindlessSet {
     VkDescriptorSetLayout layout{VK_NULL_HANDLE};
     VkPipelineLayout pipeline_layout{VK_NULL_HANDLE};
@@ -68,6 +76,9 @@ struct BindlessSet {
 
     VkDevice device{VK_NULL_HANDLE};
     BindlessCaps caps{};
+
+    std::vector<PendingTextureWrite> pending_texture_writes;
+    auto flush_pending_writes(VkImageView dummy_sampled, VkImageView dummy_storage) -> void;
 
     auto init(VkDevice dev, BindlessCaps const &caps_init, u32 initial_textures, u32 initial_samplers,
               u32 initial_comparison_samplers, u32 initial_storage_images, u32 initial_accel_structs) -> void;

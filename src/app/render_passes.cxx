@@ -98,6 +98,8 @@ namespace RP {
                         static_cast<u32>(idx),
                 };
             default:
+                error("What happened here?");
+                std::abort();
                 break;
         }
         return {};
@@ -106,24 +108,50 @@ namespace RP {
     auto compute_specification(ComputeIndex idx) -> Specification {
         switch (idx) {
             case ComputeIndex::RotateGeometry:
-                return {u32(ComputeStamp::RotateGeometryBegin), u32(ComputeStamp::RotateGeometryEnd), u32(idx)};
+                return {
+                        static_cast<u32>(ComputeStamp::RotateGeometryBegin),
+                        static_cast<u32>(ComputeStamp::RotateGeometryEnd),
+                        static_cast<u32>(idx),
+                };
             case ComputeIndex::RotateLights:
-                return {u32(ComputeStamp::RotateLightsBegin), u32(ComputeStamp::RotateLightsEnd), u32(idx)};
+                return {
+                        static_cast<u32>(ComputeStamp::RotateLightsBegin),
+                        static_cast<u32>(ComputeStamp::RotateLightsEnd),
+                        static_cast<u32>(idx),
+                };
             case ComputeIndex::LightClustering:
-                return {u32(ComputeStamp::LightClusteringBegin), u32(ComputeStamp::LightClusteringEnd), u32(idx)};
+                return {
+                        static_cast<u32>(ComputeStamp::LightClusteringBegin),
+                        static_cast<u32>(ComputeStamp::LightClusteringEnd),
+                        static_cast<u32>(idx),
+                };
             case ComputeIndex::Ssao:
-                return {u32(ComputeStamp::SsaoBegin), u32(ComputeStamp::SsaoEnd), u32(idx)};
+                return {
+                        static_cast<u32>(ComputeStamp::SsaoBegin),
+                        static_cast<u32>(ComputeStamp::SsaoEnd),
+                        static_cast<u32>(idx),
+                };
             case ComputeIndex::SsaoBlur:
-                return {u32(ComputeStamp::SsaoBlurBegin), u32(ComputeStamp::SsaoBlurEnd), u32(idx)};
+                return {
+                        static_cast<u32>(ComputeStamp::SsaoBlurBegin),
+                        static_cast<u32>(ComputeStamp::SsaoBlurEnd),
+                        static_cast<u32>(idx),
+                };
             case ComputeIndex::Bloom:
-                return {u32(ComputeStamp::BloomBegin), u32(ComputeStamp::BloomEnd), u32(idx)};
+                return {
+                        static_cast<u32>(ComputeStamp::BloomBegin),
+                        static_cast<u32>(ComputeStamp::BloomEnd),
+                        static_cast<u32>(idx),
+                };
             default:
+                error("What happened here?");
+                std::abort();
                 break;
         }
         return {};
     }
 
-    Scope::Scope(VkCommandBuffer cmd, Markers m, Specification s, VkPipelineStageFlags2 ts_begin,
+    Scope::Scope(VkCommandBuffer &cmd, const Markers &m, Specification &&s, VkPipelineStageFlags2 ts_begin,
                  VkPipelineStageFlags2 ts_end) : cmd_{cmd}, m_{m}, s_{s}, ts_begin_{ts_begin}, ts_end_{ts_end} {
 
         if (m_.ts)
@@ -724,12 +752,8 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
+                auto _ = RP::begin_graphics(cmd, GraphicsIndex::GBuffer);
                 TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "GBuffer MRT");
-
-                auto *ts = gpu.ctx.query_pools.get(pipes.graphics_query_pool[bounded_frame_index]);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, GraphicsStamp::GbufferBegin);
-                auto *pool = begin_query_for_index(ctx.gpu.ctx, cmd, GraphicsIndex::GBuffer,
-                                                   pipes.graphics_stats_pool[bounded_frame_index]);
 
                 auto &&[mrt_pipeline] = gpu.ctx.pipeline_pool.get_multiple(pipes.gbuffer_pipeline_mrt);
 
@@ -848,8 +872,6 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
                 }
 
                 vkCmdEndRendering(cmd);
-                write_ts(cmd, *ts, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, GraphicsStamp::GbufferEnd);
-                end_query_for_index(cmd, GraphicsIndex::GBuffer, pool);
             },
             sync);
 }

@@ -34,9 +34,6 @@ auto merge_aabbs(std::span<const AABB> aabbs) -> AABB {
     return result;
 }
 
-auto compute_instance_aabb(AABB const &local_aabb, glm::mat4 const &transform) -> AABB {
-    return local_aabb.transform(transform);
-}
 
 auto create_aabb_device_buffer(VmaAllocator &allocator, std::span<const AABB> aabbs, std::string const &name)
         -> tl::expected<Buffer, Error> {

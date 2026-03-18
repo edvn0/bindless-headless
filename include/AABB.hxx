@@ -113,7 +113,6 @@ auto compute_aabb_from_vertices(std::span<const VertexType> vertices) -> AABB {
 }
 
 auto merge_aabbs(std::span<const AABB> aabbs) -> AABB;
-auto compute_instance_aabb(AABB const &local_aabb, glm::mat4 const &transform) -> AABB;
 struct MeshAABBData {
     AABB mesh_aabb;
     Vec<AABB> submesh_aabbs;
