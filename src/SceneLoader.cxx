@@ -700,8 +700,8 @@ namespace Tooling {
 
                         sm.lods[lod] = {global_index_offset, static_cast<u32>(simplified_count)};
 
-                        info("LOD{}: {}/{} triangles (error {:.4f})", lod, simplified_count / 3, opt_indices.size() / 3,
-                             result_error);
+                        trace("LOD{}: {}/{} triangles (error {:.4f})", lod, simplified_count / 3,
+                              opt_indices.size() / 3, result_error);
                     }
                 }
 

@@ -7,6 +7,7 @@
 #include "Error.hxx"
 #include "Material.hxx"
 #include "Numeric.hxx"
+#include "Types.hxx"
 
 #include <array>
 #include <bit>
@@ -112,16 +113,8 @@ namespace Tooling {
         }
 
     private:
-        struct TransparentStringHash {
-            using is_transparent = void;
-
-            auto operator()(std::string_view s) const noexcept -> usize { return std::hash<std::string_view>{}(s); }
-            auto operator()(const std::string &s) const noexcept -> usize { return std::hash<std::string_view>{}(s); }
-            auto operator()(const char *s) const noexcept -> usize { return std::hash<std::string_view>{}(s); }
-        };
-
-        std::unordered_map<std::string, u32, TransparentStringHash, std::equal_to<>> m_offsets;
-        std::vector<char> m_blob; // null-terminated strings
+        StringMap<u32> m_offsets;
+        std::vector<char> m_blob;
     };
 
     static constexpr u32 k_magic = 0x31534E43; // 'CNS1'

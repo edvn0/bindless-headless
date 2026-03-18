@@ -167,10 +167,8 @@ auto BindlessSet::flush_pending_writes(VkImageView dummy_sampled, VkImageView du
 
 auto BindlessSet::repopulate_if_needed(TexturePool &textures, SamplerPool &samplers,
                                        ComparisonSamplerPool &comparison_samplers) -> bool {
-    // Fast path: incremental only
     if (!need_repopulate) [[likely]] {
         if (!pending_texture_writes.empty()) {
-            // Need dummy views — grab from slot 0 as before
             auto &dummy_texture = *textures.get(textures.get_handle(0));
             const VkImageView dummy_sampled = dummy_texture.sampled_view;
             const VkImageView dummy_storage = (dummy_texture.storage_view != VK_NULL_HANDLE)
@@ -189,10 +187,10 @@ auto BindlessSet::repopulate_if_needed(TexturePool &textures, SamplerPool &sampl
     auto &dummy_sampler = *samplers.get(samplers.get_handle(0));
     auto &dummy_texture = *textures.get(textures.get_handle(0));
 
-    const VkImageView &dummy_sampled_view = dummy_texture.sampled_view;
-    const VkImageView &dummy_storage_view =
+    const auto &dummy_sampled_view = dummy_texture.sampled_view;
+    const auto &dummy_storage_view =
             (dummy_texture.storage_view != VK_NULL_HANDLE) ? dummy_texture.storage_view : dummy_texture.sampled_view;
-    const VkSampler &dummy_vk_sampler = dummy_sampler;
+    const auto &dummy_vk_sampler = dummy_sampler;
 
     std::vector<VkDescriptorImageInfo> sampled_infos(max_textures);
     std::vector<VkDescriptorImageInfo> storage_infos(max_storage_images);

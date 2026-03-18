@@ -157,7 +157,7 @@ auto FrameStats::quantile(double p) const -> double {
 }
 
 namespace {
-    thread_local int s_profiler_depth = 0;
+    thread_local std::atomic_int s_profiler_depth = 0;
 }
 
 NanoProfiler::NanoProfiler(const std::string_view n) :
