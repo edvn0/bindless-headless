@@ -1,5 +1,6 @@
 #include "Mesh.hxx"
 #include "CompilerGlue.hxx"
+#include "Compression.hxx"
 #include "Error.hxx"
 #include "Logger.hxx"
 #include "Profiler.hxx"
@@ -7,12 +8,10 @@
 #include "SceneLoader.hxx" // FileHeader, Submesh (file), GPUMaterial, Texture, BlobRange, etc.
 #include "Types.hxx"
 
-#include <bzlib.h>
 #include <ktx.h>
 #include <ktxvulkan.h>
-#include <lz4frame.h>
 #include <volk.h>
-#include <zstd.h>
+
 
 #include <bit>
 #include <cstring>
@@ -827,90 +826,6 @@ namespace {
         return buf;
     }
 
-    [[maybe_unused]] auto bzip2_decompress(std::span<const std::byte> src)
-            -> tl::expected<std::vector<std::byte>, Error> {
-        size_t dst_cap = src.size() * 8;
-        for (int attempt = 0; attempt < 6; ++attempt) {
-            std::vector<std::byte> dst(dst_cap);
-            unsigned int dst_len = static_cast<unsigned int>(dst_cap);
-
-            const int rc = BZ2_bzBuffToBuffDecompress(std::bit_cast<char *>(dst.data()), &dst_len,
-                                                      const_cast<char *>(std::bit_cast<const char *>(src.data())),
-                                                      static_cast<unsigned int>(src.size()),
-                                                      /*small*/ 0, /*verbosity*/ 0);
-
-            if (rc == BZ_OK) {
-                dst.resize(dst_len);
-                return dst;
-            }
-            if (rc == BZ_OUTBUFF_FULL) {
-                dst_cap *= 4;
-                continue;
-            }
-            return tl::unexpected(
-                    Error::make_error(Error::Type::MeshLoadError, "bzip2 decompress failed: " + std::to_string(rc)));
-        }
-        return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "bzip2 output buffer never large enough"));
-    }
-
-    [[maybe_unused]] auto zstd_decompress(std::span<const std::byte> src)
-            -> tl::expected<std::vector<std::byte>, Error> {
-        const auto content_size = ZSTD_getFrameContentSize(src.data(), src.size());
-        if (content_size == ZSTD_CONTENTSIZE_ERROR)
-            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "zstd: not a valid zstd frame"));
-        if (content_size == ZSTD_CONTENTSIZE_UNKNOWN)
-            return tl::unexpected(
-                    Error::make_error(Error::Type::MeshLoadError, "zstd: content size unknown (streaming frame?)"));
-
-        std::vector<std::byte> dst(static_cast<size_t>(content_size));
-
-        const size_t result = ZSTD_decompress(dst.data(), dst.size(), src.data(), src.size());
-
-        if (ZSTD_isError(result))
-            return tl::unexpected(Error::make_error(
-                    Error::Type::MeshLoadError, std::format("zstd decompress failed: {}", ZSTD_getErrorName(result))));
-
-        return dst;
-    }
-
-    auto lz4_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
-        LZ4F_dctx *ctx = nullptr;
-        LZ4F_errorCode_t rc = LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION);
-        if (LZ4F_isError(rc))
-            return tl::unexpected(Error::make_error(
-                    Error::Type::MeshLoadError, std::format("lz4: failed to create ctx: {}", LZ4F_getErrorName(rc))));
-
-        LZ4F_frameInfo_t info = LZ4F_INIT_FRAMEINFO;
-        size_t consumed = src.size();
-        rc = LZ4F_getFrameInfo(ctx, &info, src.data(), &consumed);
-        if (LZ4F_isError(rc)) {
-            LZ4F_freeDecompressionContext(ctx);
-            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
-                                                    std::format("lz4: bad frame: {}", LZ4F_getErrorName(rc))));
-        }
-
-        if (info.contentSize == 0) {
-            LZ4F_freeDecompressionContext(ctx);
-            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
-                                                    "lz4: content size unknown (was frame compressed without it?)"));
-        }
-
-        std::vector<std::byte> dst(static_cast<size_t>(info.contentSize));
-        size_t dst_size = dst.size();
-        size_t src_remaining = src.size() - consumed;
-
-        rc = LZ4F_decompress(ctx, dst.data(), &dst_size, static_cast<const std::byte *>(src.data()) + consumed,
-                             &src_remaining, nullptr);
-
-        LZ4F_freeDecompressionContext(ctx);
-
-        if (LZ4F_isError(rc))
-            return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
-                                                    std::format("lz4 decompress failed: {}", LZ4F_getErrorName(rc))));
-
-        dst.resize(dst_size);
-        return dst;
-    }
 
     template<class T>
     auto blob_span(std::span<const std::byte> file, const Tooling::BlobRange &r) -> std::span<const T> {
@@ -1032,22 +947,6 @@ namespace {
 
 } // namespace
 
-// -----------------------------------------------------------------------------
-// Public entry point
-// -----------------------------------------------------------------------------
-
-auto decompress_scene(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
-#if defined(SCENE_COMPRESSION_BZIP2)
-    return bzip2_decompress(src);
-#elif defined(SCENE_COMPRESSION_ZSTD)
-    return zstd_decompress(src);
-#elif defined(SCENE_COMPRESSION_LZ4)
-    return lz4_decompress(src);
-#else
-#error "No scene compression backend defined. Set SCENE_COMPRESSION in CMake."
-#endif
-}
-
 auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, float scale)
         -> tl::expected<StaticMesh, Error> {
     ZoneScopedNC("Load scene", 0xFFAA00);
@@ -1064,7 +963,7 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         return tl::unexpected(compressed.error());
 
     auto decompress = NanoProfiler{"Decompression"};
-    auto file_bytes_exp = decompress_scene(*compressed);
+    auto file_bytes_exp = scene_decompress(*compressed);
     if (!file_bytes_exp)
         return tl::unexpected(file_bytes_exp.error());
     decompress.end();

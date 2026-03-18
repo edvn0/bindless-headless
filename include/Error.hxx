@@ -2,7 +2,9 @@
 
 #include "Numeric.hxx"
 
+#include <format>
 #include <source_location>
+#include <string>
 
 struct Error {
     enum class Type : u32 {

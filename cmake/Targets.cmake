@@ -6,10 +6,15 @@ include(CMakePushCheckState)
 include(CheckCXXCompilerFlag)
 include(CheckCCompilerFlag)
 
-find_package(BZip2 REQUIRED)
-find_package(BZip2 REQUIRED)
-find_package(zstd CONFIG REQUIRED)
-find_package(lz4 CONFIG REQUIRED)
+if(SCENE_COMPRESSION STREQUAL "bzip2")
+    find_package(BZip2 REQUIRED)
+elseif(SCENE_COMPRESSION STREQUAL "zstd")
+    find_package(zstd CONFIG REQUIRED)
+elseif(SCENE_COMPRESSION STREQUAL "lz4")
+    find_package(lz4 CONFIG REQUIRED)
+else()
+    message(FATAL_ERROR "Unknown SCENE_COMPRESSION value: ${SCENE_COMPRESSION}. Must be bzip2, zstd or lz4.")
+endif()
 
 set(HAS_X11 OFF)
 find_package(X11 QUIET)
@@ -172,6 +177,7 @@ add_library(BindlessEngine STATIC
   "src/StringPool.cxx"
   "src/RenderSubmission.cxx"
   "src/DeviceThreadPool.cxx"
+  "src/Compression.cxx"
 
   "src/RenderDoc.cxx"
 
@@ -203,21 +209,10 @@ target_link_libraries(BindlessEngine PUBLIC
   expected
   tinyobjloader
   imgui
-  BZip2::BZip2
-  $<IF:$<TARGET_EXISTS:zstd::libzstd_static>,zstd::libzstd_static,zstd::libzstd_shared>
-  LZ4::lz4_static
   $<$<BOOL:${HAS_IMAGE_WRITERS}>:ImageOperations>
   EnTT::EnTT
   meshoptimizer
 )
-
-if(SCENE_COMPRESSION STREQUAL "bzip2")
-    target_compile_definitions(BindlessEngine PRIVATE SCENE_COMPRESSION_BZIP2)
-elseif(SCENE_COMPRESSION STREQUAL "zstd")
-    target_compile_definitions(BindlessEngine PRIVATE SCENE_COMPRESSION_ZSTD)
-elseif(SCENE_COMPRESSION STREQUAL "lz4")
-    target_compile_definitions(BindlessEngine PRIVATE SCENE_COMPRESSION_LZ4)
-endif()
 
 target_sources(BindlessEngine PRIVATE "src/Reflection.cxx")
 target_include_directories(BindlessEngine PRIVATE ${SLANG_INCLUDE_DIR})
@@ -333,22 +328,8 @@ target_link_libraries(SceneLoader PUBLIC
   fastgltf::fastgltf
   ThirdPartySTB
   volk::volk_headers
-  BZip2::BZip2
-  $<IF:$<TARGET_EXISTS:zstd::libzstd_static>,zstd::libzstd_static,zstd::libzstd_shared>
-  LZ4::lz4_static
   meshoptimizer
 )
-
-if(SCENE_COMPRESSION STREQUAL "bzip2")
-    target_compile_definitions(SceneLoader PRIVATE SCENE_COMPRESSION_BZIP2)
-elseif(SCENE_COMPRESSION STREQUAL "zstd")
-    target_compile_definitions(SceneLoader PRIVATE SCENE_COMPRESSION_ZSTD)
-elseif(SCENE_COMPRESSION STREQUAL "lz4")
-    target_compile_definitions(SceneLoader PRIVATE SCENE_COMPRESSION_LZ4)
-else()
-    message(FATAL_ERROR "Unknown SCENE_COMPRESSION value: ${SCENE_COMPRESSION}. Must be bzip2, zstd or lz4.")
-endif()
-
 DEFAULT_COMPILE_OPTIONS(SceneLoader)
 
 add_executable(scene_inspect src/SceneInspector.cxx)
@@ -466,3 +447,4 @@ else()
   message(STATUS "  MagickCore: ${MagickCore_LIBRARY}")
   message(STATUS "  MagickWand: ${MagickWand_LIBRARY}")
 endif()
+

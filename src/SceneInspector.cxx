@@ -6,6 +6,7 @@
 //   --textures     Print per-texture KTX2 metadata (format, dims, mips, supercompression)
 //   --dump-ktx <dir>  Write raw KTX2 blobs to <dir>/<name>.ktx2 for external inspection
 //
+#include "Compression.hxx"
 #include "Material.hxx"
 #include "SceneLoader.hxx"
 
@@ -77,28 +78,6 @@ static auto read_file(const std::filesystem::path &p) -> std::vector<std::byte> 
     std::vector<std::byte> buf(sz);
     f.read(std::bit_cast<char *>(buf.data()), static_cast<std::streamsize>(sz));
     return buf;
-}
-
-static auto bzip2_decompress(std::span<const std::byte> src) -> std::vector<std::byte> {
-    size_t cap = src.size() * 8;
-    for (int attempt = 0; attempt < 7; ++attempt) {
-        std::vector<std::byte> dst(cap);
-        unsigned int out_len = static_cast<unsigned int>(cap);
-        const int rc = BZ2_bzBuffToBuffDecompress(std::bit_cast<char *>(dst.data()), &out_len,
-                                                  const_cast<char *>(std::bit_cast<const char *>(src.data())),
-                                                  static_cast<unsigned int>(src.size()), 0, 0);
-        if (rc == BZ_OK) {
-            dst.resize(out_len);
-            return dst;
-        }
-        if (rc != BZ_OUTBUFF_FULL) {
-            std::cerr << col::red() << "bzip2 error: " << rc << col::reset() << "\n";
-            std::exit(1);
-        }
-        cap *= 4;
-    }
-    std::cerr << col::red() << "bzip2: output buffer never large enough\n" << col::reset();
-    std::exit(1);
 }
 
 template<class T>
@@ -361,7 +340,11 @@ int main(int argc, char **argv) {
     const std::span<const std::byte> compressed(raw.data() + k_prefix_bytes, raw.size() - k_prefix_bytes);
     std::cout << col::dim() << "  decompressing (" << human_bytes(compressed.size()) << " compressed) …" << col::reset()
               << std::flush;
-    const auto decompressed = bzip2_decompress(compressed);
+    const auto maybe_decompressed = scene_decompress(compressed);
+    if (!maybe_decompressed) {
+        std::cerr << "Could not decompress\n";
+    }
+    const auto decompressed = maybe_decompressed.value();
     std::cout << " → " << human_bytes(decompressed.size()) << "\n";
 
     const std::span<const std::byte> file(decompressed);

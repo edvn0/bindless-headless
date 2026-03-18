@@ -172,7 +172,7 @@ auto NanoProfiler::end() -> void {
     auto end_time = glfwGetTime();
     auto millis = (end_time - start_time) * 1000.0;
     info("{:{}}"
-         "Scope [{}] took {:4.2f} ms",
+         "Scope [{}] took {:4.5f} ms",
          "", depth * 2, scope_name.c_str(), millis);
     has_ended = true;
 }
