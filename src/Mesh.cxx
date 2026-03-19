@@ -974,7 +974,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     if (file.size() < sizeof(Tooling::FileHeader))
         return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Scene file too small"));
 
-    // 3. Validate header
     Tooling::FileHeader header{};
     std::memcpy(&header, file.data(), sizeof(header));
 
@@ -983,7 +982,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     if (header.version != Tooling::k_version)
         return tl::unexpected(Error::make_error(Error::Type::MeshLoadError,
                                                 "Unsupported scene version: " + std::to_string(header.version)));
-    // 4. Fetch typed spans into the decompressed blob
     const auto file_submeshes = blob_span<Tooling::Submesh>(file, header.submesh_table);
     const auto file_vertices = blob_span<Tooling::Vertex>(file, header.vertex_blob);
     const auto file_indices = blob_span<u32>(file, header.index_blob);
@@ -992,12 +990,6 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     const auto string_blob =
             file.subspan(static_cast<size_t>(header.string_blob.offset), static_cast<size_t>(header.string_blob.size));
 
-    // -------------------------------------------------------------------------
-    // 5. Determine which (type, class) each texture needs.
-    //    We iterate materials once to record the first slot each texture index
-    //    appears in. Last writer wins for dedup'd textures, but in practice
-    //    the same image is never used as both albedo and normal.
-    // -------------------------------------------------------------------------
     std::vector<TexSlot> tex_slots(header.texture_count, k_albedo_slot);
     {
         constexpr u32 k_none = 0xFFFFFFFFu;

@@ -175,23 +175,20 @@ namespace Tooling {
     };
 
     struct Texture {
-        u32 original_path_str = 0; // offset into string_blob (0 means none)
-        u32 name_str = 0; // optional
+        u32 original_path_str = 0;
+        u32 name_str = 0;
         u32 reserved0 = 0;
         u32 reserved1 = 0;
 
-        u64 ktx2_offset = 0; // file offset to KTX2 bytes (absolute from file start)
+        u64 ktx2_offset = 0;
         u64 ktx2_size = 0;
     };
     static_assert(sizeof(Texture) == 32);
 
     class SceneLoader {
     public:
-        // Mesh input root. Convention: scene_path is relative to this.
         explicit SceneLoader(const std::filesystem::path &meshes_root = "assets/meshes") : m_meshes_root(meshes_root) {}
 
-        // scene_path: relative to meshes_root(), e.g. "myMesh/myMesh.gltf"
-        // output_path: relative to meshes_root() unless absolute (you can pass e.g. "myMesh/myMesh")
         auto convert_gltf(const std::filesystem::path &scene_path, const std::filesystem::path &output_path)
                 -> tl::expected<void, Error>;
 

@@ -813,6 +813,7 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
                 vkCmdSetScissor(cmd, 0, 1, &sc);
                 vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_EQUAL);
                 vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
+                vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
 

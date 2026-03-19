@@ -1232,12 +1232,12 @@ auto load_cubemap_ktx(VmaAllocator alloc, GlobalCommandContext &cmd_ctx, VkDevic
     VmaAllocationCreateInfo aci{};
     aci.usage = VMA_MEMORY_USAGE_AUTO;
 
-    VkImage image;
+    VkImage image{VK_NULL_HANDLE};
     VmaAllocation allocation;
     vmaCreateImage(alloc, &ici, &aci, &image, &allocation, nullptr);
 
-    VkBuffer staging_buffer;
-    VmaAllocation staging_allocation;
+    VkBuffer staging_buffer{VK_NULL_HANDLE};
+    VmaAllocation staging_allocation{VK_NULL_HANDLE};
     auto bci = create_info<VkBufferCreateInfo>();
     bci.size = ktxTexture_GetDataSizeUncompressed(ktxTexture(ktx));
     bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;

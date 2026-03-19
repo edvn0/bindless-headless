@@ -7,13 +7,13 @@ include(CheckCXXCompilerFlag)
 include(CheckCCompilerFlag)
 
 if(SCENE_COMPRESSION STREQUAL "bzip2")
-    find_package(BZip2 REQUIRED)
+  find_package(BZip2 REQUIRED)
 elseif(SCENE_COMPRESSION STREQUAL "zstd")
-    find_package(zstd CONFIG REQUIRED)
+  find_package(zstd CONFIG REQUIRED)
 elseif(SCENE_COMPRESSION STREQUAL "lz4")
-    find_package(lz4 CONFIG REQUIRED)
+  find_package(lz4 CONFIG REQUIRED)
 else()
-    message(FATAL_ERROR "Unknown SCENE_COMPRESSION value: ${SCENE_COMPRESSION}. Must be bzip2, zstd or lz4.")
+  message(FATAL_ERROR "Unknown SCENE_COMPRESSION value: ${SCENE_COMPRESSION}. Must be bzip2, zstd or lz4.")
 endif()
 
 set(HAS_X11 OFF)
@@ -228,15 +228,15 @@ if(HAS_TRACY)
 endif()
 
 if(RENDERDOC_INCLUDE_PATH)
-    if(NOT EXISTS "${RENDERDOC_INCLUDE_PATH}/renderdoc_app.h")
-        message(FATAL_ERROR
+  if(NOT EXISTS "${RENDERDOC_INCLUDE_PATH}/renderdoc_app.h")
+    message(FATAL_ERROR
             "RENDERDOC_INCLUDE_PATH is set to '${RENDERDOC_INCLUDE_PATH}' "
             "but renderdoc_app.h was not found there.")
-    endif()
-    target_include_directories(BindlessEngine PRIVATE "${RENDERDOC_INCLUDE_PATH}")
-    message(STATUS "RenderDoc: using header from ${RENDERDOC_INCLUDE_PATH}")
+  endif()
+  target_include_directories(BindlessEngine PRIVATE "${RENDERDOC_INCLUDE_PATH}")
+  message(STATUS "RenderDoc: using header from ${RENDERDOC_INCLUDE_PATH}")
 else()
-    message(STATUS "RenderDoc: using renderdoc_app.h from default include paths")
+  message(STATUS "RenderDoc: using renderdoc_app.h from default include paths")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -378,47 +378,47 @@ find_path(MagickPP_INCLUDE_DIR
   NAMES Magick++.h
   PATH_SUFFIXES ImageMagick-7 ImageMagick
 )
- 
+
 find_library(MagickPP_LIBRARY
   NAMES Magick++-7.Q16HDRI
 )
- 
+
 find_library(MagickCore_LIBRARY
   NAMES MagickCore-7.Q16HDRI
 )
- 
+
 find_library(MagickWand_LIBRARY
   NAMES MagickWand-7.Q16HDRI
 )
- 
+
 if(MagickPP_INCLUDE_DIR AND MagickPP_LIBRARY AND MagickCore_LIBRARY AND MagickWand_LIBRARY)
   add_library(ImageMagick::MagickCore IMPORTED SHARED)
   set_target_properties(ImageMagick::MagickCore PROPERTIES
     IMPORTED_LOCATION             "${MagickCore_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${MagickPP_INCLUDE_DIR}"
   )
- 
+
   add_library(ImageMagick::MagickWand IMPORTED SHARED)
   set_target_properties(ImageMagick::MagickWand PROPERTIES
     IMPORTED_LOCATION             "${MagickWand_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${MagickPP_INCLUDE_DIR}"
     INTERFACE_LINK_LIBRARIES      "ImageMagick::MagickCore"
   )
- 
+
   add_library(ImageMagick::Magick++ IMPORTED SHARED)
   set_target_properties(ImageMagick::Magick++ PROPERTIES
     IMPORTED_LOCATION             "${MagickPP_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${MagickPP_INCLUDE_DIR}"
     INTERFACE_LINK_LIBRARIES      "ImageMagick::MagickWand;ImageMagick::MagickCore"
   )
- 
+
   add_executable(tex_convert "src/tools/TextureConvert.cxx")
- 
+
   target_include_directories(tex_convert PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/include
   )
- 
+
   # ktx is already found by the rest of the build (used by BindlessEngine/SceneLoader)
   target_link_libraries(tex_convert PRIVATE
     ktx
@@ -427,14 +427,14 @@ if(MagickPP_INCLUDE_DIR AND MagickPP_LIBRARY AND MagickCore_LIBRARY AND MagickWa
     volk_headers
     volk
   )
- 
+
   target_compile_definitions(tex_convert PRIVATE
     MAGICKCORE_QUANTUM_DEPTH=16
     MAGICKCORE_HDRI_ENABLE=1
   )
- 
+
   DEFAULT_COMPILE_OPTIONS(tex_convert)
- 
+
   message(STATUS "tex_convert enabled")
   message(STATUS "  include:    ${MagickPP_INCLUDE_DIR}")
   message(STATUS "  Magick++:   ${MagickPP_LIBRARY}")
@@ -448,3 +448,23 @@ else()
   message(STATUS "  MagickWand: ${MagickWand_LIBRARY}")
 endif()
 
+enable_testing()
+
+add_executable(BindlessTests
+    "tests/test_main.cxx"
+    "tests/test_watermarked_queue.cxx"
+)
+
+target_link_libraries(BindlessTests PRIVATE
+    doctest::doctest
+    BindlessEngine   # To get MeshSubmission and WatermarkedQueue types
+)
+
+# Ensure tests can find your headers
+target_include_directories(BindlessTests PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+# Add to ctest
+add_test(NAME BindlessUnitTests COMMAND BindlessTests)

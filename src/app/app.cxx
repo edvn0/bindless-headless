@@ -569,9 +569,13 @@ namespace {
         generate_random_hierarchies(reg, helmets, 4, rng, 0.3f);
     }
 
-
-    auto flush_render_queue(RenderQueue &queue, AppResources &res, RenderContext &ctx, u32 frame_idx) -> void {
+    template<typename T>
+    auto flush_render_queue(WatermarkedQueue<T> &queue, AppResources &res, RenderContext &ctx, u32 frame_idx) -> void {
         res.mesh_instance_ranges.clear();
+
+        std::ranges::stable_sort(queue.objects, [](const MeshSubmission &a, const MeshSubmission &b) {
+            return a.mesh_index < b.mesh_index;
+        });
 
         static thread_local std::vector<InstanceData> instance_scratch;
         instance_scratch.clear();
@@ -591,21 +595,21 @@ namespace {
             instance_scratch.clear();
         };
 
-        for (u32 i = 0; i < queue.meshes.size(); ++i) {
-            const auto &sub = queue.meshes[i];
-            const bool new_batch = !instance_scratch.empty() && queue.meshes[i - 1].mesh_index != sub.mesh_index;
+        for (u32 i = 0; i < queue.objects.size(); ++i) {
+            const auto &sub = queue.objects[i];
+            const bool new_batch = !instance_scratch.empty() && queue.objects[i - 1].mesh_index != sub.mesh_index;
 
             if (new_batch) {
-                flush_batch(queue.meshes[i - 1].mesh_index);
+                flush_batch(queue.objects[i - 1].mesh_index);
             }
             instance_scratch.push_back(InstanceData{sub.transform, sub.lod_level});
         }
 
         if (!instance_scratch.empty()) {
-            flush_batch(queue.meshes.back().mesh_index);
+            flush_batch(queue.objects.back().mesh_index);
         }
 
-        res.flushed_instance_count = static_cast<u32>(queue.meshes.size());
+        res.flushed_instance_count = static_cast<u32>(queue.objects.size());
         queue.reset();
     }
 } // namespace

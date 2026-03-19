@@ -7,6 +7,7 @@
 auto submit_mesh_instances(Scene &scene, RenderQueue &queue) -> void {
     scene.registry.sort<MeshComponent>(
             [](const auto &lhs, const auto &rhs) { return lhs.mesh_index < rhs.mesh_index; });
+    scene.registry.sort<TransformComponent, MeshComponent>();
     auto view = scene.registry.view<MeshComponent, TransformComponent>();
     for (auto &&[e, mesh, xform]: view.each()) {
         queue.submit({

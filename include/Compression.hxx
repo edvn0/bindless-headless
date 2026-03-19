@@ -59,11 +59,9 @@ auto lz4_compress(const std::filesystem::path &out_path_no_normalize, std::span<
 
 auto lz4_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error>;
 
-inline auto scene_compress(const std::filesystem::path &out_path, std::span<std::byte> bytes, u64 src_hash) {
-    return lz4_compress(out_path, bytes, src_hash);
-}
-inline auto scene_decompress(std::span<const std::byte> src) { return lz4_decompress(src); }
-
 #else
 #error "No scene compression backend defined. Set SCENE_COMPRESSION in CMake."
 #endif
+
+auto scene_compress(const std::filesystem::path &, std::span<std::byte>, u64) -> tl::expected<void, Error>;
+auto scene_decompress(std::span<const std::byte>) -> tl::expected<std::vector<std::byte>, Error>;

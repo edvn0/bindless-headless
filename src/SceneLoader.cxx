@@ -482,8 +482,9 @@ namespace Tooling {
                 out.emissive_factor = {e[0], e[1], e[2]};
             }
 
-            if (m.alphaMode == fastgltf::AlphaMode::Mask || m.alphaMode == fastgltf::AlphaMode::Blend) {
+            if (m.alphaMode == fastgltf::AlphaMode::Mask) {
                 out.flags |= MaterialFlags::AlphaTested;
+                info("Is alpha tested! {} (mode={})", mi, m.alphaMode == fastgltf::AlphaMode::Blend ? "Blend" : "Mask");
             }
 
             auto resolve_tex_to_image = [&](const std::optional<fastgltf::TextureInfo> &ti) -> std::optional<u32> {

@@ -323,6 +323,8 @@ main_vs_mdi(VertexInput input, uint draw_id : SV_DrawIndex, uint instance_id : S
     o.uv = unpackHalf2x16ToFloat(input.uvs);
     o.material = material_id;
 
+    printf("%d", material_id);
+
     return o;
 }
 
@@ -334,7 +336,7 @@ struct GBufferOutput {
 
 [shader("fragment")] void main_fs_mdi(VertexOutput input, uniform RenderingPushConstants pc,
                                       bool is_front_face : SV_IsFrontFace, out GBufferOutput out_gbuf) {
-    Material mat = pc.materials[input.material];
+    Material mat = pc.materials[NonUniformResourceIndex(input.material)];
 
     float3 n_ws = is_front_face ? input.n_ws : -input.n_ws;
     float3 t_ws = is_front_face ? input.t_ws : -input.t_ws;

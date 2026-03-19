@@ -40,7 +40,9 @@ auto write_camera_to_frame_ubo(FrameUBO &ubo, RenderContext &ctx, AlignedRingBuf
     fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, near_plane, far_plane);
     frame_ubo_ring.write_element(ctx, frame_index, 0, ubo);
 }
+
 auto clamp_u32(u32 v, u32 lo, u32 hi) -> u32 { return std::min(std::max(v, lo), hi); }
+
 auto sanitize_window_extent(VkExtent2D raw, VkPhysicalDevice physical_device, VkSurfaceKHR surface, ExtentBounds bounds)
         -> VkExtent2D {
     // If minimized, let caller decide to skip frame.
@@ -66,6 +68,7 @@ auto sanitize_window_extent(VkExtent2D raw, VkPhysicalDevice physical_device, Vk
     raw.height = clamp_u32(raw.height, min_h, max_h);
     return raw;
 }
+
 auto sanitize_scene_extent(VkExtent2D raw, VkExtent2D fallback_last_valid, VkPhysicalDevice physical_device,
                            ExtentBounds bounds) -> VkExtent2D {
     VkPhysicalDeviceProperties props{};
@@ -86,17 +89,20 @@ auto sanitize_scene_extent(VkExtent2D raw, VkExtent2D fallback_last_valid, VkPhy
     raw.height = clamp_u32(raw.height, min_h, max_h);
     return raw;
 }
+
 auto update_frame_timing(AppUI &ui) -> void {
     auto now = std::chrono::high_resolution_clock::now();
     ui.dt = std::chrono::duration<double>(now - ui.last_frame_time).count();
     ui.last_frame_time = now;
     ui.total_time += ui.dt;
 }
+
 auto frame_indices(AppUI const &ui) -> std::pair<u32, u32> {
     const auto bounded_frame_index = static_cast<u32>(ui.frame_index % frames_in_flight);
     const auto last_frame_index = static_cast<u32>((ui.frame_index + frames_in_flight - 1u) % frames_in_flight);
     return {bounded_frame_index, last_frame_index};
 }
+
 auto handle_bindless_repopulation(AppContext &ctx, ResizeGraph &window_resize_graph) -> void {
     const u64 completed_now = std::min(ctx.gpu.tl_compute.completed, ctx.gpu.tl_graphics.completed);
 
@@ -115,6 +121,7 @@ auto handle_bindless_repopulation(AppContext &ctx, ResizeGraph &window_resize_gr
 
     info("Bindless set was repopulated, resizing pipelines.");
 }
+
 auto update_pending_resize(AppUI &ui, VkExtent2D desired_scene_extent) -> void {
     auto &pr = ui.pending_resize;
 

@@ -197,3 +197,24 @@ auto lz4_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<
     return dst;
 }
 #endif
+
+auto scene_compress(const std::filesystem::path &out_path, std::span<std::byte> bytes, u64 src_hash)
+        -> tl::expected<void, Error> {
+#if defined(SCENE_COMPRESSION_BZIP2)
+    return bzip2_compress(out_path, bytes, src_hash);
+#elif defined(SCENE_COMPRESSION_ZSTD)
+    return zstd_compress(out_path, bytes, src_hash);
+#elif defined(SCENE_COMPRESSION_LZ4)
+    return lz4_compress(out_path, bytes, src_hash);
+#endif
+}
+
+auto scene_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
+#if defined(SCENE_COMPRESSION_BZIP2)
+    return bzip2_decompress(src);
+#elif defined(SCENE_COMPRESSION_ZSTD)
+    return zstd_decompress(src);
+#elif defined(SCENE_COMPRESSION_LZ4)
+    return lz4_decompress(src);
+#endif
+}

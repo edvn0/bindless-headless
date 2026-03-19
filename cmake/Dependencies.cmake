@@ -77,8 +77,8 @@ CPMAddPackage(
 )
 
 CPMAddPackage(
-  URI "gh:tinyobjloader/tinyobjloader#8a3f8b92d18309e00911bf5cf5e465cfe4eaa1b1"
-  GIT_SHALLOW YES
+  URI "gh:tinyobjloader/tinyobjloader#966edceaf8cdca7996c4e9a1c5ced2938de63366"
+  GIT_SHALLOW NO
 )
 
 set(SPDLOG_BUILD_SHARED OFF)
@@ -87,6 +87,16 @@ CPMAddPackage(
   GIT_SHALLOW YES
 )
 
+CPMAddPackage(
+    NAME doctest
+    GITHUB_REPOSITORY doctest/doctest
+    GIT_TAG "32801043157b20e0d97faf9272f404b3c8d82a8e"
+    GIT_SHALLOW NO
+)
+
+set(KTX_FEATURE_TESTS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_TOOLS OFF CACHE BOOL "" FORCE)
+set(KTX_FEATURE_LOADTEST_APPS OFF CACHE BOOL "" FORCE)
 CPMAddPackage(
   URI "gh:KhronosGroup/KTX-Software@4.4.2"
   GIT_SHALLOW YES
@@ -107,12 +117,13 @@ CPMAddPackage(
 
 CPMAddPackage(
   URI "gh:skypjack/entt"
-  GIT_TAG "9fdc43f6f8189581ccc81dace2ece1d5a981ace0"
-  GIT_SHALLOW YES
+  GIT_TAG "9c5281c79a241ec810f999ad9675fa32f51f934f"
+  GIT_SHALLOW NO
   OPTIONS "ENTT_INCLUDE_NATVIS ON ENTT_INCLUDE_HEADERS ON"
 )
 
 if(HAS_IMAGE_WRITERS)
+  set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   CPMAddPackage(
     URI "gh:madler/zlib@1.3.1"
     GIT_SHALLOW YES
@@ -268,8 +279,8 @@ CPMAddPackage(
 CPMAddPackage(
   NAME ImPlot
   GITHUB_REPOSITORY epezent/implot
-  GIT_TAG 93c801b4bb801c5c11031d880b6af1d1f70bd79d
-  GIT_SHALLOW YES
+  GIT_TAG bd99f8d8b9a80c493782ab8cb3335af102f61304
+  GIT_SHALLOW NO
   DOWNLOAD_ONLY YES
 )
 
@@ -277,7 +288,7 @@ CPMAddPackage(
   NAME ImGuizmo
   GITHUB_REPOSITORY CedricGuillemet/ImGuizmo
   GIT_TAG a15acd87a3f3241a29ea1363ceafc680dca3a96b
-  GIT_SHALLOW YES
+  GIT_SHALLOW NO
   DOWNLOAD_ONLY YES
 )
 
@@ -301,8 +312,6 @@ if(ImGui_SOURCE_DIR AND ImPlot_SOURCE_DIR AND ImGuizmo_SOURCE_DIR)
   set(IMGUIZMO_SRCS
     ${ImGuizmo_SOURCE_DIR}/ImGuizmo.cpp
   )
-  list(PREPEND CMAKE_PREFIX_PATH "C:/D/Builds")
-
   find_package(harfbuzz CONFIG REQUIRED)
 
   if(NOT TARGET HarfBuzz::HarfBuzz)
