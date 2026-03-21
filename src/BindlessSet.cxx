@@ -115,14 +115,14 @@ auto BindlessSet::flush_pending_writes(VkImageView dummy_sampled, VkImageView du
         sampled_infos[i] = {.sampler = VK_NULL_HANDLE, .imageView = sv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
         storage_infos[i] = {.sampler = VK_NULL_HANDLE, .imageView = stv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
 
-        auto ci = create_info<VkWriteDescriptorSet>();
-        ci.dstSet = set;
-        ci.dstBinding = 0;
-        ci.dstArrayElement = pw.pool_index;
-        ci.descriptorCount = 1;
-        ci.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-        ci.pImageInfo = &sampled_infos[i];
-        writes.emplace_back(std::move(ci));
+        auto wci = create_info<VkWriteDescriptorSet>();
+        wci.dstSet = set;
+        wci.dstBinding = 0;
+        wci.dstArrayElement = pw.pool_index;
+        wci.descriptorCount = 1;
+        wci.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        wci.pImageInfo = &sampled_infos[i];
+        writes.emplace_back(std::move(wci));
 
         if (pw.pool_index < max_storage_images) {
             auto ci = create_info<VkWriteDescriptorSet>();

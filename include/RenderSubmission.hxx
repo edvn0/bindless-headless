@@ -5,6 +5,9 @@
 #include "scene/Forward.hxx"
 
 #include <glm/mat4x3.hpp>
+#include <span>
+#include <type_traits>
+#include <vector>
 
 struct MeshSubmission {
     glm::mat4x3 transform;

@@ -102,7 +102,6 @@ namespace RP {
                 std::abort();
                 break;
         }
-        return {};
     }
 
     auto compute_specification(ComputeIndex idx) -> Specification {
@@ -148,7 +147,6 @@ namespace RP {
                 std::abort();
                 break;
         }
-        return {};
     }
 
     Scope::Scope(VkCommandBuffer &cmd, const Markers &m, Specification &&s, VkPipelineStageFlags2 ts_begin,

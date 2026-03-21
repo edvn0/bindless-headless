@@ -15,81 +15,96 @@ elseif(SCENE_COMPRESSION STREQUAL "lz4")
 else()
   message(FATAL_ERROR "Unknown SCENE_COMPRESSION value: ${SCENE_COMPRESSION}. Must be bzip2, zstd or lz4.")
 endif()
-
-set(HAS_X11 OFF)
-find_package(X11 QUIET)
-if(X11_FOUND)
-  set(HAS_X11 ON)
-endif()
-
 add_library(platform_wsi INTERFACE)
 
-find_path(
-  WAYLAND_CLIENT_INCLUDE_DIR
-  NAMES wayland-client.h
-)
-
-find_library(
-  WAYLAND_CLIENT_LIBRARY
-  NAMES wayland-client libwayland-client
-)
-
-if(WAYLAND_CLIENT_INCLUDE_DIR AND WAYLAND_CLIENT_LIBRARY)
-  add_library(wayland::client UNKNOWN IMPORTED)
-
-  set_target_properties(
-    wayland::client PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${WAYLAND_CLIENT_INCLUDE_DIR}"
-    IMPORTED_LINK_INTERFACE_LANGUAGES "C"
-    IMPORTED_LOCATION "${WAYLAND_CLIENT_LIBRARY}"
+if(WIN32)
+  target_compile_definitions(platform_wsi INTERFACE
+    VK_USE_PLATFORM_WIN32_KHR
+    GLFW_EXPOSE_NATIVE_WIN32
   )
-endif()
+elseif(UNIX AND NOT APPLE)
+  set(HAS_X11 OFF)
+  find_package(X11 QUIET)
+  if(X11_FOUND)
+    set(HAS_X11 ON)
+  endif()
 
-find_path(
-  WAYLAND_SERVER_INCLUDE_DIR
-  NAMES wayland-server.h
-)
-
-find_library(
-  WAYLAND_SERVER_LIBRARY
-  NAMES wayland-server libwayland-server
-)
-
-if(WAYLAND_SERVER_INCLUDE_DIR AND WAYLAND_SERVER_LIBRARY)
-  add_library(wayland::server UNKNOWN IMPORTED)
-
-  set_target_properties(
-    wayland::server PROPERTIES
-    INTERFACE_INCLUDE_DIRECTORIES "${WAYLAND_SERVER_INCLUDE_DIR}"
-    IMPORTED_LINK_INTERFACE_LANGUAGES "C"
-    IMPORTED_LOCATION "${WAYLAND_SERVER_LIBRARY}"
+  find_path(
+    WAYLAND_CLIENT_INCLUDE_DIR
+    NAMES wayland-client.h
   )
+
+  find_library(
+    WAYLAND_CLIENT_LIBRARY
+    NAMES wayland-client libwayland-client
+  )
+
+  if(WAYLAND_CLIENT_INCLUDE_DIR AND WAYLAND_CLIENT_LIBRARY AND NOT TARGET wayland::client)
+    add_library(wayland::client UNKNOWN IMPORTED)
+
+    set_target_properties(
+      wayland::client PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${WAYLAND_CLIENT_INCLUDE_DIR}"
+      IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+      IMPORTED_LOCATION "${WAYLAND_CLIENT_LIBRARY}"
+    )
+  endif()
+
+  find_path(
+    WAYLAND_SERVER_INCLUDE_DIR
+    NAMES wayland-server.h
+  )
+
+  find_library(
+    WAYLAND_SERVER_LIBRARY
+    NAMES wayland-server libwayland-server
+  )
+
+  if(WAYLAND_SERVER_INCLUDE_DIR AND WAYLAND_SERVER_LIBRARY AND NOT TARGET wayland::server)
+    add_library(wayland::server UNKNOWN IMPORTED)
+
+    set_target_properties(
+      wayland::server PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${WAYLAND_SERVER_INCLUDE_DIR}"
+      IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+      IMPORTED_LOCATION "${WAYLAND_SERVER_LIBRARY}"
+    )
+  endif()
+
+  include(FindPackageHandleStandardArgs)
+  find_package_handle_standard_args(
+    WAYLAND_CLIENT
+    REQUIRED_VARS WAYLAND_CLIENT_LIBRARY WAYLAND_CLIENT_INCLUDE_DIR
+  )
+
+  find_package_handle_standard_args(
+    WAYLAND_SERVER
+    REQUIRED_VARS WAYLAND_SERVER_LIBRARY WAYLAND_SERVER_INCLUDE_DIR
+  )
+
+  mark_as_advanced(
+    WAYLAND_CLIENT_INCLUDE_DIR
+    WAYLAND_CLIENT_LIBRARY
+    WAYLAND_SERVER_INCLUDE_DIR
+    WAYLAND_SERVER_LIBRARY
+  )
+
+  if(X11_FOUND)
+    target_link_libraries(platform_wsi INTERFACE X11::X11)
+    target_compile_definitions(platform_wsi INTERFACE
+      VK_USE_PLATFORM_XCB_KHR
+      GLFW_HAS_X11=1
+    )
+  endif()
+
+  if(WAYLAND_CLIENT_INCLUDE_DIR AND WAYLAND_CLIENT_LIBRARY)
+    target_link_libraries(platform_wsi INTERFACE "${WAYLAND_CLIENT_LIBRARY}")
+    target_compile_definitions(platform_wsi INTERFACE
+      VK_USE_PLATFORM_WAYLAND_KHR
+      GLFW_HAS_WAYLAND=1
+    )
+  endif()
 endif()
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args(
-  WAYLAND_CLIENT
-  REQUIRED_VARS WAYLAND_CLIENT_LIBRARY WAYLAND_CLIENT_INCLUDE_DIR
-)
-
-find_package_handle_standard_args(
-  WAYLAND_SERVER
-  REQUIRED_VARS WAYLAND_SERVER_LIBRARY WAYLAND_SERVER_INCLUDE_DIR
-)
-
-mark_as_advanced(
-  WAYLAND_CLIENT_INCLUDE_DIR
-  WAYLAND_CLIENT_LIBRARY
-  WAYLAND_SERVER_INCLUDE_DIR
-  WAYLAND_SERVER_LIBRARY
-)
-
-target_link_libraries(platform_wsi INTERFACE ${WAYLAND_CLIENT_LIBRARY} X11::X11)
-target_compile_definitions(platform_wsi INTERFACE
-  VK_USE_PLATFORM_XCB_KHR
-  GLFW_HAS_X11=1
-  GLFW_HAS_WAYLAND=1
-)
 
 # ------------------------------------------------------------
 # Core libs you already have
@@ -303,7 +318,6 @@ target_link_libraries(BindlessHeadless PRIVATE
 
 DEFAULT_COMPILE_OPTIONS(BindlessHeadless)
 
-# Tooling - SceneLoader.
 add_library(SceneLoader STATIC
   "src/SceneLoader.cxx"
 )
@@ -311,7 +325,7 @@ add_library(SceneLoader STATIC
 set_target_properties(BindlessHeadless PROPERTIES
   BUILD_RPATH   "${SLANG_ROOT}/lib"
   INSTALL_RPATH "${SLANG_ROOT}/lib"
-  BUILD_RPATH_USE_ORIGIN ON   # emits $ORIGIN-relative paths, more portable
+  BUILD_RPATH_USE_ORIGIN ON
 )
 target_link_options(BindlessHeadless PRIVATE "-Wl,--disable-new-dtags")
 
@@ -340,7 +354,7 @@ DEFAULT_COMPILE_OPTIONS(scene_inspect)
 
 add_library(BaseApplication STATIC
   "src/framework/BaseApplication.cxx"
-  "src/ArgumentParse.cxx"         # moved here from BindlessHeadless
+  "src/ArgumentParse.cxx"
 )
 
 target_precompile_headers(BaseApplication PRIVATE PCH.hxx)
@@ -352,7 +366,7 @@ target_include_directories(BaseApplication PUBLIC
 
 target_link_libraries(BaseApplication PUBLIC
   BindlessEngine
-  CLI11::CLI11               # moved here from BindlessHeadless
+  CLI11::CLI11
   platform_wsi
 )
 

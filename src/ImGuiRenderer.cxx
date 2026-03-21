@@ -220,7 +220,8 @@ auto ImGuiRenderer::begin_frame(ImGuiFramebuffer fb) -> void {
     if (std::filesystem::create_directory("assets/editor")) {
         std::ofstream ini_file(config_path);
     }
-    io.IniFilename = config_path.c_str();
+    auto str = FlyString{config_path.string()};
+    io.IniFilename = str.c_str();
 
     if (force_recompile_primary || main_pipeline.empty()) {
         auto created = create_pipeline(std::get<1>(fb)).value();

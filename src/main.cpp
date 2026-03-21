@@ -55,9 +55,6 @@ auto main(int argc, char **argv) -> int {
 
     if (glfwPlatformSupported(GLFW_PLATFORM_WAYLAND)) {
         glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_WAYLAND);
-    } else {
-        error("Could not initialise");
-        return 1;
     }
 
     if (renderdoc.is_active()) {

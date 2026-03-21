@@ -1,18 +1,14 @@
 #include "RenderDoc.hxx"
 
-// renderdoc_app.h is the single-header public API shipped with every RenderDoc
-// installation. Vendor it under 3PP/ or point to the system copy.
-// The header is pure C, so no link-time dependency is introduced.
 #include <renderdoc_app.h>
 
-#include "Logger.hxx" // info() / warn() — same helpers used throughout the engine
+#include "Logger.hxx"
 #include "Numeric.hxx"
 
 #include <cstring>
 #include <string_view>
 
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -39,10 +35,6 @@ namespace {
 #endif
     }
 } // namespace
-
-// ---------------------------------------------------------------------------
-// renderdoc_init
-// ---------------------------------------------------------------------------
 
 auto renderdoc_init() -> RenderDocContext {
     void *mod = load_renderdoc_module();
@@ -82,10 +74,6 @@ auto renderdoc_init() -> RenderDocContext {
 
     return RenderDocContext{.api = storage};
 }
-
-// ---------------------------------------------------------------------------
-// RenderDocContext member implementations
-// ---------------------------------------------------------------------------
 
 auto RenderDocContext::is_capturing() const -> bool {
     if (!api || !api->rdoc)

@@ -916,10 +916,10 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     cb.attachmentCount = static_cast<u32>(blends.size());
     cb.pAttachments = blends.data();
 
-    std::array<VkDynamicState, 6> dyn_states{
-            VK_DYNAMIC_STATE_VIEWPORT,     VK_DYNAMIC_STATE_SCISSOR,   VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
-            VK_DYNAMIC_STATE_DEPTH_BOUNDS, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_FRONT_FACE,
-    };
+    std::array<VkDynamicState, 7> dyn_states{VK_DYNAMIC_STATE_VIEWPORT,          VK_DYNAMIC_STATE_SCISSOR,
+                                             VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,  VK_DYNAMIC_STATE_DEPTH_BOUNDS,
+                                             VK_DYNAMIC_STATE_CULL_MODE,         VK_DYNAMIC_STATE_FRONT_FACE,
+                                             VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE};
 
     auto dy = create_info<VkPipelineDynamicStateCreateInfo>();
     dy.dynamicStateCount = static_cast<u32>(dyn_states.size());
