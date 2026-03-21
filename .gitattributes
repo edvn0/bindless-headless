@@ -1,2 +1,2 @@
-*.scene.bz2 filter=lfs diff=lfs merge=lfs -text
-*.scene filter=lfs diff=lfs merge=lfs -text
+assets/meshes/**/*.scene.bz2 filter=lfs diff=lfs merge=lfs -text
+assets/meshes/**/*.scene filter=lfs diff=lfs merge=lfs -text
