@@ -954,7 +954,7 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
 
     using namespace std::string_view_literals;
     const auto ext = scene_path.extension().string();
-    if (!matches(ext, ".scene.bz2"sv, ".scene"sv, ".bz2"sv, ".bzip2"sv)) {
+    if (!matches(ext, ".cscene"sv)) {
         return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Invalid scene file extension"));
     }
 

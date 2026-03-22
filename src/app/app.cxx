@@ -1055,7 +1055,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocCo
     gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers, gpu.ctx.comparison_samplers);
 
     {
-        TRY_PROPAGATE(loaded_mesh, load_scene(gpu.ctx, "assets/meshes/SponzaGLTF/sponza_converted.scene.bz2", 0.01f),
+        TRY_PROPAGATE(loaded_mesh, load_scene(gpu.ctx, "assets/meshes/SponzaGLTF/sponza_converted.cscene", 0.01f),
                       "Failed to load cube mesh");
         res.meshes.emplace_back(std::move(loaded_mesh));
 
@@ -1064,7 +1064,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocCo
         res.meshes.emplace_back(std::move(loaded_capsule));
 
         TRY_PROPAGATE(loaded_damaged_helmet,
-                      load_scene(gpu.ctx, "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.scene.bz2"),
+                      load_scene(gpu.ctx, "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.cscene"),
                       "Failed to load damaged helmet mesh");
         res.meshes.emplace_back(std::move(loaded_damaged_helmet));
 

@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace detail {
-    constexpr auto file_end = ".scene.bz2";
+    constexpr auto file_end = ".cscene";
 }
 
 inline auto make_error(std::string msg) -> Error {
