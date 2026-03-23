@@ -539,12 +539,25 @@ namespace {
         return depth_buckets[0];
     }
 
+    struct MultiDistrib {
+        glm::vec3 min;
+        glm::vec3 max;
+        MultiDistrib(const glm::vec3 &mi, const glm::vec3 &ma) : min(mi), max(ma) {}
+
+        auto sample(auto &engine) {
+            std::uniform_real_distribution<float> x{min.x, max.x};
+            std::uniform_real_distribution<float> y{min.y, max.y};
+            std::uniform_real_distribution<float> z{min.z, max.z};
+            return glm::vec3{x(engine), y(engine), z(engine)};
+        }
+
+        auto operator()(auto &engine) { return sample(engine); }
+    };
     auto create_scene(Scene &scene) -> void {
         auto &reg = scene.registry;
 
         auto rng =
                 std::mt19937{static_cast<unsigned long>(std::chrono::system_clock::now().time_since_epoch().count())};
-        auto distrib = std::uniform_real_distribution<float>{-5.0f, 5.0f};
 
         auto sponza = reg.create();
         reg.emplace<MeshComponent>(sponza, MeshComponent{.name = "sponza", .mesh_index = 0u});
@@ -555,14 +568,16 @@ namespace {
         reg.emplace<TransformComponent>(capsule, glm::identity<glm::mat4x3>());
 
         std::vector<entt::entity> helmets;
-        helmets.reserve(100);
+        helmets.reserve(2);
 
-        for (auto i: std::views::iota(0, 100)) {
+
+        auto distrib = MultiDistrib{glm::vec3{-5, 5, 5}, glm::vec3{5, 5, 10}};
+
+        for (auto i: std::views::iota(0, 1)) {
             auto e = reg.create();
             reg.emplace<MeshComponent>(e, MeshComponent{.name = std::format("damaged_helmet_{}", i), .mesh_index = 2u});
-            auto random_position = glm::vec3{distrib(rng), distrib(rng), distrib(rng)};
-            auto tx = glm::translate(glm::mat4{1.0f}, random_position);
-            reg.emplace<TransformComponent>(e, glm::mat4x3{std::move(tx)});
+            auto random_position = distrib(rng);
+            reg.emplace<TransformComponent>(e, glm::translate(glm::mat4{1.0f}, random_position));
             helmets.push_back(e);
         }
 
@@ -747,6 +762,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocCo
                 .queue_family = gpu.queue_family_indices.graphics,
                 .submissions_per_frame = 2,
                 .chunk_size = 4,
+                .thread_count = 2,
         });
     }
 

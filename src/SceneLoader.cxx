@@ -484,7 +484,6 @@ namespace Tooling {
 
             if (m.alphaMode == fastgltf::AlphaMode::Mask) {
                 out.flags |= MaterialFlags::AlphaTested;
-                info("Is alpha tested! {} (mode={})", mi, m.alphaMode == fastgltf::AlphaMode::Blend ? "Blend" : "Mask");
             }
 
             auto resolve_tex_to_image = [&](const std::optional<fastgltf::TextureInfo> &ti) -> std::optional<u32> {
@@ -554,8 +553,8 @@ namespace Tooling {
                 out.flags |= MaterialFlags::Emissive;
             }
 
+            info("Loaded material {} out of {}, flags: {}", mi + 1, asset.materials.size(), to_string(out.flags));
             gpu_materials.emplace_back(out);
-            info("Loaded material {} out of {}", mi + 1, asset.materials.size());
         }
 
         for (const auto &mesh: asset.meshes) {

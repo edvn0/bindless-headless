@@ -1,6 +1,15 @@
 #include "app/render.hxx"
 #include "Mesh.hxx"
 
+#if defined(__clang__)
+#define DEBUG_NOINLINE [[clang::optnone]]
+#elif defined(__GNUC__)
+#define DEBUG_NOINLINE [[gnu::optimize("O0")]]
+#else
+#define DEBUG_NOINLINE
+#endif
+
+DEBUG_NOINLINE
 auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffers buffers, const MeshData &mesh,
                          const MeshDrawInfo &draw_info) -> DrawRanges {
     const u32 total_submeshes = static_cast<u32>(mesh.submeshes.size());
@@ -37,8 +46,8 @@ auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffe
         }
     }
 
-    const u32 opaque_count = static_cast<u32>(opaque_cmds.size());
-    const u32 alpha_count = static_cast<u32>(alpha_cmds.size());
+    const auto opaque_count = static_cast<u32>(opaque_cmds.size());
+    const auto alpha_count = static_cast<u32>(alpha_cmds.size());
 
     if (opaque_count > 0) {
         buffers.cmd_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_cmds));

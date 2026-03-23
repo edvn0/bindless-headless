@@ -162,8 +162,8 @@ struct MeshInstanceRanges {
 };
 
 struct InstanceData {
-    glm::mat4x3 transform; // sizeof(glm::mat4x3) == 48 bytes
-    u32 lod_level; // sizeof(u32) == 4 bytes
+    glm::mat4x3 transform{}; // sizeof(glm::mat4x3) == 48 bytes
+    u32 lod_level{}; // sizeof(u32) == 4 bytes
     std::array<u32, 3> padding{0}; // sizeof(std::array<u32, 3>) == 12 bytes
 
     static auto empty() -> InstanceData { return InstanceData{glm::identity<glm::mat4x3>(), 0}; }

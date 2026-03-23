@@ -286,7 +286,7 @@ struct VertexOutput {
 
 struct RenderingPushConstants {
     Ptr<UBO, Access.Read, AddressSpace.Device> frame_ubo;
-    Ptr<Transform, Access.Read, AddressSpace.Device> transforms;
+    Ptr<InstanceData, Access.Read, AddressSpace.Device> instance_data;
     Ptr<uint, Access.Read, AddressSpace.Device> draw_material_ids;
     Ptr<Material, Access.Read, AddressSpace.Device> materials;
     uint base_draw_id;
@@ -302,10 +302,13 @@ main_vs_mdi(VertexInput input, uint draw_id : SV_DrawIndex, uint instance_id : S
     uint material_id = pc.draw_material_ids[global_draw];
     uint instance_index = instance_id + base_instance;
 
-    float3x4 model_3x4 = pc.transforms[instance_index].m;
-
-    float4x4 model = float4x4(model_3x4._m00_m01_m02_m03, model_3x4._m10_m11_m12_m13, model_3x4._m20_m21_m22_m23,
-                              float4(0, 0, 0, 1));
+ float3x4 model_3x4 = pc.instance_data[instance_index].transform.m;
+     float4x4 model = float4x4(
+         model_3x4._m00_m01_m02_m03,
+         model_3x4._m10_m11_m12_m13,
+         model_3x4._m20_m21_m22_m23,
+         float4(0, 0, 0, 1)
+     );
 
     float4 world_pos = mul(model, float4(input.position, 1.0));
     o.position = mul(pc.frame_ubo->view_projection, world_pos);
