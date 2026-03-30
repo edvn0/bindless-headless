@@ -1,20 +1,25 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <lyra/cli.hpp>
 #include <optional>
 #include <string_view>
 
 struct CLIOptions {
-    std::optional<std::filesystem::path> pipeline_cache_dir;
-    std::uint32_t iteration_count = 5;
     std::uint32_t width{1280};
     std::uint32_t height{720};
-    std::uint32_t light_count{50'000};
     bool vsync{false};
-    std::uint32_t msaa{1};
-    std::optional<bool> validation_layers{};
-    bool disable_output_images{true};
-    std::optional<std::string> title{"Bindless Headless"};
+    bool validation_layers{true};
+    std::optional<std::string> title{};
+    std::optional<std::filesystem::path> pipeline_cache_dir{};
+    bool show_help{false};
 };
 
-auto parse_cli(int argc, char **argv) -> std::optional<CLIOptions>;
+struct EngineOptions : CLIOptions {
+    std::uint32_t iteration_count{5};
+    std::uint32_t light_count{50'000};
+    std::uint32_t msaa{1};
+    bool disable_output_images{true};
+};
+
+auto build_base_cli(CLIOptions &opts) -> lyra::cli;

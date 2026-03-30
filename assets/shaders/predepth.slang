@@ -14,13 +14,14 @@ struct PC {
 
 struct VertexInput {
     float3 position;
-    uint uvs;
+    uint uv0;
+    uint uv1;
 };
 
 struct VSOut {
     float4 position : SV_Position;
     nointerpolation uint material_id : TEXCOORD0;
-    float2 uvs : TEXCOORD1;
+    float4 uvs : TEXCOORD1;
 };
 
 [shader("vertex")]
@@ -49,7 +50,7 @@ VSOut main_vs_mdi(
 
     float4 world_pos = mul(model, float4(input.position, 1.0));
     o.position = mul(pc.frame_ubo->view_projection, world_pos);
-    o.uvs = unpackHalf2x16ToFloat(input.uvs);
+    o.uvs = float4(unpackHalf2x16ToFloat(input.uv0), unpackHalf2x16ToFloat(input.uv1));
 
     return o;
 }
@@ -58,7 +59,7 @@ VSOut main_vs_mdi(
 void fs_main(VSOut i, uniform PC pc)
 {
     Material mat = pc.materials[i.material_id];
-    float alpha = sample_texture(i.uvs, mat.albedo_map, 0).a;
+    float alpha = sample_texture(i.uvs.xy, mat.albedo_map, 0).a;
 
     if (alpha < alpha_cutoff) {
         discard;

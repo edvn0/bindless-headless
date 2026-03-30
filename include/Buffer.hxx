@@ -152,13 +152,11 @@ public:
     static auto zeroes(VmaAllocator &allocator, VkBufferUsageFlags usage_flags, const std::size_t size,
                        const std::string_view name, const std::span<const u32> queue_indices = {})
             -> tl::expected<Buffer, Error> {
-        // Get physical device alignment requirements
         VmaAllocatorInfo alloc_info{};
         vmaGetAllocatorInfo(allocator, &alloc_info);
         VkPhysicalDeviceProperties pd_props{};
         vkGetPhysicalDeviceProperties(alloc_info.physicalDevice, &pd_props);
 
-        // Align size to device requirements
         const auto min_alignment = static_cast<u64>(pd_props.limits.minStorageBufferOffsetAlignment);
         const auto aligned_size = (size + min_alignment - 1) & ~(min_alignment - 1);
 

@@ -32,6 +32,9 @@ struct DeferredDestroyQueue {
     }
 
     auto retire(u64 completed) -> void {
+        if (items.empty()) [[likely]]
+            return;
+
         std::erase_if(items, [&](Item const &it) {
             if (it.retire_value > completed)
                 return false;

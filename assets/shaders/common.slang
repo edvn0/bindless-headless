@@ -126,6 +126,7 @@ struct Material {
     uint emissive_map;
     float3 emissive_factor;
     uint flags;
+    float transmission_factor;
 
     bool has_albedo_map()  { return (flags & FLAG_ALBEDO_MAP) != 0; }
     bool has_normal_map()  { return (flags & FLAG_NORMAL_MAP) != 0; }

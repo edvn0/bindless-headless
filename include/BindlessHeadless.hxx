@@ -166,7 +166,7 @@ struct TargetSamplerConfiguration {
     struct Dimensions {
         u32 mip_levels{1};
         u32 array_layers{1};
-        VkImageViewType view_type{VK_IMAGE_VIEW_TYPE_2D}; // lets you opt into 2D_ARRAY later
+        VkImageViewType view_type{VK_IMAGE_VIEW_TYPE_2D};
     };
 
     Dimensions dims{};
@@ -332,8 +332,10 @@ inline auto create_instance_with_debug(auto &callback, std::span<const std::stri
         }
     }
 
-    info("Validation layers status: '{}'", has_debug_utils ? "Enabled" : "Disabled");
-
+    {
+        using namespace std::string_view_literals;
+        info("Validation layers status: '{}'", has_debug_utils ? "Enabled"sv : "Disabled"sv);
+    }
     auto instance_ci = create_info<VkInstanceCreateInfo>();
     instance_ci.pApplicationInfo = &app_info;
     instance_ci.enabledLayerCount = static_cast<u32>(enabled_layers.size());

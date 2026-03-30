@@ -5,6 +5,7 @@
 #include <chrono>
 #include <csignal>
 #include <limits>
+#include <lyra/parser.hpp>
 #include <thread>
 
 #include "ArgumentParse.hxx"
@@ -24,7 +25,7 @@ static volatile sig_atomic_t g_keep_running = 1;
 static void sig_handler(int) { g_keep_running = 1; }
 
 struct BaseApplication::Impl {
-    CLIOptions opts{};
+    CLIOptions opts;
     InstanceWithDebug *instance{nullptr};
 
     u32 graphics_family{0};
@@ -154,6 +155,19 @@ auto handle_bindless_repopulation(auto &bindless, auto &render_context, auto &gu
 
 auto run_application(BaseApplication &app, int argc, char **argv) -> int {
     signal(SIGINT, sig_handler);
+    CLIOptions opts{};
+    auto cli = build_base_cli(opts) | app.extra_cli();
+
+    if (auto r = cli.parse({argc, argv}); !r) {
+        error("Argument error: {}", r.message());
+        return 1;
+    }
+    auto result = cli.parse({argc, argv});
+    if (!result) {
+        error("Argument error: {}", result.message());
+        return 1;
+    }
+
 
     if (glfwPlatformSupported(GLFW_PLATFORM_X11))
         glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
@@ -169,14 +183,12 @@ auto run_application(BaseApplication &app, int argc, char **argv) -> int {
                                                                                       BaseApplication::ImplDeleter{});
     auto &impl = *app.m_impl;
 
-    auto maybe_opts = parse_cli(argc, argv);
-    if (!maybe_opts)
-        return 1;
-    impl.opts = std::move(maybe_opts.value());
+
+    impl.opts = std::move(opts);
 
     impl.compiler = std::make_unique<Compiler>();
 
-    const bool enable_validation = impl.opts.validation_layers.value_or(!static_cast<bool>(IS_RELEASE));
+    const bool enable_validation = impl.opts.validation_layers && !static_cast<bool>(IS_RELEASE);
 
     u32 ext_count{};
     const char **exts_raw = glfwGetRequiredInstanceExtensions(&ext_count);

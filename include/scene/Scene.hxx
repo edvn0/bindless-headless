@@ -1,11 +1,15 @@
 #pragma once
 
+#include "Components.hxx"
+
 #include <entt/entt.hpp>
 
 #include "Forward.hxx"
 
 struct Scene {
     entt::registry registry;
+    entt::group<entt::owned_t<MeshComponent>, entt::get_t<TransformComponent>> mesh_group =
+            registry.group<MeshComponent>(entt::get<TransformComponent>);
 };
 
 namespace hierarchy {

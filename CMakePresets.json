@@ -103,7 +103,7 @@
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "installDir": "${sourceDir}/out/install/${presetName}",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_BUILD_TYPE": "Debug",
         "HAS_TRACY": "ON",
         "SCENE_COMPRESSION": "lz4",
         "CMAKE_CXX_COMPILER": "g++",

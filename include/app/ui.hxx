@@ -2,9 +2,11 @@
 
 #include "app/app_forward.hxx"
 
+#include "Logger.hxx"
 #include "Types.hxx"
 
 auto draw_ui(AppContext &, u32 frame_index, AppState &output) -> void;
+
 struct UiFrameResult {
     VkExtent2D window_extent{};
     VkExtent2D desired_scene_extent{};

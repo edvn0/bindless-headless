@@ -17,7 +17,7 @@ struct SurfaceMaterial {
 
 float3 sample_normal_map_ts(float2 uv, uint normal_map_index, uint sampler_index) {
     float4 s = sample_texture(uv, normal_map_index, sampler_index);
-    float2 nml = s.rg; // R=X, A=Y  (not .ga)
+    float2 nml = s.ga; // X=R, Y=G
     nml = nml * 2.0 - 1.0;
     float z = sqrt(saturate(1.0 - dot(nml, nml)));
     return float3(nml.x, nml.y, z);
@@ -36,9 +36,10 @@ float3 normal_ts_to_ws(float3 n_ts, float3 t_ws, float3 b_ws, float3 n_ws) {
     return safe_normalize(mul(n_ts, TBN));
 }
 
-SurfaceMaterial evaluate_material_tbn(Material mat, float2 uv, float3 n_ws_geom, float3 t_ws, float3 b_ws,
+SurfaceMaterial evaluate_material_tbn(Material mat, float4 multi_uv, float3 n_ws_geom, float3 t_ws, float3 b_ws,
                                       uint sampler_index) {
     SurfaceMaterial surf;
+    var uv = multi_uv.xy;
 
     // Albedo
     if (mat.has_albedo_map()) {
@@ -59,7 +60,7 @@ SurfaceMaterial evaluate_material_tbn(Material mat, float2 uv, float3 n_ws_geom,
 
     // Roughness
     if (mat.has_roughness_map()) {
-        float r = sample_texture(uv, mat.roughness_map, sampler_index).g;
+        float r = sample_texture(uv, mat.roughness_map, sampler_index).r;
         surf.roughness = r * mat.roughness_factor;
     } else {
         surf.roughness = mat.roughness_factor;
@@ -265,7 +266,8 @@ float3 calculate_ambient(float3 albedo, float metallic, float occlusion, float3 
 
 struct VertexInput {
     float3 position;
-    uint uvs;
+    uint uv0; // 0xPOS0POS1
+    uint uv1; // 0xPOS0POS1
     uint normal; // 10_10_10_2 snorm-ish
     uint tangent; // 10_10_10_2
     uint bitangent; // 10_10_10_2
@@ -276,7 +278,7 @@ struct VertexOutput {
 
     float3 world_pos : TEXCOORD0;
     float3 n_ws : TEXCOORD1;
-    float2 uv : TEXCOORD2;
+    float4 uv : TEXCOORD2;
 
     float3 t_ws : TEXCOORD3;
     float3 b_ws : TEXCOORD4;
@@ -323,7 +325,7 @@ main_vs_mdi(VertexInput input, uint draw_id : SV_DrawIndex, uint instance_id : S
     o.t_ws = safe_normalize(mul(m3, t_local));
     o.b_ws = safe_normalize(mul(m3, b_local));
 
-    o.uv = unpackHalf2x16ToFloat(input.uvs);
+    o.uv = float4(unpackHalf2x16ToFloat(input.uv0), unpackHalf2x16ToFloat(input.uv1));
     o.material = material_id;
 
     printf("%d", material_id);

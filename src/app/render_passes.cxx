@@ -43,6 +43,7 @@ namespace RP {
                                   ctx.pipes.compute_stats_pool[frame_index]);
         g_frame.graphics = resolve(ctx.gpu.ctx, ctx.pipes.graphics_query_pool[frame_index],
                                    ctx.pipes.graphics_stats_pool[frame_index]);
+        g_frame.frame_index = frame_index;
     }
 
     auto get_frame_markers() -> FrameMarkers const & { return g_frame; }
@@ -174,9 +175,10 @@ namespace RP {
 
 } // namespace RP
 
-auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32 last_frame_index,
-                       const DeviceAddress &point_lights_base_addr, const SubmitSynchronisation &sync) -> u64 {
+auto run_rotation_pass(AppContext &ctx, const u32 last_frame_index, const DeviceAddress &point_lights_base_addr,
+                       const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     const RotatePushConstant geo_pc{
             .delta_time = static_cast<float>(ui.dt),
@@ -275,9 +277,10 @@ auto run_rotation_pass(AppContext &ctx, const u32 bounded_frame_index, const u32
 
 auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                        std::span<const MeshInstanceRange> mesh_instance_ranges, std::span<const DrawRanges> ranges,
-                       const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
+                       const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
 
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -333,11 +336,10 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                     const auto &mesh = res.meshes[mir.mesh_index];
 
                     auto &&[verts, idx] = gpu.ctx.buffers.get_multiple(mesh.pos_uv_buffer, mesh.index_buffer);
-
                     vkCmdBindIndexBuffer(cmd, idx->buffer(), 0, VK_INDEX_TYPE_UINT32);
                     const std::array<VkBuffer, 1> vert_bufs = {verts->buffer()};
                     constexpr std::array<VkDeviceSize, 1> vert_offs = {0};
-                    const VkDeviceSize vert_size = verts->size();
+                    const auto vert_size = verts->size();
                     vkCmdBindVertexBuffers2(cmd, 0, 1, vert_bufs.data(), vert_offs.data(), &vert_size, nullptr);
 
                     PredepthPushConstants pc{
@@ -387,10 +389,11 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
             sync);
 }
 
-auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
-                                 const SubmitSynchronisation &sync) -> TimelineValue {
+auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchronisation &sync)
+        -> TimelineValue {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
 
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
@@ -516,10 +519,10 @@ auto run_environment_skybox_pass(AppContext &ctx, VkExtent2D frame_extent, Bound
             sync);
 }
 
-auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, const SubmitSynchronisation &sync)
-        -> u64 {
+auto run_light_clustering_pass(AppContext &ctx, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
 
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_compute, gpu.device,
@@ -622,10 +625,10 @@ auto run_light_clustering_pass(AppContext &ctx, const u32 bounded_frame_index, c
 }
 
 auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstanceRange> mesh_instance_ranges,
-                                     std::span<const DrawRanges> ranges, const u32 bounded_frame_index,
-                                     const SubmitSynchronisation &sync) -> u64 {
+                                     std::span<const DrawRanges> ranges, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
 
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
     return submit_stage(
             gpu.tl_graphics, gpu.device,
             [&](VkCommandBuffer cmd) {
@@ -743,9 +746,9 @@ auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstan
 }
 
 auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const MeshInstanceRange> mesh_instance_ranges,
-                      std::span<const DrawRanges> ranges, const u32 bounded_frame_index,
-                      const SubmitSynchronisation &sync) -> u64 {
+                      std::span<const DrawRanges> ranges, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -875,9 +878,9 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
             sync);
 }
 
-auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
-                   const SubmitSynchronisation &sync) -> TimelineValue {
+auto run_ssao_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchronisation &sync) -> TimelineValue {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_compute, gpu.device,
@@ -1126,8 +1129,9 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSy
 }
 
 auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32,
-                                const u32 bounded_frame_index, const SubmitSynchronisation &sync) -> u64 {
+                                const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -1514,9 +1518,9 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
             sync);
 }
 
-auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIndex bounded_frame_index,
-                        const SubmitSynchronisation &sync) -> TimelineValue {
+auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchronisation &sync) -> TimelineValue {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -1531,7 +1535,6 @@ auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 auto *lit = gpu.ctx.textures.get(res.lit_hdr);
                 auto *depth = gpu.ctx.textures.get(res.depth);
 
-                // lit_hdr: skybox already wrote to it, transition to color attachment
                 const std::array<VkImageMemoryBarrier2, 2> barriers{{
                         VkImageMemoryBarrier2{
                                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -1583,7 +1586,7 @@ auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
                 depth_att.imageView = depth->attachment_view;
                 depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
                 depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
+                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
                 auto ri = create_info<VkRenderingInfo>();
                 ri.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -1656,9 +1659,9 @@ auto run_billboard_pass(AppContext &ctx, VkExtent2D frame_extent, BoundedFrameIn
             sync);
 }
 
-auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 bounded_frame_index,
-                      const SubmitSynchronisation &sync) -> u64 {
+auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -1751,9 +1754,9 @@ auto run_tonemap_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32 
             sync);
 }
 
-auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const u32 bounded_frame_index,
-                        const SubmitSynchronisation &sync) -> u64 {
+auto run_swapchain_pass(AppContext &ctx, const u32 swap_image_index, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,

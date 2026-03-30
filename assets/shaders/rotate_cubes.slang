@@ -36,8 +36,9 @@ void rotate_geometry_cs(uint3 tid : SV_DispatchThreadID, uniform RotatePushConst
 {
    /* uint idx = tid.x;
     if (idx >= pc.count) return;
+    if (idx == 0) return;
 
-    float3x4 m3x4 = pc.previous_frame_transforms[idx].m;
+    float3x4 m3x4 = pc.previous_frame_transforms[idx].transform.m;
     float4x4 model = float4x4(
         m3x4._m00_m01_m02_m03,
         m3x4._m10_m11_m12_m13,
@@ -45,16 +46,28 @@ void rotate_geometry_cs(uint3 tid : SV_DispatchThreadID, uniform RotatePushConst
         float4(0, 0, 0, 1)
     );
 
+    // mul(R_delta, model) transforms the translation column too, rotating
+    // the object's world-space position around the origin each frame.
+    // Extract it, rotate only the rotation basis, then put it back.
+    float3 translation = float3(model[0].w, model[1].w, model[2].w);
+    model[0].w = 0.0;
+    model[1].w = 0.0;
+    model[2].w = 0.0;
+
     float3 random_f = get_random_factor(idx);
-    float3 angles = pc.rads_per_second * pc.delta_time * random_f;
+    float3 angles   = pc.rads_per_second * pc.delta_time * random_f;
     float3 s = sin(angles);
     float3 c = cos(angles);
 
-    float4x4 rot_x = float4x4(1,0,0,0,  0,c.x,-s.x,0,  0,s.x,c.x,0,  0,0,0,1);
-    float4x4 rot_y = float4x4(c.y,0,s.y,0,  0,1,0,0,  -s.y,0,c.y,0,  0,0,0,1);
-    float4x4 rot_z = float4x4(c.z,-s.z,0,0,  s.z,c.z,0,0,  0,0,1,0,  0,0,0,1);
+    float4x4 rot_x = float4x4(1,0,0,0,      0,c.x,-s.x,0,  0,s.x,c.x,0,  0,0,0,1);
+    float4x4 rot_y = float4x4(c.y,0,s.y,0,  0,1,0,0,       -s.y,0,c.y,0,  0,0,0,1);
+    float4x4 rot_z = float4x4(c.z,-s.z,0,0, s.z,c.z,0,0,   0,0,1,0,       0,0,0,1);
 
     float4x4 result = mul(rot_y, mul(rot_z, mul(rot_x, model)));
+
+    result[0].w = translation.x;
+    result[1].w = translation.y;
+    result[2].w = translation.z;
 
     // Orthonormalize to prevent drift
     float scale_x = length(result[0].xyz);
@@ -69,8 +82,7 @@ void rotate_geometry_cs(uint3 tid : SV_DispatchThreadID, uniform RotatePushConst
     result[1] = float4(y_axis * scale_y, result[1].w);
     result[2] = float4(z_axis * scale_z, result[2].w);
 
-    pc.transforms[idx].m = float3x4(result[0], result[1], result[2]);
-    */
+    pc.transforms[idx].transform.m = float3x4(result[0], result[1], result[2]);*/
 }
 
 [shader("compute")]
@@ -81,21 +93,16 @@ void rotate_lights_cs(uint3 tid : SV_DispatchThreadID, uniform RotatePushConstan
     if (idx >= pc.count) return;
     var l = pc.static_point_lights[idx];
 
-    // 1. Get the original static position
     float4 base = l.position_radius;
     float3 center = base.xyz;
 
-    // 2. Calculate the orbit
-    // We can add a per-light phase offset (idx * 0.5) so they don't all move in a line
     float angle = pc.total_time + (float(idx) * 13.5f);
     
     float offset_x = cos(0.02f*angle) * l.radius;
     float offset_z = sin(0.02f*angle) * l.radius;
 
-    // 3. Apply the offset to the x and z coordinates
     float3 orbiting_pos = center + float3(offset_x, 0.0f, offset_z);
 
-    // 4. Update the dynamic buffer
     pc.point_lights[idx].position_radius = float4(orbiting_pos, base.w);
     pc.point_lights[idx].colour_intensity = l.colour_intensity;
 }

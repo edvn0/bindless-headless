@@ -27,13 +27,16 @@
 #include "app/listeners.hxx"
 #include "app/math.hxx"
 #include "app/render.hxx"
+#include "app/ui.hxx"
 #include "scene/Scene.hxx"
 #include "ui/PerformanceGraph.hxx"
+
+#include "framework/LogWidget.hxx"
 
 struct InstanceWithDebug;
 
 struct AppGpuState {
-    CLIOptions *opts{nullptr};
+    EngineOptions *opts{nullptr};
     InstanceWithDebug *instance{nullptr};
 
     VkPhysicalDevice physical_device{VK_NULL_HANDLE};
@@ -330,6 +333,8 @@ struct AppUI {
     VkExtent2D last_viewport_extent = {0, 0};
     PendingResize pending_resize{};
 
+    std::unique_ptr<LogWidget> log_widget{};
+
     SunConfig sun_config{};
     ShadowConfig shadow_config{};
     UIValueLatch<ClusterConfig> clustering_config{};
@@ -373,5 +378,6 @@ struct AppContext {
 
 class BindlessApp {
 public:
-    auto run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocContext * = nullptr) -> tl::expected<i32, Error>;
+    auto run(EngineOptions &opts, InstanceWithDebug &instance, RenderDocContext * = nullptr)
+            -> tl::expected<i32, Error>;
 };

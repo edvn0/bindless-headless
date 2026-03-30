@@ -95,7 +95,6 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
             vert_stage_ci,
     };
 
-    // 2. Pipeline Layout (Inherit bindless + push constants)
     VkPushConstantRange push_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
@@ -112,7 +111,6 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
     vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, "predepth");
 
-    // 3. Specialized Depth State
     auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
     ds.depthTestEnable = VK_TRUE;
     ds.depthWriteEnable = VK_TRUE;
@@ -120,22 +118,18 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
     ds.minDepthBounds = 0.0f;
     ds.maxDepthBounds = 1.0f;
 
-    // 4. No Color Attachments (The secret to Pre-Depth speed)
     auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
     cb.attachmentCount = 0;
     cb.pAttachments = nullptr;
 
-    // 5. Rasterization (Ensure Back-Face Culling is ON)
     auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
     rs.cullMode = VK_CULL_MODE_BACK_BIT;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
 
-    // 6. Dynamic Rendering Info
     auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
     rendering_info.depthAttachmentFormat = depth_format;
 
-    // Viewport/Scissor setup (Standard)
     auto vp = create_info<VkPipelineViewportStateCreateInfo>();
     vp.viewportCount = 1;
     vp.scissorCount = 1;
@@ -156,7 +150,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
+    std::array<VkVertexInputAttributeDescription, 3> attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
@@ -167,8 +161,15 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
                     .location = 1,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = offsetof(PositionOnlyVertex, uvs),
-            }};
+                    .offset = offsetof(PositionOnlyVertex, uv0),
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 2,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uv1),
+            },
+    };
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
     vertex_input.vertexBindingDescriptionCount = static_cast<u32>(binding_descriptions.size());
@@ -296,7 +297,7 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
+    std::array<VkVertexInputAttributeDescription, 3> attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
@@ -308,7 +309,13 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
                     .location = 1,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = offsetof(PositionOnlyVertex, uvs),
+                    .offset = offsetof(PositionOnlyVertex, uv0),
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 2,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uv1),
             },
     };
 
@@ -396,7 +403,6 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
     vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, "shadow_map");
 
-    // Depth State
     auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
     ds.depthTestEnable = VK_TRUE;
     ds.depthWriteEnable = VK_TRUE;
@@ -404,22 +410,19 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
     ds.minDepthBounds = 0.0f;
     ds.maxDepthBounds = 1.0f;
 
-    // No Color Attachments (depth-only pass)
     auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
     cb.attachmentCount = 0;
     cb.pAttachments = nullptr;
 
-    // Rasterization with depth bias for shadow acne
     auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
     rs.cullMode = VK_CULL_MODE_BACK_BIT;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
     rs.depthBiasEnable = VK_TRUE;
-    rs.depthBiasConstantFactor = 0.0f; // Set dynamically
+    rs.depthBiasConstantFactor = 0.0f;
     rs.depthBiasClamp = 0.0f;
-    rs.depthBiasSlopeFactor = 0.0f; // Set dynamically
+    rs.depthBiasSlopeFactor = 0.0f;
 
-    // Dynamic Rendering Info
     auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
     rendering_info.depthAttachmentFormat = depth_format;
 
@@ -444,7 +447,7 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
+    std::array<VkVertexInputAttributeDescription, 3> attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
@@ -455,7 +458,13 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
                     .location = 1,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = offsetof(PositionOnlyVertex, uvs),
+                    .offset = offsetof(PositionOnlyVertex, uv0),
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 2,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uv1),
             },
     };
 
@@ -578,7 +587,7 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     }};
 
-    std::array<VkVertexInputAttributeDescription, 2> attribute_descriptions{
+    std::array<VkVertexInputAttributeDescription, 3> attribute_descriptions{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
@@ -589,7 +598,13 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
                     .location = 1,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = offsetof(PositionOnlyVertex, uvs),
+                    .offset = offsetof(PositionOnlyVertex, uv0),
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 2,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(PositionOnlyVertex, uv1),
             },
     };
 
@@ -839,7 +854,7 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
             },
     };
 
-    std::array<VkVertexInputAttributeDescription, 5> attrs{
+    std::array<VkVertexInputAttributeDescription, 6> attrs{
             VkVertexInputAttributeDescription{
                     .location = 0,
                     .binding = 0,
@@ -850,22 +865,28 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
                     .location = 1,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = offsetof(Vertex, uvs),
+                    .offset = offsetof(Vertex, uv0),
             },
             VkVertexInputAttributeDescription{
                     .location = 2,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = offsetof(Vertex, normal),
+                    .offset = offsetof(Vertex, uv1),
             },
             VkVertexInputAttributeDescription{
                     .location = 3,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
-                    .offset = offsetof(Vertex, tangent),
+                    .offset = offsetof(Vertex, normal),
             },
             VkVertexInputAttributeDescription{
                     .location = 4,
+                    .binding = 0,
+                    .format = VK_FORMAT_R32_UINT,
+                    .offset = offsetof(Vertex, tangent),
+            },
+            VkVertexInputAttributeDescription{
+                    .location = 5,
                     .binding = 0,
                     .format = VK_FORMAT_R32_UINT,
                     .offset = offsetof(Vertex, bitangent),

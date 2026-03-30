@@ -7,6 +7,7 @@
 #include <deque>
 #include <efsw/efsw.hpp>
 #include <execution>
+#include <filesystem>
 #include <future>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/glm.hpp>
@@ -500,8 +501,9 @@ namespace {
 
 namespace {
 
-    auto generate_random_hierarchies(entt::registry &reg, std::span<const entt::entity> entities, int k,
-                                     std::mt19937 &rng, float leaf_probability = 0.3f) -> std::vector<entt::entity> {
+    [[maybe_unused]] auto generate_random_hierarchies(entt::registry &reg, std::span<const entt::entity> entities,
+                                                      int k, std::mt19937 &rng, float leaf_probability = 0.3f)
+            -> std::vector<entt::entity> {
         std::uniform_real_distribution<float> chance(0.0f, 1.0f);
 
         std::vector<std::vector<entt::entity>> depth_buckets(k + 1);
@@ -539,10 +541,28 @@ namespace {
         return depth_buckets[0];
     }
 
+    auto random_rotation(auto &rng) -> glm::quat {
+        std::uniform_real_distribution<float> dist(0.f, 1.f);
+
+        const float u1 = dist(rng);
+        const float u2 = dist(rng) * glm::two_pi<float>();
+        const float u3 = dist(rng) * glm::two_pi<float>();
+
+        const float sq1 = glm::sqrt(1.f - u1);
+        const float sq1_u1 = glm::sqrt(u1);
+
+        return glm::quat{
+                sq1_u1 * glm::cos(u3),
+                sq1 * glm::sin(u2),
+                sq1 * glm::cos(u2),
+                sq1_u1 * glm::sin(u3),
+        };
+    }
     struct MultiDistrib {
         glm::vec3 min;
         glm::vec3 max;
         MultiDistrib(const glm::vec3 &mi, const glm::vec3 &ma) : min(mi), max(ma) {}
+        MultiDistrib(const AABB &aabb) : min(aabb.min), max(aabb.max) {}
 
         auto sample(auto &engine) {
             std::uniform_real_distribution<float> x{min.x, max.x};
@@ -553,47 +573,54 @@ namespace {
 
         auto operator()(auto &engine) { return sample(engine); }
     };
-    auto create_scene(Scene &scene) -> void {
+    auto create_scene(Scene &scene, const AABB &) -> void {
         auto &reg = scene.registry;
 
-        auto rng =
-                std::mt19937{static_cast<unsigned long>(std::chrono::system_clock::now().time_since_epoch().count())};
+        //  auto rng =
+        //          std::mt19937{static_cast<unsigned
+        //          long>(std::chrono::system_clock::now().time_since_epoch().count())};
 
-        auto sponza = reg.create();
+        /* auto sponza = reg.create();
         reg.emplace<MeshComponent>(sponza, MeshComponent{.name = "sponza", .mesh_index = 0u});
-        reg.emplace<TransformComponent>(sponza, glm::identity<glm::mat4x3>());
+        reg.emplace<TransformComponent>(sponza, glm::identity<glm::mat4x3>()); */
 
-        auto capsule = reg.create();
-        reg.emplace<MeshComponent>(capsule, MeshComponent{.name = "capsule", .mesh_index = 1u});
-        reg.emplace<TransformComponent>(capsule, glm::identity<glm::mat4x3>());
+        auto new_sponza = reg.create();
+        reg.emplace<MeshComponent>(new_sponza, MeshComponent{.name = "new_sponza", .mesh_index = 0u});
+        reg.emplace<TransformComponent>(new_sponza, glm::identity<glm::mat4x3>());
 
-        std::vector<entt::entity> helmets;
-        helmets.reserve(2);
+        auto sponza_curtains = reg.create();
+        reg.emplace<MeshComponent>(sponza_curtains, MeshComponent{.name = "sponza_curtains", .mesh_index = 1u});
+        reg.emplace<TransformComponent>(sponza_curtains, glm::identity<glm::mat4x3>());
+        /*
+                auto capsule = reg.create();
+                reg.emplace<MeshComponent>(capsule, MeshComponent{.name = "capsule", .mesh_index = 3u});
+                reg.emplace<TransformComponent>(capsule, glm::identity<glm::mat4x3>()); */
 
+        /* std::vector<entt::entity> helmets;
+        static constexpr auto size = 60;
+        helmets.reserve(size);
 
-        auto distrib = MultiDistrib{glm::vec3{-5, 5, 5}, glm::vec3{5, 5, 10}};
-
-        for (auto i: std::views::iota(0, 1)) {
+        auto distrib = MultiDistrib{aabb};
+        for (auto i: std::views::iota(0, size)) {
             auto e = reg.create();
-            reg.emplace<MeshComponent>(e, MeshComponent{.name = std::format("damaged_helmet_{}", i), .mesh_index = 2u});
+            reg.emplace<MeshComponent>(e, MeshComponent{.name = std::format("damaged_helmet_{}", i), .mesh_index = 4u});
             auto random_position = distrib(rng);
-            reg.emplace<TransformComponent>(e, glm::translate(glm::mat4{1.0f}, random_position));
+            reg.emplace<TransformComponent>(e, glm::translate(glm::mat4{1.0f}, random_position) *
+                                                       glm::toMat4(random_rotation(rng)));
             helmets.push_back(e);
         }
 
-        generate_random_hierarchies(reg, helmets, 4, rng, 0.3f);
+        generate_random_hierarchies(reg, helmets, 4, rng, 0.3f); */
     }
 
     template<typename T>
     auto flush_render_queue(WatermarkedQueue<T> &queue, AppResources &res, RenderContext &ctx, u32 frame_idx) -> void {
         res.mesh_instance_ranges.clear();
 
-        std::ranges::stable_sort(queue.objects, [](const MeshSubmission &a, const MeshSubmission &b) {
-            return a.mesh_index < b.mesh_index;
-        });
+        std::ranges::sort(queue.objects, {}, &MeshSubmission::mesh_index);
 
-        static thread_local std::vector<InstanceData> instance_scratch;
-        instance_scratch.clear();
+        std::vector<InstanceData> instance_scratch;
+        instance_scratch.reserve(queue.objects.size());
 
         u32 ring_offset = 0;
 
@@ -610,18 +637,23 @@ namespace {
             instance_scratch.clear();
         };
 
-        for (u32 i = 0; i < queue.objects.size(); ++i) {
-            const auto &sub = queue.objects[i];
-            const bool new_batch = !instance_scratch.empty() && queue.objects[i - 1].mesh_index != sub.mesh_index;
+        auto it = queue.objects.begin();
+        const auto end = queue.objects.end();
 
-            if (new_batch) {
-                flush_batch(queue.objects[i - 1].mesh_index);
+        while (it != end) {
+            const u32 mesh_index = it->mesh_index;
+            const auto batch_end = std::partition_point(
+                    it, end, [mesh_index](const MeshSubmission &s) { return s.mesh_index == mesh_index; });
+
+            for (auto cur = it; cur != batch_end; ++cur) {
+                instance_scratch.push_back({
+                        .transform = cur->transform,
+                        .lod_level = cur->lod_level,
+                });
             }
-            instance_scratch.push_back(InstanceData{sub.transform, sub.lod_level});
-        }
 
-        if (!instance_scratch.empty()) {
-            flush_batch(queue.objects.back().mesh_index);
+            flush_batch(mesh_index);
+            it = batch_end;
         }
 
         res.flushed_instance_count = static_cast<u32>(queue.objects.size());
@@ -629,7 +661,7 @@ namespace {
     }
 } // namespace
 
-auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocContext *renderdoc)
+auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDocContext *renderdoc)
         -> tl::expected<int, Error> {
     signal(SIGINT, sig_handler);
 
@@ -904,7 +936,7 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocCo
 
     {
         auto _ = NanoProfiler{"Submitting icons"};
-        for (const auto &icon: std::filesystem::directory_iterator("assets/editor/icons")) {
+        for (const auto &icon: std::filesystem::recursive_directory_iterator("assets/editor/icons")) {
             if (icon.path().extension() != ".png")
                 continue;
 
@@ -1071,20 +1103,28 @@ auto BindlessApp::run(CLIOptions &opts, InstanceWithDebug &instance, RenderDocCo
     gpu.bindless.repopulate_if_needed(gpu.ctx.textures, gpu.ctx.samplers, gpu.ctx.comparison_samplers);
 
     {
-        TRY_PROPAGATE(loaded_mesh, load_scene(gpu.ctx, "assets/meshes/SponzaGLTF/sponza_converted.cscene", 0.01f),
+        /* TRY_PROPAGATE(loaded_mesh, load_scene(gpu.ctx, "assets/meshes/SponzaGLTF/sponza_converted.cscene", 0.01f),
                       "Failed to load cube mesh");
-        res.meshes.emplace_back(std::move(loaded_mesh));
+        res.meshes.emplace_back(std::move(loaded_mesh)); */
 
-        TRY_PROPAGATE(loaded_capsule, load_static_mesh(gpu.ctx, "assets/meshes/capsule.obj"),
-                      "Failed to load capsule mesh");
-        res.meshes.emplace_back(std::move(loaded_capsule));
+        TRY_PROPAGATE(loaded_new_sponza, load_scene(gpu.ctx, "assets/meshes/NewSponza/new_sponza.cscene"),
+                      "Failed to load new sponza mesh");
+        res.meshes.emplace_back(std::move(loaded_new_sponza));
 
-        TRY_PROPAGATE(loaded_damaged_helmet,
-                      load_scene(gpu.ctx, "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.cscene"),
-                      "Failed to load damaged helmet mesh");
-        res.meshes.emplace_back(std::move(loaded_damaged_helmet));
+        TRY_PROPAGATE(loaded_new_sponza_curtains, load_scene(gpu.ctx, "assets/meshes/NewSponza/curtains.cscene"),
+                      "Failed to load new curtains mesh");
+        res.meshes.emplace_back(std::move(loaded_new_sponza_curtains));
 
-        create_scene(scene.scene);
+        /*         TRY_PROPAGATE(loaded_capsule, load_static_mesh(gpu.ctx, "assets/meshes/capsule.obj"),
+                              "Failed to load capsule mesh");
+                res.meshes.emplace_back(std::move(loaded_capsule));
+
+                TRY_PROPAGATE(loaded_damaged_helmet,
+                              load_scene(gpu.ctx, "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.cscene"),
+                              "Failed to load damaged helmet mesh");
+                res.meshes.emplace_back(std::move(loaded_damaged_helmet)); */
+
+        create_scene(scene.scene, res.meshes.at(0).mesh_aabb);
     }
 
     const auto graphics_family = gpu.queue_family_indices.graphics;
@@ -1666,6 +1706,8 @@ gpu.bindless.need_repopulate = true;
                         .size = 13.0f,
                 });
         ui.gui->set_app_name("BHEngine");
+
+        ui.log_widget = std::make_unique<LogWidget>();
     }
 
     auto gui_pipeline_node = gpu.window_resize_graph.add_node(
@@ -1838,7 +1880,7 @@ gpu.bindless.need_repopulate = true;
                     .pSemaphores = &gpu.tl_graphics.timeline,
                     .pValues = &fs.frame_done_value,
             };
-            vk_check(vkWaitSemaphores(gpu.device, &wi, UINT64_MAX));
+            vk_check(vkWaitSemaphores(gpu.device, &wi, std::numeric_limits<u64>::max()));
 
             if (auto r = read_timestamp_pairs_ms(gpu.ctx, pipes.compute_query_pool[bounded_frame_index]))
                 ui.last_compute_res.update(std::move(*r));
@@ -1861,12 +1903,10 @@ gpu.bindless.need_repopulate = true;
             vkResetQueryPool(gpu.device, c->pool, 0, c->query_count);
             vkResetQueryPool(gpu.device, d->pool, 0, d->query_count);
 
-            // This causes validation errors.
             TracyVkCollectHost(gpu.tracy_compute.ctx);
             TracyVkCollectHost(gpu.tracy_graphics.ctx);
         }
 
-        // acquire
         auto acquired = gpu.swapchain.acquire_next_image(bounded_frame_index);
         if (!acquired) {
             const VkResult res_vk = acquired.error();
@@ -1884,7 +1924,7 @@ gpu.bindless.need_repopulate = true;
 
         {
             fs.timeline_values[stage_index(Stage::CubeRotation)] =
-                    run_rotation_pass(app_context, bounded_frame_index, last_frame_index, point_lights_base_addr);
+                    run_rotation_pass(app_context, last_frame_index, point_lights_base_addr);
         }
 
         {
@@ -1895,7 +1935,7 @@ gpu.bindless.need_repopulate = true;
             }};
             fs.timeline_values[stage_index(Stage::Predepth)] =
                     run_predepth_pass(app_context, render_scene_extent, res.mesh_instance_ranges, all_mesh_ranges,
-                                      bounded_frame_index, SubmitSynchronisation{.timeline_waits = cube_rotate_waits});
+                                      SubmitSynchronisation{.timeline_waits = cube_rotate_waits});
         }
 
         {
@@ -1905,13 +1945,12 @@ gpu.bindless.need_repopulate = true;
                     .stage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
             }};
             fs.timeline_values[stage_index(Stage::DirectionalShadowMap)] = run_directional_shadow_map_pass(
-                    app_context, res.mesh_instance_ranges, all_mesh_ranges, bounded_frame_index,
+                    app_context, res.mesh_instance_ranges, all_mesh_ranges,
                     SubmitSynchronisation{.timeline_waits = directional_shadow_map_waits});
         }
 
         {
-            fs.timeline_values[stage_index(Stage::LightClustering)] =
-                    run_light_clustering_pass(app_context, bounded_frame_index, no_waits);
+            fs.timeline_values[stage_index(Stage::LightClustering)] = run_light_clustering_pass(app_context, no_waits);
         }
 
         {
@@ -1934,7 +1973,7 @@ gpu.bindless.need_repopulate = true;
             };
             fs.timeline_values[stage_index(Stage::GBuffer)] =
                     run_gbuffer_pass(app_context, render_scene_extent, res.mesh_instance_ranges, all_mesh_ranges,
-                                     bounded_frame_index, SubmitSynchronisation{.timeline_waits = gbuffer_waits});
+                                     SubmitSynchronisation{.timeline_waits = gbuffer_waits});
         }
 
         {
@@ -1945,9 +1984,8 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::SSAO)] =
-                    run_ssao_pass(app_context, render_scene_extent, bounded_frame_index,
-                                  SubmitSynchronisation{.timeline_waits = ssao_waits});
+            fs.timeline_values[stage_index(Stage::SSAO)] = run_ssao_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = ssao_waits});
         }
 
         {
@@ -1981,7 +2019,7 @@ gpu.bindless.need_repopulate = true;
                     },
             };
             fs.timeline_values[stage_index(Stage::DeferredLighting)] =
-                    run_deferred_lighting_pass(app_context, render_scene_extent, light_slot, bounded_frame_index,
+                    run_deferred_lighting_pass(app_context, render_scene_extent, light_slot,
                                                SubmitSynchronisation{.timeline_waits = deferred_waits});
         }
 
@@ -1993,9 +2031,8 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::Skybox)] =
-                    run_environment_skybox_pass(app_context, render_scene_extent, bounded_frame_index,
-                                                SubmitSynchronisation{.timeline_waits = skybox_waits});
+            fs.timeline_values[stage_index(Stage::Skybox)] = run_environment_skybox_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = skybox_waits});
         }
 
         {
@@ -2018,9 +2055,8 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::Billboard)] =
-                    run_billboard_pass(app_context, render_scene_extent, bounded_frame_index,
-                                       SubmitSynchronisation{.timeline_waits = billboard_waits});
+            fs.timeline_values[stage_index(Stage::Billboard)] = run_billboard_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = billboard_waits});
         }
 
         {
@@ -2031,9 +2067,8 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::Tonemapping)] =
-                    run_tonemap_pass(app_context, render_scene_extent, bounded_frame_index,
-                                     SubmitSynchronisation{.timeline_waits = tonemap_waits});
+            fs.timeline_values[stage_index(Stage::Tonemapping)] = run_tonemap_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = tonemap_waits});
         }
 
         {
@@ -2053,7 +2088,7 @@ gpu.bindless.need_repopulate = true;
                     .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             }};
 
-            fs.frame_done_value = run_swapchain_pass(app_context, swap_image_index, bounded_frame_index,
+            fs.frame_done_value = run_swapchain_pass(app_context, swap_image_index,
                                                      SubmitSynchronisation{
                                                              .binary_waits = present_binary_waits,
                                                              .timeline_waits = present_timeline_waits,

@@ -193,6 +193,7 @@ add_library(BindlessEngine STATIC
   "src/RenderSubmission.cxx"
   "src/DeviceThreadPool.cxx"
   "src/Compression.cxx"
+  "src/Stream.cxx"
 
   "src/RenderDoc.cxx"
 
@@ -214,6 +215,7 @@ set_target_properties(BindlessEngine PROPERTIES
 target_link_libraries(BindlessEngine PUBLIC
   volk
   platform_wsi
+  bfg::lyra
   BindlessHeadlessAllocator
   ktx
   spdlog::spdlog
@@ -354,6 +356,7 @@ DEFAULT_COMPILE_OPTIONS(scene_inspect)
 
 add_library(BaseApplication STATIC
   "src/framework/BaseApplication.cxx"
+  "src/framework/LogWidget.cxx"
   "src/ArgumentParse.cxx"
 )
 
@@ -366,7 +369,6 @@ target_include_directories(BaseApplication PUBLIC
 
 target_link_libraries(BaseApplication PUBLIC
   BindlessEngine
-  CLI11::CLI11
   platform_wsi
 )
 
@@ -437,7 +439,7 @@ if(MagickPP_INCLUDE_DIR AND MagickPP_LIBRARY AND MagickCore_LIBRARY AND MagickWa
   target_link_libraries(tex_convert PRIVATE
     ktx
     ImageMagick::Magick++
-    CLI11::CLI11
+    bfg::lyra
     volk_headers
     volk
   )

@@ -19,24 +19,21 @@
 #include <unordered_set>
 
 #include <ImGuizmo.h>
+#include <entt/entt.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 namespace entity_factory {
-
     inline auto make_empty(entt::registry &reg, const std::string &name = "Entity") -> entt::entity {
         auto e = reg.create();
         auto &mc = reg.emplace<MeshComponent>(e);
         mc.name = name;
         mc.mesh_index = 0;
         auto &tc = reg.emplace<TransformComponent>(e);
-        tc.local_to_world = glm::mat4x3{glm::mat4{1.f}};
+        tc.local_to_world = glm::identity<glm::mat4x3>();
         reg.emplace<HierarchyComponent>(e);
         return e;
     }
-
 } // namespace entity_factory
-
-// ─── Internal UI state ───────────────────────────────────────────────────────
 
 namespace {
     constexpr auto get_all_children = [](const auto &self, entt::registry &reg, entt::entity e,
@@ -545,6 +542,8 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
         for (usize i = 0; i < graphics_stages.size(); ++i)
             ctx.ui.gpu_frame_graph.push_sample(static_cast<int>(index++),
                                                graphics_res[static_cast<u32>(graphics_stages[i])]);
+
+    ctx.ui.log_widget->draw("Log");
 
     widget("Performance Graphs", [&] {
         static int view_mode = 0;

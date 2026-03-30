@@ -1,7 +1,10 @@
 #include <GLFW/glfw3.h>
 #include <chrono>
+#include <cstdlib>
+#include <cxxabi.h>
 #include <deque>
 #include <efsw/efsw.hpp>
+#include <exception>
 #include <execution>
 #include <future>
 #include <glm/glm.hpp>
@@ -9,6 +12,8 @@
 #include <glm/gtc/packing.hpp>
 #include <imgui.h>
 #include <iostream>
+#include <lyra/cli.hpp>
+#include <lyra/opt.hpp>
 #include <random>
 #include <ranges>
 #include <thread>
@@ -50,7 +55,6 @@ namespace {
 
 auto main(int argc, char **argv) -> int {
     BindlessApp app;
-
     auto renderdoc = renderdoc_init();
 
     if (glfwPlatformSupported(GLFW_PLATFORM_WAYLAND)) {
@@ -67,34 +71,49 @@ auto main(int argc, char **argv) -> int {
         return 1;
     }
 
-    auto maybe_opts = parse_cli(argc, argv);
-    if (!maybe_opts) {
+    EngineOptions opts{};
+    auto cli = build_base_cli(opts) | lyra::opt(opts.iteration_count, "n")["--iterations"]("Render iterations") |
+               lyra::opt(opts.light_count, "n")["--lights"]("Number of lights") |
+               lyra::opt(opts.msaa, "n")["--msaa"]("MSAA sample count") |
+               lyra::opt(opts.disable_output_images)["--no-output"]("Skip writing output images");
+
+    if (auto r = cli.parse({argc, argv}); !r) {
+        error("Argument error: {}", r.message());
         return 1;
     }
-    auto opts = std::move(maybe_opts.value());
+
 
     {
+        std::counting_semaphore<> transcode_sem{std::thread::hardware_concurrency()};
         Tooling::SceneLoader loader{"assets/meshes"};
 
-        auto f0 = std::async(std::launch::async, [&loader] {
-            return loader.convert_gltf("/home/edwin/Assets/Meshes/SponzaGLTF/Sponza.gltf",
-                                       "SponzaGLTF/sponza_converted");
-        });
+        std::vector<std::future<bool>> futures;
 
-        auto f1 = std::async(std::launch::async, [&loader] {
-            return loader.convert_gltf("/home/edwin/Assets/Meshes/DamagedHelmet/glTF/DamagedHelmet.gltf",
-                                       "DamagedHelmetGLTF/damaged_helmet_converted");
-        });
+#define LOAD_MESH(src, dst)                                                                                            \
+    futures.emplace_back(std::async(std::launch::async, [&sem = transcode_sem, &loader] {                              \
+        sem.acquire();                                                                                                 \
+        auto res = loader.convert_gltf(src, dst).has_value();                                                          \
+        sem.release();                                                                                                 \
+        return res;                                                                                                    \
+    }));
 
-        std::ignore = f0.get();
-        std::ignore = f1.get();
+        // LOAD_MESH("/home/edwin/Assets/Meshes/SponzaGLTF/Sponza.gltf", "SponzaGLTF/sponza_converted");
+        // LOAD_MESH("/home/edwin/Assets/Meshes/DamagedHelmet/glTF/DamagedHelmet.gltf",
+        //           "DamagedHelmetGLTF/damaged_helmet_converted");
+        LOAD_MESH("/home/edwin/Assets/Meshes/main_sponza/NewSponza_Main_glTF_003.gltf", "NewSponza/new_sponza");
+        LOAD_MESH("/home/edwin/Assets/Meshes/pkg_a_curtains/NewSponza_Curtains_glTF.gltf", "NewSponza/curtains");
+
+#undef LOAD_MESH
+
+        for (auto &f: futures) {
+            std::ignore = f.get();
+        }
     }
     u32 extension_count{};
     const char **extensions_raw = glfwGetRequiredInstanceExtensions(&extension_count);
     std::vector<std::string_view> extensions(extensions_raw, extensions_raw + extension_count);
 
-    bool enable_validation =
-            opts.validation_layers.value_or(!static_cast<bool>(IS_RELEASE)); // NOLINT(modernize-use-bool-literals)
+    const bool enable_validation = opts.validation_layers && !static_cast<bool>(IS_RELEASE);
 
     InstanceWithDebug instance;
     if (enable_validation) {

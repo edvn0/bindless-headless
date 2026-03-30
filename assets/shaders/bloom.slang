@@ -135,5 +135,5 @@ void bloom_upsample_cs(
         + (1.0 / 16.0) * sample_texture_lod(uv + float2( r.x,  r.y), pc.src_index, 0.0, pc.sampler_index);
 
     float4 ds_sample = get_storage_image(pc.accumulate_ds_index)[dispatch_id.xy];
-    dst[dispatch_id.xy] = ds_sample + result * pc.strength * 0.01;
+    dst[dispatch_id.xy] = ds_sample + result * pc.strength;
 }

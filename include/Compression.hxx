@@ -28,40 +28,7 @@ inline auto normalize_scene_out_path(std::filesystem::path out_path) -> std::fil
     return out_path;
 }
 
-#if defined(SCENE_COMPRESSION_BZIP2)
-
-auto bzip2_compress(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes, u64 src_hash)
-        -> tl::expected<void, Error>;
-
-auto bzip2_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error>;
-
-inline auto scene_compress(const std::filesystem::path &out_path, std::span<std::byte> bytes, u64 src_hash) {
-    return bzip2_compress(out_path, bytes, src_hash);
-}
-inline auto scene_decompress(std::span<const std::byte> src) { return bzip2_decompress(src); }
-
-#elif defined(SCENE_COMPRESSION_ZSTD)
-
-auto zstd_compress(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes, u64 src_hash)
-        -> tl::expected<void, Error>;
-
-auto zstd_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error>;
-
-inline auto scene_compress(const std::filesystem::path &out_path, std::span<std::byte> bytes, u64 src_hash) {
-    return zstd_compress(out_path, bytes, src_hash);
-}
-inline auto scene_decompress(std::span<const std::byte> src) { return zstd_decompress(src); }
-
-#elif defined(SCENE_COMPRESSION_LZ4)
-
-auto lz4_compress(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes, u64 src_hash)
-        -> tl::expected<void, Error>;
-
-auto lz4_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error>;
-
-#else
-#error "No scene compression backend defined. Set SCENE_COMPRESSION in CMake."
-#endif
-
-auto scene_compress(const std::filesystem::path &, std::span<std::byte>, u64) -> tl::expected<void, Error>;
 auto scene_decompress(std::span<const std::byte>) -> tl::expected<std::vector<std::byte>, Error>;
+auto scene_compress_to_memory(std::span<const std::byte> data, u64 src_hash)
+        -> tl::expected<std::vector<std::byte>, Error>;
+auto scene_compress(const std::filesystem::path &, std::span<std::byte>, u64) -> tl::expected<void, Error>;

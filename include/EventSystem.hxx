@@ -56,7 +56,7 @@ public:
         if (ev.handled)
             return;
 
-        if (auto *e = dynamic_cast<T *>(&ev)) {
+        if (auto *e = static_cast<T *>(&ev)) {
             ev.handled = func(*e);
         }
     }

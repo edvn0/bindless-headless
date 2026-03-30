@@ -273,9 +273,9 @@ namespace {
             const glm::vec3 p1 = v1.position;
             const glm::vec3 p2 = v2.position;
 
-            const auto uv0 = glm::unpackHalf2x16(v0.uvs);
-            const auto uv1 = glm::unpackHalf2x16(v1.uvs);
-            const auto uv2 = glm::unpackHalf2x16(v2.uvs);
+            const auto uv0 = glm::unpackHalf2x16(v0.uv0);
+            const auto uv1 = glm::unpackHalf2x16(v1.uv0);
+            const auto uv2 = glm::unpackHalf2x16(v2.uv0);
 
             const glm::vec3 e1 = p1 - p0;
             const glm::vec3 e2 = p2 - p0;
@@ -358,7 +358,6 @@ namespace {
         LoadedTextureTable out{};
         out.by_stem.reserve(textures.size());
         for (size_t i = 0; i < textures.size(); ++i) {
-            // Convert "brick.ktx2" or "brick.jpg" -> "brick"
             std::string stem = std::filesystem::path(textures[i].name).stem().string();
             out.by_stem.emplace(stem, handles[i]);
         }
@@ -376,7 +375,6 @@ namespace {
             return it->second.index();
         }
 
-        // Optional: Log a warning if a texture was expected but not found
         warn("Texture stem not found: {}", stem);
         return fallback.index();
     }
@@ -450,6 +448,9 @@ namespace {
         out.set_emissive_map(out.emissive_map != defs.black.index());
 
         out.set_is_alpha_tested(m.is_alpha_tested);
+        out.set_has_transmission(m.has_transmission);
+        out.set_is_transparent(m.is_transparent);
+        out.transmission_factor = m.transmission_factor;
 
         return out;
     }
@@ -480,6 +481,10 @@ namespace {
 
         static constexpr auto default_transparency_if_alpha_tested = 0.1F;
         out.albedo_factor.a = out.is_alpha_tested ? default_transparency_if_alpha_tested : 1.0F;
+
+        out.is_transparent = false;
+        out.has_transmission = false;
+
         return out;
     }
 
@@ -489,7 +494,8 @@ namespace {
             h ^= std::hash<float>()(v.position[0]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<float>()(v.position[1]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<float>()(v.position[2]) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<u32>()(v.uvs) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<u32>()(v.uv0) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<u32>()(v.uv1) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.normal) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.tangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
             h ^= std::hash<u32>()(v.bitangent) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
@@ -531,7 +537,8 @@ namespace {
             };
         }
         uv0.y = 1.0f - uv0.y;
-        v.uvs = glm::packHalf2x16(uv0);
+        v.uv0 = glm::packHalf2x16(uv0);
+        v.uv1 = glm::packHalf2x16(glm::vec2{0, 0});
         return v;
     }
 } // namespace
@@ -731,9 +738,6 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
         if (it == materials.end()) {
             MaterialData fallback{};
             fallback.name = mat_name;
-            fallback.albedo_factor = glm::vec4{1.0f};
-            fallback.roughness_factor = 1.0f;
-            fallback.metallic_factor = 0.0f;
             gpu_materials.push_back(to_gpu_material(fallback, loaded, defs));
         } else {
             gpu_materials.push_back(to_gpu_material(it->second, loaded, defs));
@@ -753,7 +757,8 @@ auto load_static_mesh(RenderContext &ctx, const std::filesystem::path &obj_path,
     auto position_vb = mesh.vertices | std::views::transform([](const auto &v) {
                            return PositionOnlyVertex{
                                    .pos = v.position,
-                                   .uvs = v.uvs,
+                                   .uv0 = v.uv0,
+                                   .uv1 = v.uv1,
                            };
                        }) |
                        to<std::vector<PositionOnlyVertex>>();
@@ -958,9 +963,11 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "Invalid scene file extension"));
     }
 
+    auto compressed_profiler = NanoProfiler{"Compressed read"};
     auto compressed = read_raw(scene_path);
     if (!compressed)
         return tl::unexpected(compressed.error());
+    compressed_profiler.end();
 
     auto decompress = NanoProfiler{"Decompression"};
     auto file_bytes_exp = scene_decompress(*compressed);
@@ -1049,9 +1056,12 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     }
 
     std::vector<LoadedTextureCpu> cpu_textures;
-    cpu_textures.reserve(header.texture_count);
-    for (auto &fut: tex_futures)
-        cpu_textures.emplace_back(fut.get());
+    {
+        auto _ = NanoProfiler{"Texture future collection"};
+        cpu_textures.reserve(header.texture_count);
+        for (auto &fut: tex_futures)
+            cpu_textures.emplace_back(fut.get());
+    }
 
     std::vector<TextureHandle> tex_handles;
     tex_handles.reserve(cpu_textures.size());
@@ -1092,33 +1102,42 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     std::vector<GPUMaterialData> gpu_materials;
     gpu_materials.reserve(file_materials.size());
 
-    for (const auto &fm: file_materials) {
+    auto convert = [&](const auto &material_in) {
         GPUMaterialData out{};
-
-        out.albedo_map = remap_tex(fm.albedo_map, defs.white);
-        out.albedo_factor = {fm.albedo_factor[0], fm.albedo_factor[1], fm.albedo_factor[2], fm.albedo_factor[3]};
+        out.albedo_map = remap_tex(material_in.albedo_map, defs.white);
+        out.albedo_factor = {material_in.albedo_factor[0], material_in.albedo_factor[1], material_in.albedo_factor[2],
+                             material_in.albedo_factor[3]};
         out.set_albedo_map(out.albedo_map != defs.white.index());
 
-        out.normal_map = remap_tex(fm.normal_map, defs.flat_normal);
+        out.normal_map = remap_tex(material_in.normal_map, defs.flat_normal);
         out.set_normal_map(out.normal_map != defs.flat_normal.index());
 
-        out.roughness_map = remap_tex(fm.roughness_map, defs.white);
-        out.roughness_factor = fm.roughness_factor;
+        out.roughness_map = remap_tex(material_in.roughness_map, defs.white);
+        out.roughness_factor = material_in.roughness_factor;
         out.set_roughness_map(out.roughness_map != defs.white.index());
 
-        out.metallic_map = remap_tex(fm.metallic_map, defs.black);
-        out.metallic_factor = fm.metallic_factor;
+        out.metallic_map = remap_tex(material_in.metallic_map, defs.black);
+        out.metallic_factor = material_in.metallic_factor;
         out.set_metallic_map(out.metallic_map != defs.black.index());
 
-        out.occlusion_map = remap_tex(fm.occlusion_map, defs.white);
+        out.occlusion_map = remap_tex(material_in.occlusion_map, defs.white);
         out.set_occlusion_map(out.occlusion_map != defs.white.index());
 
-        out.emissive_map = remap_tex(fm.emissive_map, defs.black);
-        out.emissive_factor = {fm.emissive_factor[0], fm.emissive_factor[1], fm.emissive_factor[2]};
+        out.emissive_map = remap_tex(material_in.emissive_map, defs.black);
+        out.emissive_factor = {material_in.emissive_factor[0], material_in.emissive_factor[1],
+                               material_in.emissive_factor[2]};
         out.set_emissive_map(out.emissive_map != defs.black.index());
 
-        out.set_is_alpha_tested(has(fm.flags, MaterialFlags::AlphaTested));
+        out.set_is_alpha_tested(has(material_in.flags, MaterialFlags::AlphaTested));
+        out.set_has_transmission(has(material_in.flags, MaterialFlags::HasTransmission));
+        out.set_is_transparent(has(material_in.flags, MaterialFlags::Transparent));
+        out.transmission_factor = material_in.transmission_factor;
 
+        return out;
+    };
+
+    for (const auto &fm: file_materials) {
+        auto out = convert(fm);
         gpu_materials.emplace_back(out);
     }
 
@@ -1131,7 +1150,8 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
 
         dst.position = {src.position[0] * scale, src.position[1] * scale, src.position[2] * scale};
 
-        dst.uvs = src.uvs;
+        dst.uv0 = src.uv0;
+        dst.uv1 = src.uv1;
         dst.normal = src.normal;
         dst.tangent = src.tangent;
 
@@ -1182,10 +1202,14 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
                                  .value();
 
 
-    auto position_vb =
-            mesh.vertices |
-            std::views::transform([](const Vertex &v) { return PositionOnlyVertex{.pos = v.position, .uvs = v.uvs}; }) |
-            to<std::vector<PositionOnlyVertex>>();
+    auto position_vb = mesh.vertices | std::views::transform([](const Vertex &v) {
+                           return PositionOnlyVertex{
+                                   .pos = v.position,
+                                   .uv0 = v.uv0,
+                                   .uv1 = v.uv1,
+                           };
+                       }) |
+                       to<std::vector<PositionOnlyVertex>>();
 
     auto pos_uv_buffer = Buffer::from_slice<PositionOnlyVertex>(
                                  ctx.allocator, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,

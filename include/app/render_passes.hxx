@@ -15,6 +15,7 @@ namespace RP {
     struct FrameMarkers {
         Markers graphics{};
         Markers compute{};
+        u32 frame_index{};
     };
 
     auto setup_render_passes_for_frame(AppContext &, BoundedFrameIndex) -> void;
@@ -63,37 +64,34 @@ namespace RP {
 } // namespace RP
 
 
-auto run_rotation_pass(AppContext &, BoundedFrameIndex, BoundedLastFrameIndex, const DeviceAddress &,
+auto run_rotation_pass(AppContext &, BoundedLastFrameIndex, const DeviceAddress &,
                        const SubmitSynchronisation & = no_waits) -> TimelineValue;
 
-auto run_predepth_pass(AppContext &, VkExtent2D, std::span<const MeshInstanceRange>, std::span<const DrawRanges>, u32,
+auto run_predepth_pass(AppContext &, VkExtent2D, std::span<const MeshInstanceRange>, std::span<const DrawRanges>,
                        const SubmitSynchronisation &) -> u64;
 
-auto run_light_clustering_pass(AppContext &, BoundedFrameIndex, const SubmitSynchronisation &) -> TimelineValue;
+auto run_light_clustering_pass(AppContext &, const SubmitSynchronisation &) -> TimelineValue;
 
-auto run_directional_shadow_map_pass(AppContext &, std::span<const MeshInstanceRange>, std::span<const DrawRanges>, u32,
+auto run_directional_shadow_map_pass(AppContext &, std::span<const MeshInstanceRange>, std::span<const DrawRanges>,
                                      const SubmitSynchronisation &) -> u64;
 
-auto run_gbuffer_pass(AppContext &, VkExtent2D, std::span<const MeshInstanceRange>, std::span<const DrawRanges>, u32,
+auto run_gbuffer_pass(AppContext &, VkExtent2D, std::span<const MeshInstanceRange>, std::span<const DrawRanges>,
                       const SubmitSynchronisation &) -> u64;
 
-auto run_ssao_pass(AppContext &, VkExtent2D, BoundedFrameIndex, const SubmitSynchronisation &) -> TimelineValue;
+auto run_ssao_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 auto run_ssao_blur_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 
-auto run_deferred_lighting_pass(AppContext &, const VkExtent2D, u32 light_slot, BoundedFrameIndex,
-                                const SubmitSynchronisation &) -> TimelineValue;
-
-auto run_environment_skybox_pass(AppContext &, VkExtent2D, BoundedFrameIndex, const SubmitSynchronisation &)
+auto run_deferred_lighting_pass(AppContext &, const VkExtent2D, u32 light_slot, const SubmitSynchronisation &)
         -> TimelineValue;
+
+auto run_environment_skybox_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 
 auto run_bloom_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 
-auto run_billboard_pass(AppContext &, VkExtent2D, BoundedFrameIndex, const SubmitSynchronisation &) -> TimelineValue;
+auto run_billboard_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 
-auto run_tonemap_pass(AppContext &, const VkExtent2D, BoundedFrameIndex, const SubmitSynchronisation &)
-        -> TimelineValue;
+auto run_tonemap_pass(AppContext &, const VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 
-auto run_imgui_pass(AppContext &, BoundedFrameIndex, const SubmitSynchronisation &) -> TimelineValue;
+auto run_imgui_pass(AppContext &, const SubmitSynchronisation &) -> TimelineValue;
 
-auto run_swapchain_pass(AppContext &, const u32 swap_image_index, BoundedFrameIndex, const SubmitSynchronisation &)
-        -> TimelineValue;
+auto run_swapchain_pass(AppContext &, const u32 swap_image_index, const SubmitSynchronisation &) -> TimelineValue;

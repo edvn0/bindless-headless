@@ -146,12 +146,13 @@ namespace Tooling {
 
     struct Vertex {
         std::array<float, 3> position{};
-        u32 uvs{}; // packed half2 (x=u, y=v)
+        u32 uv0{}; // packed half2 (x=u, y=v)
+        u32 uv1{}; // packed half2 (x=u, y=v)
         u32 normal{}; // packed 10_10_10_2
         u32 tangent{}; // packed 10_10_10_2 (xyz + sign in w/2 bits)
-        u32 reserved{}; // note: keeps sizeof(Vertex)==28
+        u32 reserved{0}; // note: keeps sizeof(Vertex)==28
     };
-    static_assert(sizeof(Vertex) == 28);
+    static_assert(sizeof(Vertex) == 32);
     static_assert(std::is_trivially_copyable_v<Vertex>);
     static_assert(alignof(Vertex) == 4);
 
@@ -171,7 +172,7 @@ namespace Tooling {
         std::array<float, 3> emissive_factor{0, 0, 0};
 
         MaterialFlags flags = MaterialFlags::None;
-        u32 reserved0 = 0;
+        f32 transmission_factor = 0.0F;
     };
 
     struct Texture {

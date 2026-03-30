@@ -61,10 +61,8 @@ constexpr auto clamp_msaa_samples = [](VkPhysicalDevice physical_device,
     return VK_SAMPLE_COUNT_1_BIT;
 };
 struct FrustumPlane {
-    glm::vec4 plane; // xyz = normal, w = distance
+    glm::vec4 plane{};
 };
-
-
 auto PerspectiveRH_ReverseZ_Inf(float fovYRadians, float aspect, float zNear) -> glm::mat4;
 auto OrthoRH_ReverseZ(f32, f32, f32, f32, f32, f32) -> glm::mat4;
 
@@ -72,16 +70,12 @@ auto OrthoRH_ReverseZ(f32, f32, f32, f32, f32, f32) -> glm::mat4;
 constexpr auto extract_frustum_planes = [](const glm::mat4 &proj) -> std::array<FrustumPlane, 6> {
     std::array<FrustumPlane, 6> planes{};
 
-    // Each plane is row3 +/- rowN
-    // Row 0: proj[0][0], proj[1][0], proj[2][0], proj[3][0]
-    // Row 3: proj[0][3], proj[1][3], proj[2][3], proj[3][3]
-
     glm::vec4 row0 = {proj[0][0], proj[1][0], proj[2][0], proj[3][0]};
     glm::vec4 row1 = {proj[0][1], proj[1][1], proj[2][1], proj[3][1]};
     glm::vec4 row2 = {proj[0][2], proj[1][2], proj[2][2], proj[3][2]};
     glm::vec4 row3 = {proj[0][3], proj[1][3], proj[2][3], proj[3][3]};
 
-    planes[0].plane = row3 + row0; // left
+    planes[0].plane = row3 + row0;
     planes[1].plane = row3 - row0; // right
     planes[2].plane = row3 + row1; // bottom
     planes[3].plane = row3 - row1; // top

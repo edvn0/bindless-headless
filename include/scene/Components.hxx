@@ -15,9 +15,11 @@ struct MeshComponent {
     u32 mesh_index{0};
 };
 
+struct MaterialComponent {};
+
 struct HierarchyComponent {
     entt::entity parent = entt::null;
-    std::vector<entt::entity> children;
+    std::vector<entt::entity> children{};
 };
 
 namespace Internal {

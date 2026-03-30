@@ -34,6 +34,9 @@ struct MaterialData {
     std::string emissive_map{};
     glm::vec3 emissive_factor{0.0f};
     bool is_alpha_tested{false};
+    f32 transmission_factor{0.0F};
+    bool is_transparent{false};
+    bool has_transmission{false};
 };
 
 enum class MaterialFlags : u32 {
@@ -45,6 +48,8 @@ enum class MaterialFlags : u32 {
     Occlusion = 1 << 4,
     Emissive = 1 << 5,
     AlphaTested = 1 << 6,
+    Transparent = 1 << 7,
+    HasTransmission = 1 << 8,
     All = 0xFFFFFFFF
 };
 MAKE_BITFIELD(MaterialFlags)
@@ -75,6 +80,10 @@ inline auto to_string(const MaterialFlags &flags) -> std::string {
         append("Emissive");
     if (has(flags, MaterialFlags::AlphaTested))
         append("AlphaTested");
+    if (has(flags, MaterialFlags::Transparent))
+        append("Transparent");
+    if (has(flags, MaterialFlags::HasTransmission))
+        append("HasTransmission");
 
     result += std::format(" | ({})", static_cast<u32>(flags));
 
@@ -93,6 +102,7 @@ struct GPUMaterialData {
     u32 emissive_map{};
     glm::vec3 emissive_factor{0.0f};
     MaterialFlags flags;
+    f32 transmission_factor{0.0F};
 
     constexpr auto set_albedo_map(bool has_map) -> void {
         if (has_map)
@@ -136,12 +146,16 @@ struct GPUMaterialData {
         else
             flags &= ~MaterialFlags::AlphaTested;
     }
-
-    [[nodiscard]] constexpr auto has_albedo_map() const -> bool { return has(flags, MaterialFlags::Albedo); }
-    [[nodiscard]] constexpr auto has_normal_map() const -> bool { return has(flags, MaterialFlags::Normal); }
-    [[nodiscard]] constexpr auto has_roughness_map() const -> bool { return has(flags, MaterialFlags::Roughness); }
-    [[nodiscard]] constexpr auto has_metallic_map() const -> bool { return has(flags, MaterialFlags::Metallic); }
-    [[nodiscard]] constexpr auto has_occlusion_map() const -> bool { return has(flags, MaterialFlags::Occlusion); }
-    [[nodiscard]] constexpr auto has_emissive_map() const -> bool { return has(flags, MaterialFlags::Emissive); }
-    [[nodiscard]] constexpr auto is_alpha_tested() const -> bool { return has(flags, MaterialFlags::AlphaTested); }
+    constexpr auto set_has_transmission(bool has_transmission) -> void {
+        if (has_transmission)
+            flags |= MaterialFlags::HasTransmission;
+        else
+            flags &= ~MaterialFlags::HasTransmission;
+    }
+    constexpr auto set_is_transparent(bool is_transparent) -> void {
+        if (is_transparent)
+            flags |= MaterialFlags::Transparent;
+        else
+            flags &= ~MaterialFlags::Transparent;
+    }
 };

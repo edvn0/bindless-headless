@@ -11,7 +11,7 @@
 #include "Reflection.hxx"
 #include "Swapchain.hxx"
 
-#include "3PP/PerlinNoise.hpp"
+#include "LogFormatters.hxx"
 #include "Types.hxx"
 
 #include <chrono>
@@ -70,6 +70,8 @@ namespace {
             if (want_storage) {
                 if (format_supports_storage_image(physical_device, format, VK_IMAGE_TILING_OPTIMAL)) {
                     usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+                } else {
+                    info("Format {} does not support storage!", format);
                 }
             }
         } else {
@@ -83,7 +85,7 @@ namespace {
     }
 
     auto make_depth_image_usage(VkSampleCountFlagBits samples, bool want_sampled) -> VkImageUsageFlags {
-        VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        VkImageUsageFlags usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
 
         if (samples == VK_SAMPLE_COUNT_1_BIT && want_sampled) {
             usage |= VK_IMAGE_USAGE_SAMPLED_BIT;

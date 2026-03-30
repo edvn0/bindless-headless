@@ -1,6 +1,9 @@
 #include "Compression.hxx"
 #include "Logger.hxx"
 
+#include <bit>
+#include <fstream>
+
 #if defined(SCENE_COMPRESSION_BZIP2)
 #include <bzlib.h>
 #elif defined(SCENE_COMPRESSION_ZSTD)
@@ -12,38 +15,63 @@
 #error "No scene compression backend defined. Set SCENE_COMPRESSION in CMake."
 #endif
 
+// ── Shared prefix helper ──────────────────────────────────────────────────────
+
+static auto prepend_prefix(std::vector<char> compressed, size_t compressed_size, u64 src_hash)
+        -> std::vector<std::byte> {
+    constexpr size_t k_prefix = 16; // magic u64 + hash u64
+    std::vector<std::byte> out(k_prefix + compressed_size);
+
+    std::memcpy(out.data(), &k_prefix_magic, 8);
+    std::memcpy(out.data() + 8, &src_hash, 8);
+    std::memcpy(out.data() + k_prefix, compressed.data(), compressed_size);
+
+    return out;
+}
+
+static auto write_to_file(const std::filesystem::path &out_path, const std::vector<std::byte> &data)
+        -> tl::expected<void, Error> {
+    std::ofstream f(out_path, std::ios::binary);
+    if (!f)
+        return tl::unexpected(make_error("Failed to open file for writing: " + out_path.string()));
+
+    f.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size()));
+
+    if (!f)
+        return tl::unexpected(make_error("Failed to write file: " + out_path.string()));
+
+    return {};
+}
+
+// ── Backend implementations ───────────────────────────────────────────────────
 
 #if defined(SCENE_COMPRESSION_BZIP2)
+
+auto bzip2_compress_to_memory(std::span<const std::byte> bytes, u64 src_hash)
+        -> tl::expected<std::vector<std::byte>, Error> {
+    auto compressed_size = static_cast<unsigned int>(static_cast<float>(bytes.size()) * 1.01f + 600);
+    std::vector<char> compressed(compressed_size);
+
+    const int rc = BZ2_bzBuffToBuffCompress(compressed.data(), &compressed_size,
+                                            const_cast<char *>(std::bit_cast<const char *>(bytes.data())),
+                                            static_cast<unsigned int>(bytes.size()),
+                                            /*blockSize100k=*/9, /*verbosity=*/0, /*workFactor=*/0);
+
+    if (rc != BZ_OK)
+        return tl::unexpected(make_error(std::format("BZ2_bzBuffToBuffCompress failed: {}", rc)));
+
+    return prepend_prefix(std::move(compressed), compressed_size, src_hash);
+}
 
 auto bzip2_compress(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes, u64 src_hash)
         -> tl::expected<void, Error> {
     auto out_path = normalize_scene_out_path(out_path_no_normalize);
     info("Writing output scene file: {}", out_path.string());
 
-    auto compressed_size = static_cast<unsigned int>(static_cast<float>(bytes.size()) * 1.01f + 600);
-    std::vector<char> compressed(compressed_size);
-
-    const int bz_rc = BZ2_bzBuffToBuffCompress(compressed.data(), &compressed_size, std::bit_cast<char *>(bytes.data()),
-                                               static_cast<unsigned int>(bytes.size()),
-                                               /*blockSize100k*/ 9,
-                                               /*verbosity*/ 0,
-                                               /*workFactor*/ 0);
-
-    if (bz_rc != BZ_OK)
-        return tl::unexpected(make_error(std::format("BZ2_bzBuffToBuffCompress failed: {}", bz_rc)));
-
-    std::ofstream f(out_path, std::ios::binary);
-    if (!f)
-        return tl::unexpected(make_error("Failed to open file for writing: " + out_path.string()));
-
-    f.write(std::bit_cast<const char *>(&k_prefix_magic), 8);
-    f.write(std::bit_cast<const char *>(&src_hash), 8);
-    f.write(compressed.data(), static_cast<std::streamsize>(compressed_size));
-
-    if (!f)
-        return tl::unexpected(make_error("Failed to write file: " + out_path.string()));
-
-    return {};
+    auto result = bzip2_compress_to_memory(bytes, src_hash);
+    if (!result)
+        return tl::unexpected(result.error());
+    return write_to_file(out_path, *result);
 }
 
 auto bzip2_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
@@ -55,7 +83,7 @@ auto bzip2_decompress(std::span<const std::byte> src) -> tl::expected<std::vecto
         const int rc = BZ2_bzBuffToBuffDecompress(std::bit_cast<char *>(dst.data()), &dst_len,
                                                   const_cast<char *>(std::bit_cast<const char *>(src.data())),
                                                   static_cast<unsigned int>(src.size()),
-                                                  /*small*/ 0, /*verbosity*/ 0);
+                                                  /*small=*/0, /*verbosity=*/0);
 
         if (rc == BZ_OK) {
             dst.resize(dst_len);
@@ -70,38 +98,31 @@ auto bzip2_decompress(std::span<const std::byte> src) -> tl::expected<std::vecto
     }
     return tl::unexpected(Error::make_error(Error::Type::MeshLoadError, "bzip2 output buffer never large enough"));
 }
+
 #elif defined(SCENE_COMPRESSION_ZSTD)
 
+auto zstd_compress_to_memory(std::span<const std::byte> bytes, u64 src_hash)
+        -> tl::expected<std::vector<std::byte>, Error> {
+    const size_t bound = ZSTD_compressBound(bytes.size());
+    std::vector<char> compressed(bound);
+
+    const size_t compressed_size = ZSTD_compress(compressed.data(), bound, bytes.data(), bytes.size(), /*level=*/3);
+
+    if (ZSTD_isError(compressed_size))
+        return tl::unexpected(make_error(std::format("ZSTD_compress failed: {}", ZSTD_getErrorName(compressed_size))));
+
+    return prepend_prefix(std::move(compressed), compressed_size, src_hash);
+}
 
 auto zstd_compress(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes, u64 src_hash)
         -> tl::expected<void, Error> {
     auto out_path = normalize_scene_out_path(out_path_no_normalize);
     info("Writing output scene file: {}", out_path.string());
 
-    const size_t bound = ZSTD_compressBound(bytes.size());
-    std::vector<char> compressed(bound);
-
-    // Level 3 is the zstd sweet spot: near-bzip2 ratio, ~10x faster compress,
-    // ~25x faster decompress. Bump to 6 if you want smaller files at cost of
-    // slower conversion (still decompresses at the same speed).
-    const size_t compressed_size = ZSTD_compress(compressed.data(), bound, bytes.data(), bytes.size(),
-                                                 /*level=*/3);
-
-    if (ZSTD_isError(compressed_size))
-        return tl::unexpected(make_error(std::format("ZSTD_compress failed: {}", ZSTD_getErrorName(compressed_size))));
-
-    std::ofstream f(out_path, std::ios::binary);
-    if (!f)
-        return tl::unexpected(make_error("Failed to open file for writing: " + out_path.string()));
-
-    f.write(std::bit_cast<const char *>(&k_prefix_magic), 8);
-    f.write(std::bit_cast<const char *>(&src_hash), 8);
-    f.write(compressed.data(), static_cast<std::streamsize>(compressed_size));
-
-    if (!f)
-        return tl::unexpected(make_error("Failed to write file: " + out_path.string()));
-
-    return {};
+    auto result = zstd_compress_to_memory(bytes, src_hash);
+    if (!result)
+        return tl::unexpected(result.error());
+    return write_to_file(out_path, *result);
 }
 
 auto zstd_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
@@ -113,7 +134,6 @@ auto zstd_decompress(std::span<const std::byte> src) -> tl::expected<std::vector
                 Error::make_error(Error::Type::MeshLoadError, "zstd: content size unknown (streaming frame?)"));
 
     std::vector<std::byte> dst(static_cast<size_t>(content_size));
-
     const size_t result = ZSTD_decompress(dst.data(), dst.size(), src.data(), src.size());
 
     if (ZSTD_isError(result))
@@ -125,11 +145,8 @@ auto zstd_decompress(std::span<const std::byte> src) -> tl::expected<std::vector
 
 #elif defined(SCENE_COMPRESSION_LZ4)
 
-auto lz4_compress(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes, u64 src_hash)
-        -> tl::expected<void, Error> {
-    auto out_path = normalize_scene_out_path(out_path_no_normalize);
-    info("Writing output scene file: {}", out_path.string());
-
+auto lz4_compress_to_memory(std::span<const std::byte> bytes, u64 src_hash)
+        -> tl::expected<std::vector<std::byte>, Error> {
     LZ4F_preferences_t prefs = LZ4F_INIT_PREFERENCES;
     prefs.frameInfo.contentSize = bytes.size();
     prefs.compressionLevel = LZ4HC_CLEVEL_DEFAULT;
@@ -143,20 +160,19 @@ auto lz4_compress(const std::filesystem::path &out_path_no_normalize, std::span<
         return tl::unexpected(
                 make_error(std::format("LZ4F_compressFrame failed: {}", LZ4F_getErrorName(compressed_size))));
 
-    std::ofstream f(out_path, std::ios::binary);
-    if (!f)
-        return tl::unexpected(make_error("Failed to open file for writing: " + out_path.string()));
-
-    f.write(std::bit_cast<const char *>(&k_prefix_magic), 8);
-    f.write(std::bit_cast<const char *>(&src_hash), 8);
-    f.write(compressed.data(), static_cast<std::streamsize>(compressed_size));
-
-    if (!f)
-        return tl::unexpected(make_error("Failed to write file: " + out_path.string()));
-
-    return {};
+    return prepend_prefix(std::move(compressed), compressed_size, src_hash);
 }
 
+auto lz4_compress(const std::filesystem::path &out_path_no_normalize, std::span<std::byte> bytes, u64 src_hash)
+        -> tl::expected<void, Error> {
+    auto out_path = normalize_scene_out_path(out_path_no_normalize);
+    info("Writing output scene file: {}", out_path.string());
+
+    auto result = lz4_compress_to_memory(bytes, src_hash);
+    if (!result)
+        return tl::unexpected(result.error());
+    return write_to_file(out_path, *result);
+}
 
 auto lz4_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<std::byte>, Error> {
     LZ4F_dctx *ctx = nullptr;
@@ -196,7 +212,21 @@ auto lz4_decompress(std::span<const std::byte> src) -> tl::expected<std::vector<
     dst.resize(dst_size);
     return dst;
 }
+
 #endif
+
+// ── Public interface ──────────────────────────────────────────────────────────
+
+auto scene_compress_to_memory(std::span<const std::byte> data, u64 src_hash)
+        -> tl::expected<std::vector<std::byte>, Error> {
+#if defined(SCENE_COMPRESSION_BZIP2)
+    return bzip2_compress_to_memory(data, src_hash);
+#elif defined(SCENE_COMPRESSION_ZSTD)
+    return zstd_compress_to_memory(data, src_hash);
+#elif defined(SCENE_COMPRESSION_LZ4)
+    return lz4_compress_to_memory(data, src_hash);
+#endif
+}
 
 auto scene_compress(const std::filesystem::path &out_path, std::span<std::byte> bytes, u64 src_hash)
         -> tl::expected<void, Error> {

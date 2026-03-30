@@ -14,13 +14,14 @@ struct ShadowPC {
 
 struct VertexInput {
     float3 position;
-    uint uvs;
+    uint uv0;
+    uint uv1;
 };
 
 struct VSOut {
     float4 position : SV_Position;
     nointerpolation uint material_id : TEXCOORD0;
-    float2 uvs : TEXCOORD1;
+    float2 uvs[2] : TEXCOORD1;
 };
 
 [shader("vertex")]
@@ -47,7 +48,8 @@ VSOut shadow_vs_mdi(
     
     float4 world_pos = mul(model, float4(input.position, 1.0));
     o.position = mul(pc.light_view_proj, world_pos);
-    o.uvs = unpackHalf2x16ToFloat(input.uvs);
+    o.uvs[0] = unpackHalf2x16ToFloat(input.uv0);
+    o.uvs[1] = unpackHalf2x16ToFloat(input.uv1);
     
     return o;
 }
@@ -56,7 +58,7 @@ VSOut shadow_vs_mdi(
 void shadow_fs_main(VSOut i, uniform ShadowPC pc)
 {
     Material mat = pc.materials[i.material_id];
-    float alpha = sample_texture(i.uvs, mat.albedo_map, 0).a;
+    float alpha = sample_texture(i.uvs[0], mat.albedo_map, 0).a;
 
     if (alpha < alpha_cutoff) {
         discard;

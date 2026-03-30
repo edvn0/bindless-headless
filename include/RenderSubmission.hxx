@@ -57,4 +57,4 @@ struct WatermarkedQueue {
 using RenderQueue = WatermarkedQueue<MeshSubmission>;
 
 // Per frame work - submits meshes to the renderer.
-auto submit_mesh_instances(Scene &scene, RenderQueue &queue) -> void;
+auto submit_mesh_instances(const Scene &scene, RenderQueue &queue) -> void;

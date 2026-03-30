@@ -22,6 +22,7 @@ struct Error {
         SceneLoaderError,
         WindowError,
         SwapchainError,
+        CliError,
         UnknownError
     };
 

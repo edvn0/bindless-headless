@@ -4,12 +4,8 @@
 
 #include "scene/Components.hxx"
 
-auto submit_mesh_instances(Scene &scene, RenderQueue &queue) -> void {
-    scene.registry.sort<MeshComponent>(
-            [](const auto &lhs, const auto &rhs) { return lhs.mesh_index < rhs.mesh_index; });
-    scene.registry.sort<TransformComponent, MeshComponent>();
-    auto view = scene.registry.view<MeshComponent, TransformComponent>();
-    for (auto &&[e, mesh, xform]: view.each()) {
+auto submit_mesh_instances(const Scene &scene, RenderQueue &queue) -> void {
+    for (auto &&[e, mesh, xform]: scene.mesh_group.each()) {
         queue.submit({
                 .transform = xform.local_to_world,
                 .mesh_index = mesh.mesh_index,
