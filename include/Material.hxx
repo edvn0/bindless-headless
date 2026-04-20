@@ -37,6 +37,7 @@ struct MaterialData {
     f32 transmission_factor{0.0F};
     bool is_transparent{false};
     bool has_transmission{false};
+    bool is_double_sided{false};
 };
 
 enum class MaterialFlags : u32 {
@@ -50,6 +51,7 @@ enum class MaterialFlags : u32 {
     AlphaTested = 1 << 6,
     Transparent = 1 << 7,
     HasTransmission = 1 << 8,
+    DoubleSided = 1 << 9,
     All = 0xFFFFFFFF
 };
 MAKE_BITFIELD(MaterialFlags)
@@ -84,6 +86,8 @@ inline auto to_string(const MaterialFlags &flags) -> std::string {
         append("Transparent");
     if (has(flags, MaterialFlags::HasTransmission))
         append("HasTransmission");
+    if (has(flags, MaterialFlags::DoubleSided))
+        append("DoubleSided");
 
     result += std::format(" | ({})", static_cast<u32>(flags));
 
@@ -157,5 +161,16 @@ struct GPUMaterialData {
             flags |= MaterialFlags::Transparent;
         else
             flags &= ~MaterialFlags::Transparent;
+    }
+    constexpr auto set_is_double_sided(bool is_double_sided) -> void {
+        if (is_double_sided)
+            flags |= MaterialFlags::DoubleSided;
+        else
+            flags &= ~MaterialFlags::DoubleSided;
+    }
+
+    template<MaterialFlags Flag>
+    auto is_set() const -> bool {
+        return has(flags, Flag);
     }
 };

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.31)
 project(BindlessHeadless LANGUAGES CXX C)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
 set(CMAKE_CXX_STANDARD 23)

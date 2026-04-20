@@ -298,9 +298,6 @@ namespace Tooling {
             return static_cast<u32>(*tex.imageIndex);
         };
 
-        // -- Textures + Materials ---------------------------------------------
-        // KTX2 loads are simple file reads, so we do them inline with material
-        // construction — no separate encode phase needed.
         trace("  [2/4] loading KTX2 textures and building materials...");
         const auto t_mat = std::chrono::steady_clock::now();
 
@@ -378,6 +375,13 @@ namespace Tooling {
             if (auto t = try_load(resolve_tex_to_image(m.emissiveTexture))) {
                 out.emissive_map = *t;
                 out.flags |= MaterialFlags::Emissive;
+            }
+
+            // Double sided?
+            if (m.doubleSided) {
+                out.flags |= MaterialFlags::DoubleSided;
+                error("Material '{}' has double-sided flag set, but no occlusion map",
+                      m.name.empty() ? "unnamed" : m.name);
             }
 
             if (out.flags == MaterialFlags::None) {
@@ -631,7 +635,6 @@ namespace Tooling {
         header.texture_blob.size = w.size() - texture_blob_begin;
         w.patch_pod<FileHeader>(header_offset, header);
 
-        // -- Compress + write -------------------------------------------------
         ensure_directory(out_abs_no_normalize.parent_path());
 
         auto compressed = scene_compress_to_memory(w.data(), src_hash);

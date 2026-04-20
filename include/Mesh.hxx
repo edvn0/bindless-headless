@@ -146,8 +146,8 @@ struct StaticMesh {
     MeshData mesh;
     Vec<VkDrawIndexedIndirectCommand> indirect_template;
 
-    u32 material_pool_base{0}; // index of first material in global GPUMaterialPool
-    u32 material_count{0}; // how many materials this mesh owns in the pool
+    u32 material_pool_base{0};
+    u32 material_count{0};
 
     BufferHandle vertex_buffer;
     BufferHandle pos_uv_buffer;

@@ -22,7 +22,7 @@ struct LightVisibility
     uint x0, x1;
     uint y0, y1;
     uint z0, z1;
-    uint is_visible; 
+    uint is_visible;
     uint _pad;
 };
 
@@ -66,18 +66,15 @@ struct InstanceData {
 
 float4 unpackSnorm3x10_1x2(uint packed)
 {
-    // Extract 10-bit fields
     int x = int(packed & 0x3FF);           // bits 0..9
     int y = int((packed >> 10) & 0x3FF);   // bits 10..19
     int z = int((packed >> 20) & 0x3FF);   // bits 20..29
     int w = int((packed >> 30) & 0x3);     // bits 30..31
 
-    // Sign-extend 10-bit values
     if (x >= 512) x -= 1024;
     if (y >= 512) y -= 1024;
     if (z >= 512) z -= 1024;
 
-    // Convert to normalized floats
     return float4(
         float(x) / 511.0,
         float(y) / 511.0,
@@ -106,6 +103,21 @@ struct Cube {
     float4 colour_intensity;
 };
 
+/*
+enum class MaterialFlags : u32 {
+    None = 0,
+    Albedo = 1 << 0,
+    Normal = 1 << 1,
+    Roughness = 1 << 2,
+    Metallic = 1 << 3,
+    Occlusion = 1 << 4,
+    Emissive = 1 << 5,
+    AlphaTested = 1 << 6,
+    Transparent = 1 << 7,
+    HasTransmission = 1 << 8,
+    DoubleSided = 1 << 9,
+    All = 0xFFFFFFFF
+};*/
 static const uint FLAG_ALBEDO_MAP    = 1 << 0;
 static const uint FLAG_NORMAL_MAP    = 1 << 1;
 static const uint FLAG_ROUGHNESS_MAP = 1 << 2;
@@ -113,6 +125,10 @@ static const uint FLAG_METALLIC_MAP  = 1 << 3;
 static const uint FLAG_OCCLUSION_MAP = 1 << 4;
 static const uint FLAG_EMISSIVE_MAP  = 1 << 5;
 static const uint FLAG_IS_ALPHA_TESTED  = 1 << 6;
+static const uint FLAG_IS_TRANSPARENT  = 1 << 7;
+static const uint FLAG_HAS_TRANSMISSION = 1 << 8;
+static const uint FLAG_DOUBLE_SIDED    = 1 << 9;
+
 
 struct Material {
     uint albedo_map;
@@ -135,6 +151,9 @@ struct Material {
     bool has_occlusion_map()  { return (flags & FLAG_OCCLUSION_MAP) != 0; }
     bool has_emissive_map()  { return (flags & FLAG_EMISSIVE_MAP) != 0; }
     bool is_alpha_tested()  { return (flags & FLAG_IS_ALPHA_TESTED) != 0; }
+    bool is_double_sided()  { return (flags & FLAG_DOUBLE_SIDED) != 0; }
+    bool is_transparent()  { return (flags & FLAG_IS_TRANSPARENT) != 0; }
+    bool has_transmission()  { return (flags & FLAG_HAS_TRANSMISSION) != 0; }
 };
 
 
@@ -147,7 +166,7 @@ SamplerState samplers[];
 [[vk::binding(2, 0)]]
 RWTexture2D<float4> storage_images[];
 
-[[vk::binding(3, 0)]] 
+[[vk::binding(3, 0)]]
 SamplerComparisonState comparison_samplers[];
 
 [[vk::binding(4, 0)]]
@@ -172,6 +191,19 @@ float4 sample_texture(float2 uv, uint image_index, uint sampler_index = 0)
     return sampled_images[tex_idx].Sample(samplers[samp_idx], uv);
 }
 
+uint sample_texture_uint(float2 uv, uint image_index, uint component, uint sampler_index = 0)
+{
+    uint tex_idx = NonUniformResourceIndex(image_index);
+    uint samp_idx = NonUniformResourceIndex(sampler_index);
+
+    var image_as_uint_image = sampled_images[tex_idx] as Texture2D<uint4>;
+    if (image_as_uint_image.hasValue) {
+        return image_as_uint_image.value.Sample(samplers[samp_idx], uv)[component];
+    } else {
+        return 0;
+    }
+}
+
 RWTexture2D<float4> get_storage_image(uint image_index) {
     return storage_images[NonUniformResourceIndex(image_index)];
 }
@@ -184,11 +216,11 @@ float3 reconstruct_world_position_from_depth(float2 uv, float depth, Ptr<UBO, Ac
 {
     float2 ndc_xy = uv * 2.0 - 1.0;
 
-    ndc_xy.y = -ndc_xy.y; 
+    ndc_xy.y = -ndc_xy.y;
 
     float4 clip = float4(ndc_xy, depth, 1.0);
     float4 world = mul(ubo->inv_view_projection, clip);
-    
+
     return world.xyz / world.w;
 }
 
@@ -196,26 +228,26 @@ float calculate_shadow(float3 world_pos, float4x4 shadow_matrix, uint tex_idx, u
 {
     float4 shadow_coord = mul(shadow_matrix, float4(world_pos, 1.0));
     float3 ndc = shadow_coord.xyz / shadow_coord.w;
-    
+
     float2 shadow_uv = float2(
         ndc.x * 0.5 + 0.5,
-        ndc.y * -0.5 + 0.5  
+        ndc.y * -0.5 + 0.5
     );
-    
+
     if (any(shadow_uv < 0.0) || any(shadow_uv > 1.0))
         return 1.0;
-    
+
     uint t_idx = NonUniformResourceIndex(tex_idx);
     uint cs_idx = NonUniformResourceIndex(comp_samp_idx);
-    
-    const float bias = 0.0005; 
-    float reference_depth = ndc.z - bias;      
+
+    const float bias = 0.0005;
+    float reference_depth = ndc.z - bias;
     reference_depth = saturate(reference_depth);
     float lit_factor = sampled_images[t_idx].SampleCmp(
         comparison_samplers[cs_idx],
         shadow_uv,
         reference_depth
     );
-    
+
     return lit_factor;
 }

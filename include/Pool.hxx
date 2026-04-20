@@ -181,7 +181,7 @@ public:
 
         entries[index].object = ImplObjectType{};
         entries[index].live = false;
-        entries[index].generation++;
+        std::ignore = entries[index].generation++;
         entries[index].next_free = free_list_head;
         free_list_head = index;
         object_count--;

@@ -81,8 +81,7 @@ auto run_gbuffer_pass(AppContext &, VkExtent2D, std::span<const MeshInstanceRang
 auto run_ssao_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 auto run_ssao_blur_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 
-auto run_deferred_lighting_pass(AppContext &, const VkExtent2D, u32 light_slot, const SubmitSynchronisation &)
-        -> TimelineValue;
+auto run_deferred_lighting_pass(AppContext &, const VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 
 auto run_environment_skybox_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 

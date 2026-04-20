@@ -24,6 +24,7 @@
 #include "Constants.hxx"
 #include "DeviceThreadPool.hxx"
 #include "ImGuizmo.h"
+#include "LogFormatters.hxx"
 #include "Logger.hxx"
 #include "Pipelines.hxx"
 #include "RenderDoc.hxx"
@@ -1011,7 +1012,7 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
 
         auto ssao_noise_kernel = []() -> std::array<glm::vec4, 16> {
             std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-            std::default_random_engine rng{std::random_device{}()};
+            auto rng{static_cast<std::default_random_engine>(std::random_device{}())};
 
             std::array<glm::vec4, 16> noise{};
             for (auto &n: noise) {
@@ -1347,6 +1348,7 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
                             gbuffer_mrt_and_lighting_code.at(0), gbuffer_mrt_and_lighting_code.at(1),
                             VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
                             VK_FORMAT_D32_SFLOAT);
+
 
                     auto gbuf_light = create_deferred_lighting_graphics_pipeline(
                             gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout,
@@ -1854,8 +1856,6 @@ gpu.bindless.need_repopulate = true;
         all_mesh_ranges.reserve(res.mesh_instance_ranges.size());
         for (const auto &mir: res.mesh_instance_ranges) {
             auto &mesh = res.meshes.at(mir.mesh_index);
-            if (mir.instance_count == 0)
-                continue;
             all_mesh_ranges.push_back(write_mesh_indirect(gpu.ctx, bounded_frame_index, write_buffers, mesh.mesh,
                                                           MeshDrawInfo{
                                                                   .mesh_index = mir.mesh_index,
@@ -1866,8 +1866,8 @@ gpu.bindless.need_repopulate = true;
                                                           }));
         }
 
-        const u32 light_slot = reserve_light_volumes(gpu.ctx, bounded_frame_index, res.draw_stream.writer,
-                                                     res.mesh_indirect_ring, res.draw_material_id_ring, 0u);
+        reserve_light_volumes(gpu.ctx, bounded_frame_index, res.draw_stream.writer, res.mesh_indirect_ring,
+                              res.draw_material_id_ring, 0u);
 
         auto &fs = res.frames[bounded_frame_index];
 
@@ -2018,9 +2018,8 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::DeferredLighting)] =
-                    run_deferred_lighting_pass(app_context, render_scene_extent, light_slot,
-                                               SubmitSynchronisation{.timeline_waits = deferred_waits});
+            fs.timeline_values[stage_index(Stage::DeferredLighting)] = run_deferred_lighting_pass(
+                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = deferred_waits});
         }
 
         {

@@ -183,9 +183,8 @@ namespace detail {
                                                 .pObjectName = name.data()};
 
         if (auto res = set_debug_name_func(dev, &name_info)) {
-            vk_check(*res); // function existed; check VkResult
+            vk_check(*res);
         }
-        // else: extension not present -> no-op
     }
 
     auto set_debug_name_impl(VmaAllocator &alloc, VkObjectType object_type, std::uint64_t object_handle,
@@ -1707,7 +1706,7 @@ auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device,
 constexpr u32 max_in_flight_frames = 2;
 
 template<typename TL>
-constexpr auto max_in_flight_submits() -> u64 {
+consteval auto max_in_flight_submits() -> u64 {
     return static_cast<u64>(max_in_flight_frames) * TL::submits_per_frame;
 }
 

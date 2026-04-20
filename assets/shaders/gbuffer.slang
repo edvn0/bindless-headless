@@ -17,7 +17,7 @@ struct SurfaceMaterial {
 
 float3 sample_normal_map_ts(float2 uv, uint normal_map_index, uint sampler_index) {
     float4 s = sample_texture(uv, normal_map_index, sampler_index);
-    float2 nml = s.ga; // X=R, Y=G
+    float2 nml = s.xy; // X=R, Y=G
     nml = nml * 2.0 - 1.0;
     float z = sqrt(saturate(1.0 - dot(nml, nml)));
     return float3(nml.x, nml.y, z);
@@ -50,7 +50,6 @@ SurfaceMaterial evaluate_material_tbn(Material mat, float4 multi_uv, float3 n_ws
         surf.albedo = mat.albedo_factor.rgba;
     }
 
-    // Normal (tangent-space -> world-space)
     float3 N = safe_normalize(n_ws_geom);
     if (mat.has_normal_map()) {
         float3 n_ts = sample_normal_map_ts(uv, mat.normal_map, sampler_index);
@@ -60,7 +59,7 @@ SurfaceMaterial evaluate_material_tbn(Material mat, float4 multi_uv, float3 n_ws
 
     // Roughness
     if (mat.has_roughness_map()) {
-        float r = sample_texture(uv, mat.roughness_map, sampler_index).r;
+        float r = sample_texture(uv, mat.roughness_map, sampler_index).g;
         surf.roughness = r * mat.roughness_factor;
     } else {
         surf.roughness = mat.roughness_factor;
@@ -94,9 +93,6 @@ SurfaceMaterial evaluate_material_tbn(Material mat, float4 multi_uv, float3 n_ws
     return surf;
 }
 
-// -------------------------------------------------------------------------------------------------
-// PBR lighting (same model you already use)
-// -------------------------------------------------------------------------------------------------
 static const float PI = 3.14159265359;
 
 float3 fresnel_schlick(float cos_theta, float3 f0) { return f0 + (1.0 - f0) * pow(saturate(1.0 - cos_theta), 5.0); }
@@ -174,12 +170,9 @@ float3 evaluate_point_light_pbr(PointLight light, float3 world_pos, float3 V, fl
 
     float3 L = L_unnorm / dist;
 
-    // Physical 1/r² with a normalisation reference so intensity=1 means
-    // "1 unit of brightness at sqrt(ref_dist_sq) units away"
     static const float ref_dist_sq = 1.0;
     float inv_sq = ref_dist_sq / max(dist_sq, 0.01);
 
-    // UE4-style window: guaranteed zero at dist==radius, smooth derivative
     float radius_sq = radius * radius;
     float ratio_sq = dist_sq / radius_sq;
     float window = saturate(1.0 - ratio_sq * ratio_sq);
@@ -287,12 +280,12 @@ struct VertexOutput {
 };
 
 struct RenderingPushConstants {
-    Ptr<UBO, Access.Read, AddressSpace.Device> frame_ubo;
-    Ptr<InstanceData, Access.Read, AddressSpace.Device> instance_data;
-    Ptr<uint, Access.Read, AddressSpace.Device> draw_material_ids;
-    Ptr<Material, Access.Read, AddressSpace.Device> materials;
+    DeviceReadPtr<UBO> frame_ubo;
+    DeviceReadPtr<InstanceData> instance_data;
+    DeviceReadPtr<uint> draw_material_ids;
+    DeviceReadPtr<Material> materials;
     uint base_draw_id;
-    uint sampler_index; // choose which sampler to use for material textures
+    uint sampler_index;
 };
 
 [shader("vertex")] VertexOutput
@@ -454,12 +447,12 @@ struct VSOut {
     float3 albedo = g0.rgb;
     float ao = saturate(g0.a);
 
-    float2 oct_u = g1.xy;
-    float rough = clamp(g1.z, 0.04, 1.0);
-    float metal = saturate(g1.w);
+    float rough = clamp(g1.g, 0.04, 1.0);
+    float metal = saturate(g1.a);
 
     float3 emissive = g2.rgb;
 
+    float2 oct_u = g1.xy;
     float3 N = oct_decode(oct_u);
     float3 world_pos = reconstruct_world_position_from_depth(uv, depth, pc.frame_ubo);
     float shadow_factor =
@@ -492,42 +485,18 @@ struct VSOut {
     }
 
     color += emissive;
-    if (pc.debug_mode == 1) {
-        uint cluster_z = uint(log2(max(-view_pos.z / pc.z_near, 1.0)) * pc.log_z_scale);
-        cluster_z = min(cluster_z, pc.tiles_z - 1);
-        // Visualise Z slice as a colour
-        float t = float(cluster_z) / float(pc.tiles_z);
-        return float4(t, 1.0 - t, 0.0, 1.0);
-    }
-    if (pc.debug_mode == 2) {
-        float t = float(cluster.light_count) / 128.0;
-        return float4(t, t, t, 1.0);
-    }
-    if (pc.debug_mode == 3) {
-        return view_pos.z > 0.0 ? float4(1.0, 0.0, 0.0, 1.0) : float4(0.0, 1.0, 0.0, 1.0);
-    }
-    if (pc.debug_mode == 4) {
-        uint cluster_y_idx = (cluster_idx % (pc.tiles_x * pc.tiles_y)) / pc.tiles_x;
-        uint cluster_x_idx = cluster_idx % pc.tiles_x;
-
-        float2 ndc_min = float2((float(cluster_x_idx) / float(pc.tiles_x)) * 2.0 - 1.0,
-                                -(float(cluster_y_idx) / float(pc.tiles_y)) * 2.0 - 1.0);
-        float2 ndc_max = float2((float(cluster_x_idx + 1) / float(pc.tiles_x)) * 2.0 - 1.0,
-                                -(float(cluster_y_idx + 1) / float(pc.tiles_y)) * 2.0 - 1.0);
-
-        float4x4 inv_proj = pc.frame_ubo->inv_projection;
-        float3 tl = unproject_to_view(inv_proj, float2(ndc_min.x, ndc_max.y), 1.0);
-        float3 tr = unproject_to_view(inv_proj, float2(ndc_max.x, ndc_max.y), 1.0);
-        float3 bl = unproject_to_view(inv_proj, float2(ndc_min.x, ndc_min.y), 1.0);
-        float3 br = unproject_to_view(inv_proj, float2(ndc_max.x, ndc_min.y), 1.0);
-
-        float3 vp_norm = safe_normalize(view_pos);
-
-        float3 plane_n = safe_normalize(cross(bl, br));
-
-
-        float d = dot(plane_n, vp_norm);
-        return float4(d > 0.0 ? d : 0.0, d < 0.0 ? -d : 0.0, 0.0, 1.0);
-    }
+    if (pc.debug_mode == 1) return float4(N * 0.5 + 0.5, 1.0);  // world normals
+if (pc.debug_mode == 2) return float4(albedo, 1.0);           // albedo
+if (pc.debug_mode == 3) return float4(float3(ao), 1.0);       // AO
+if (pc.debug_mode == 4) return float4(float3(rough), 1.0);    // roughness
+if (pc.debug_mode == 5) {
+    uint id = sample_texture_uint(uv, pc.gbuffer2_index, 3, pc.sampler_index); // material ID stored in emissive alpha
+    return float4(
+        frac(float(id) * 0.1234),
+        frac(float(id) * 0.5678),
+        frac(float(id) * 0.9012),
+        1.0
+    );
+}
     return float4(color, 1.0);
 }

@@ -20,7 +20,6 @@
 #include "Error.hxx"
 #include "Logger.hxx"
 #include "Numeric.hxx"
-#include "StringPool.hxx"
 
 using VmaAllocation = struct VmaAllocation_T *;
 struct VmaAllocationInfo;
@@ -40,9 +39,9 @@ struct string_hash {
 
     static constexpr auto hasher = std::hash<std::string_view>{};
 
-    auto operator()(const std::string_view v) const noexcept -> std::size_t { return hasher(v); }
-    auto operator()(std::string const &s) const noexcept -> std::size_t { return hasher(s); }
-    auto operator()(char const *s) const noexcept -> std::size_t { return hasher(s); }
+    auto operator()(const std::string_view v) const noexcept -> usize { return hasher(v); }
+    auto operator()(std::string const &s) const noexcept -> usize { return hasher(s); }
+    auto operator()(char const *s) const noexcept -> usize { return hasher(s); }
 };
 
 struct string_eq {
@@ -57,7 +56,7 @@ using StringMap = std::unordered_map<std::string, V, string_hash, string_eq>;
 enum class DeviceAddress : std::uint64_t {
     Invalid = 0,
 };
-template<std::size_t N>
+template<usize N>
 using DeviceAddresses = std::array<const DeviceAddress, N>;
 
 template<typename>
@@ -165,7 +164,7 @@ inline auto is_3d_view(VkImageViewType t) -> bool { return t == VK_IMAGE_VIEW_TY
 struct FrameStats {
     Vec<double> samples;
 
-    std::size_t count = 0;
+    usize count = 0;
     double mean = 0.0;
     double m2 = 0.0;
     double sum = 0.0;
@@ -175,7 +174,7 @@ struct FrameStats {
     mutable Vec<double> sorted;
     mutable bool sorted_dirty = true;
 
-    explicit FrameStats(std::size_t capacity = 0) {
+    explicit FrameStats(usize capacity = 0) {
         if (capacity) {
             samples.reserve(capacity);
             sorted.reserve(capacity);
@@ -195,7 +194,7 @@ struct FrameStats {
         max = -std::numeric_limits<double>::infinity();
     }
 
-    auto reserve(std::size_t capacity) -> void {
+    auto reserve(usize capacity) -> void {
         samples.reserve(capacity);
         sorted.reserve(capacity);
     }
@@ -426,7 +425,7 @@ struct LatestBuffer {
 };
 
 
-constexpr std::size_t next_power_of_two(std::size_t n) {
+constexpr usize next_power_of_two(usize n) {
     if (n == 0)
         return 1;
     return std::bit_ceil(n);
@@ -455,24 +454,3 @@ constexpr std::string_view error_to_string(Error::Type type) {
             return "Invalid Error Type";
     }
 }
-
-namespace std {
-    template<>
-    struct formatter<FrameStats::Quartiles> : formatter<double> {
-        auto format(const FrameStats::Quartiles &q, auto &ctx) const {
-            using std::format_to;
-            format_to(ctx.out(), "Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, IQR: {:.3f}", q.q1, q.q2, q.q3, q.iqr);
-            return ctx.out();
-        }
-    };
-
-    // Error
-    template<>
-    struct formatter<Error> : formatter<string_view> {
-        auto format(const Error &err, format_context &ctx) const {
-            std::string s = std::format("[{}] {} (at {}:{}:{})", error_to_string(err.type), err.message,
-                                        err.location.file_name(), err.location.line(), err.location.column());
-            return std::formatter<std::string_view>::format(s, ctx);
-        }
-    };
-} // namespace std

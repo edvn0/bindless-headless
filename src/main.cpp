@@ -18,6 +18,7 @@
 #include <ranges>
 #include <thread>
 
+#include "LogFormatters.hxx"
 #include "Logger.hxx"
 #include "RenderDoc.hxx"
 #include "SceneLoader.hxx"
@@ -77,11 +78,17 @@ auto main(int argc, char **argv) -> int {
                lyra::opt(opts.msaa, "n")["--msaa"]("MSAA sample count") |
                lyra::opt(opts.disable_output_images)["--no-output"]("Skip writing output images");
 
-    if (auto r = cli.parse({argc, argv}); !r) {
-        error("Argument error: {}", r.message());
+    auto cli_parse_result = cli.parse({argc, argv});
+    if (!cli.parse({argc, argv})) {
+        error("Argument error: {}", cli_parse_result.message());
         return 1;
     }
-
+    if (opts.show_help || !cli_parse_result) {
+        std::stringstream ss;
+        ss << cli;
+        info("Usage:\n{}", ss.str());
+        return 0;
+    }
 
     {
         std::counting_semaphore<> transcode_sem{std::thread::hardware_concurrency()};

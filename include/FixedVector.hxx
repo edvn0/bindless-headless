@@ -72,8 +72,6 @@ public:
 
     constexpr ~FixedVector() { clear(); }
 
-    // --- Element access ---
-
     [[nodiscard]] constexpr auto at(size_type i) noexcept -> reference {
         if (i >= m_size)
             std::abort();

@@ -18,6 +18,7 @@
 #include <lyra/arg.hpp>
 #include <lyra/cli.hpp>
 #include <lyra/help.hpp>
+#include "Logger.hxx"
 #ifdef _WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -30,15 +31,17 @@
 
 #include <Magick++.h>
 
+#include <3PP/stb_image_resize2.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <future>
-#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "LogFormatters.hxx"
 
 namespace fs = std::filesystem;
 
@@ -61,6 +64,15 @@ static bool is_normal_map(const fs::path &path) {
     return false;
 }
 
+static bool is_base_color(const fs::path &path) {
+    const std::string stem = stem_lower(path);
+    for (std::string_view suffix: {"_basecolor", "_base_color", "_albedo", "_diffuse"}) {
+        if (str_ends_with(stem, suffix))
+            return true;
+    }
+    return false;
+}
+
 enum class SourceKind { k_png, k_jpg };
 
 struct SourceFile {
@@ -69,12 +81,8 @@ struct SourceFile {
     SourceKind kind;
 };
 
-struct ConvertResult {
-    bool success;
-    std::string message;
-};
-
-static ConvertResult convert_to_ktx2(const SourceFile &src, const fs::path &output_dir, bool normal_mode) {
+// Returns true on success; logs info/error internally.
+static bool convert_to_ktx2(const SourceFile &src, const fs::path &output_dir, bool normal_mode) {
     const std::string display_name = src.orig_name.filename().string();
 
     Magick::Image img;
@@ -90,11 +98,43 @@ static ConvertResult convert_to_ktx2(const SourceFile &src, const fs::path &outp
     const auto *raw = static_cast<const uint8_t *>(blob.data());
 
     const bool is_normal = is_normal_map(src.orig_name) && normal_mode;
-    const bool is_srgb = !is_normal;
+    const bool is_base_col = !is_normal && is_base_color(src.orig_name);
+    const bool is_srgb = !is_normal && (is_base_col || src.kind == SourceKind::k_jpg);
+
+    const char *fmt_desc = is_normal     ? "normal map (UASTC)"
+                           : is_base_col ? "sRGB base color (UASTC)"
+                           : is_srgb     ? "sRGB (UASTC)"
+                                         : "linear (UASTC)";
 
     const size_t npixels = static_cast<size_t>(width) * height;
     std::vector<uint8_t> pixels(npixels * 4);
     std::memcpy(pixels.data(), raw, npixels * 4);
+
+    const uint32_t mip_count =
+            1u + static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(std::max(width, height)))));
+
+    std::vector<std::vector<uint8_t>> mip_chain;
+    mip_chain.reserve(mip_count);
+    mip_chain.push_back(pixels);
+
+    for (uint32_t level = 1; level < mip_count; ++level) {
+        const uint32_t sw = std::max(1u, width >> (level - 1));
+        const uint32_t sh = std::max(1u, height >> (level - 1));
+        const uint32_t dw = std::max(1u, sw / 2);
+        const uint32_t dh = std::max(1u, sh / 2);
+
+        std::vector<uint8_t> dst(dw * dh * 4);
+
+        if (is_srgb) {
+            stbir_resize_uint8_srgb(mip_chain[level - 1].data(), static_cast<int>(sw), static_cast<int>(sh), 0,
+                                    dst.data(), static_cast<int>(dw), static_cast<int>(dh), 0, STBIR_RGBA);
+        } else {
+            stbir_resize_uint8_linear(mip_chain[level - 1].data(), static_cast<int>(sw), static_cast<int>(sh), 0,
+                                      dst.data(), static_cast<int>(dw), static_cast<int>(dh), 0, STBIR_RGBA);
+        }
+
+        mip_chain.push_back(std::move(dst));
+    }
 
     const uint32_t vk_format = is_srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
 
@@ -104,20 +144,25 @@ static ConvertResult convert_to_ktx2(const SourceFile &src, const fs::path &outp
     tci.baseHeight = height;
     tci.baseDepth = 1;
     tci.numDimensions = 2;
-    tci.numLevels = 1;
+    tci.numLevels = mip_count;
     tci.numLayers = 1;
     tci.numFaces = 1;
     tci.isArray = KTX_FALSE;
 
     ktxTexture2 *ktx{};
     if (const auto err = ktxTexture2_Create(&tci, KTX_TEXTURE_CREATE_ALLOC_STORAGE, &ktx); err != KTX_SUCCESS) {
-        return {false, "  \u2717 " + display_name + ": ktxTexture2_Create: " + ktxErrorString(err)};
+        error("  [err] {}: ktxTexture2_Create: {}", display_name, ktxErrorString(err));
+        return false;
     }
 
-    if (const auto err = ktxTexture_SetImageFromMemory(ktxTexture(ktx), 0, 0, 0, pixels.data(), pixels.size());
-        err != KTX_SUCCESS) {
-        ktxTexture_Destroy(ktxTexture(ktx));
-        return {false, "  \u2717 " + display_name + ": SetImageFromMemory: " + ktxErrorString(err)};
+    for (uint32_t level = 0; level < mip_count; ++level) {
+        if (const auto err = ktxTexture_SetImageFromMemory(ktxTexture(ktx), level, 0, 0, mip_chain[level].data(),
+                                                           mip_chain[level].size());
+            err != KTX_SUCCESS) {
+            ktxTexture_Destroy(ktxTexture(ktx));
+            error("  [err] {}: SetImageFromMemory level {}: {}", display_name, level, ktxErrorString(err));
+            return false;
+        }
     }
 
     ktxBasisParams bp{};
@@ -132,24 +177,26 @@ static ConvertResult convert_to_ktx2(const SourceFile &src, const fs::path &outp
 
     if (const auto err = ktxTexture2_CompressBasisEx(ktx, &bp); err != KTX_SUCCESS) {
         ktxTexture_Destroy(ktxTexture(ktx));
-        return {false, "  \u2717 " + display_name + ": CompressBasisEx: " + ktxErrorString(err)};
+        error("  [err] {}: CompressBasisEx: {}", display_name, ktxErrorString(err));
+        return false;
     }
 
     const fs::path out = output_dir / (src.orig_name.stem().string() + ".ktx2");
     if (const auto err = ktxTexture_WriteToNamedFile(ktxTexture(ktx), out.string().c_str()); err != KTX_SUCCESS) {
         ktxTexture_Destroy(ktxTexture(ktx));
-        return {false, "  \u2717 " + display_name + ": WriteToNamedFile: " + ktxErrorString(err)};
+        error("  [err] {}: WriteToNamedFile: {}", display_name, ktxErrorString(err));
+        return false;
     }
 
     ktxTexture_Destroy(ktxTexture(ktx));
 
-    const char *fmt_desc = is_normal ? "normal map (UASTC)" : is_srgb ? "sRGB (UASTC)" : "linear (UASTC)";
-    return {true, "  \u2713 " + display_name + " \u2192 " + out.filename().string() + " (" + fmt_desc + ")"};
+    info("  [ok] {} -> {} ({})", display_name, out.filename(), fmt_desc);
+    return true;
 }
 
 struct JpgConvertResult {
     SourceFile source;
-    std::string error;
+    std::string error_msg; // empty on successa
 };
 
 static JpgConvertResult jpg_to_png(const fs::path &jpg_path, const fs::path &tmp_dir) {
@@ -162,13 +209,6 @@ static JpgConvertResult jpg_to_png(const fs::path &jpg_path, const fs::path &tmp
 }
 
 struct CLIOptions {
-    fs::path input_dir;
-    fs::path output_dir;
-    uint32_t num_jobs = std::max(1u, std::thread::hardware_concurrency());
-    bool normal_mode = true;
-};
-
-struct TexConvertOptions {
     fs::path input_dir;
     fs::path output_dir;
     uint32_t num_jobs = std::max(1u, std::thread::hardware_concurrency());
@@ -192,26 +232,28 @@ static auto parse_cli(int argc, char **argv) -> std::optional<CLIOptions> {
     const auto result = cli.parse({argc, argv});
 
     if (show_help) {
-        std::cout << cli << '\n';
+        std::stringstream ss;
+        ss << cli;
+        info("Usage:\n{}", ss.str());
         return std::nullopt;
     }
 
     if (!result) {
-        std::cerr << "error in command line: " << result.message() << '\n';
+        error("Argument error: {}", result.message());
         return std::nullopt;
     }
 
     opt.input_dir = input_str;
 
     if (!fs::exists(opt.input_dir) || !fs::is_directory(opt.input_dir)) {
-        std::cerr << "error: '" << opt.input_dir << "' is not a valid directory\n";
+        error("'{}' is not a valid directory", opt.input_dir);
         return std::nullopt;
     }
 
     opt.output_dir = output_str.empty() ? opt.input_dir : fs::path(output_str);
 
     if (opt.num_jobs < 1) {
-        std::cerr << "error: --jobs must be >= 1\n";
+        error("--jobs must be >= 1");
         return std::nullopt;
     }
 
@@ -245,47 +287,40 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    std::cout << "input:       " << opt->input_dir << '\n'
-              << "output:      " << opt->output_dir << '\n'
-              << "jobs:        " << opt->num_jobs << '\n'
-              << "PNG files:   " << sources.size() << '\n'
-              << "JPG files:   " << jpg_paths.size() << '\n'
-              << "normal-mode: " << (opt->normal_mode ? "on" : "off") << '\n'
-              << '\n';
+    info("input:       {}\noutput:      {}\njobs:        {}\nPNG files:   {}\nJPG files:   {}\nnormal-mode: {}",
+         opt->input_dir, opt->output_dir, opt->num_jobs, sources.size(), jpg_paths.size(),
+         opt->normal_mode ? "on" : "off");
 
     std::atomic<uint32_t> success_count{0};
     std::atomic<uint32_t> failed_count{0};
 
     if (!jpg_paths.empty()) {
-        std::cout << "[ JPG \u2192 PNG ]\n";
+        info("[ JPG -> PNG ]");
 
         std::vector<std::future<JpgConvertResult>> futures;
         futures.reserve(jpg_paths.size());
-        for (const auto &jpg: jpg_paths) {
+        for (const auto &jpg: jpg_paths)
             futures.push_back(std::async(std::launch::async, jpg_to_png, jpg, tmp_dir));
-        }
 
         for (size_t i = 0; i < futures.size(); ++i) {
             auto result = futures[i].get();
-            if (result.error.empty()) {
-                std::cout << "  \u2713 " << jpg_paths[i].filename() << " \u2192 " << result.source.path.filename()
-                          << '\n';
+            if (result.error_msg.empty()) {
+                info("  \u2713 {} -> {}", jpg_paths[i].filename(), result.source.path.filename());
                 sources.push_back(std::move(result.source));
             } else {
-                std::cerr << "  \u2717 " << jpg_paths[i].filename() << ": " << result.error << '\n';
+                error("  [err] {}: {}", jpg_paths[i].filename(), result.error_msg);
                 ++failed_count;
             }
         }
-        std::cout << '\n';
     }
 
     if (!sources.empty()) {
-        std::cout << "[ PNG \u2192 KTX2 ]\n";
+        info("[ PNG -> KTX2 ]");
 
         const size_t n = sources.size();
         for (size_t i = 0; i < n; i += opt->num_jobs) {
             const size_t batch_end = std::min(i + static_cast<size_t>(opt->num_jobs), n);
-            std::vector<std::future<ConvertResult>> batch;
+            std::vector<std::future<bool>> batch;
             batch.reserve(batch_end - i);
 
             for (size_t j = i; j < batch_end; ++j) {
@@ -295,9 +330,7 @@ int main(int argc, char *argv[]) {
             }
 
             for (auto &f: batch) {
-                const auto result = f.get();
-                std::cout << result.message << '\n';
-                if (result.success)
+                if (f.get())
                     ++success_count;
                 else
                     ++failed_count;
@@ -308,11 +341,10 @@ int main(int argc, char *argv[]) {
     fs::remove_all(tmp_dir);
 
     const uint32_t total = success_count + failed_count;
-    std::cout << '\n'
-              << "============================================================\n"
-              << "done - " << success_count << '/' << total << " succeeded"
-              << (failed_count > 0 ? ", " + std::to_string(failed_count) + " failed" : "") << '\n'
-              << "============================================================\n";
+    if (failed_count > 0)
+        info("done - {}/{} succeeded, {} failed", success_count, total, failed_count);
+    else
+        info("done - {}/{} succeeded", success_count, total);
 
     return failed_count > 0 ? 1 : 0;
 }

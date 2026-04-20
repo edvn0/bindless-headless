@@ -92,8 +92,6 @@ auto BindlessSet::flush_pending_writes(VkImageView dummy_sampled, VkImageView du
         }
     }
 
-    NANO_SCOPE("Flush pending writes");
-
     std::vector<VkDescriptorImageInfo> sampled_infos(pending_texture_writes.size());
     std::vector<VkDescriptorImageInfo> storage_infos(pending_texture_writes.size());
     std::vector<VkDescriptorImageInfo> cubemap_infos;

@@ -154,6 +154,8 @@ namespace {
         out.height = static_cast<u32>(ktx2->baseHeight);
         out.levels = static_cast<u32>(ktx2->numLevels);
 
+        info("Mip levels: {}", out.levels);
+
         out.level_offset.resize(out.levels);
         out.level_size.resize(out.levels);
 
@@ -452,6 +454,8 @@ namespace {
         out.set_is_transparent(m.is_transparent);
         out.transmission_factor = m.transmission_factor;
 
+        out.set_is_double_sided(m.is_double_sided);
+
         return out;
     }
 
@@ -484,6 +488,7 @@ namespace {
 
         out.is_transparent = false;
         out.has_transmission = false;
+        out.is_double_sided = false;
 
         return out;
     }
@@ -891,6 +896,8 @@ namespace {
         out.height = static_cast<u32>(ktx2->baseHeight);
         out.levels = static_cast<u32>(ktx2->numLevels);
 
+        info("Name: {}, Levels: {}", out.name, out.levels);
+
         const bool needs_transcode = ktxTexture2_NeedsTranscoding(ktx2);
 
         if (needs_transcode) {
@@ -1132,6 +1139,8 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
         out.set_has_transmission(has(material_in.flags, MaterialFlags::HasTransmission));
         out.set_is_transparent(has(material_in.flags, MaterialFlags::Transparent));
         out.transmission_factor = material_in.transmission_factor;
+
+        out.set_is_double_sided(has(material_in.flags, MaterialFlags::DoubleSided));
 
         return out;
     };

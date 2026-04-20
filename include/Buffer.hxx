@@ -13,7 +13,7 @@
 
 class Buffer {
     std::optional<u64> count;
-    DeviceAddress dev_address{UINT64_MAX};
+    DeviceAddress dev_address{DeviceAddress::Invalid};
     VkBuffer vk_buffer{nullptr};
     VmaAllocation vma_allocation{nullptr};
     VmaAllocationInfo allocation_info{};
@@ -87,13 +87,11 @@ public:
             -> tl::expected<Buffer, Error> {
         const auto size = slice.size_bytes();
 
-        // Get physical device alignment requirements
         VmaAllocatorInfo alloc_info{};
         vmaGetAllocatorInfo(allocator, &alloc_info);
         VkPhysicalDeviceProperties pd_props{};
         vkGetPhysicalDeviceProperties(alloc_info.physicalDevice, &pd_props);
 
-        // Align size to device requirements
         const auto min_alignment = static_cast<u64>(pd_props.limits.minStorageBufferOffsetAlignment);
         const auto aligned_size = (size + min_alignment - 1) & ~(min_alignment - 1);
 
@@ -103,7 +101,7 @@ public:
         ci.flags = 0;
         ci.size = aligned_size;
         ci.usage = usage_flags | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-        ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Just for clarity here. 0 = EXCLUSIVE.
+        ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         if (!queue_indices.empty()) {
             ci.sharingMode = VK_SHARING_MODE_CONCURRENT;
             ci.queueFamilyIndexCount = static_cast<u32>(queue_indices.size());

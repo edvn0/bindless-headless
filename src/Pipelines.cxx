@@ -12,29 +12,18 @@
 auto create_compute_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout layout,
                              const std::vector<u32> &code, std::size_t push_constant_size,
                              const std::string_view entry_name) -> CompiledPipeline {
-    VkShaderModule compute_shader{};
-    auto ci = create_info<VkShaderModuleCreateInfo>();
-    ci.codeSize = code.size() * sizeof(u32);
-    ci.pCode = code.data();
-    vk_check(vkCreateShaderModule(device, &ci, nullptr, &compute_shader));
+    auto smci = create_info<VkShaderModuleCreateInfo>();
+    smci.codeSize = code.size() * sizeof(u32);
+    smci.pCode = code.data();
 
-    VkPushConstantRange push_constant_range{
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            .offset = 0,
-            .size = static_cast<u32>(push_constant_size),
-    };
-
-    VkPipelineLayout pi_layout{};
-    auto plci = create_info<VkPipelineLayoutCreateInfo>();
-    plci.setLayoutCount = 1;
-    plci.pSetLayouts = &layout;
-    plci.pushConstantRangeCount = 1;
-    plci.pPushConstantRanges = &push_constant_range;
-    vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
-    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pi_layout, entry_name);
+    auto stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    stage_ci.pNext = &smci;
+    stage_ci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    stage_ci.module = VK_NULL_HANDLE;
+    stage_ci.pName = entry_name.data();
 
     // u32, u32
-    const std::array<u32, 2> data{MAX_WAVES_PER_GROUP, THREADS_PER_GROUP};
+    const std::array<u32, 2> spec_data{MAX_WAVES_PER_GROUP, THREADS_PER_GROUP};
 
     const VkSpecializationMapEntry waves_per_group_spec_map_entry{
             .constantID = 0,
@@ -51,15 +40,24 @@ auto create_compute_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     spec_info.mapEntryCount = 2;
     spec_info.pMapEntries = entries.data();
     spec_info.dataSize = 2 * sizeof(u32);
-    spec_info.pData = data.data();
+    spec_info.pData = spec_data.data();
 
-    const std::array spec_infos{spec_info};
+    stage_ci.pSpecializationInfo = &spec_info;
 
-    auto stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
-    stage_ci.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    stage_ci.module = compute_shader;
-    stage_ci.pName = entry_name.data();
-    stage_ci.pSpecializationInfo = spec_infos.data();
+    VkPushConstantRange push_constant_range{
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = static_cast<u32>(push_constant_size),
+    };
+
+    VkPipelineLayout pi_layout{};
+    auto plci = create_info<VkPipelineLayoutCreateInfo>();
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &layout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &push_constant_range;
+    vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pi_layout));
+    set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pi_layout, entry_name);
 
     auto cpci = create_info<VkComputePipelineCreateInfo>();
     cpci.stage = stage_ci;
@@ -72,28 +70,23 @@ auto create_compute_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     vk_check(vkCreateComputePipelines(device, cache_handle, 1, &cpci, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, entry_name);
 
-    vkDestroyShaderModule(device, compute_shader, nullptr);
     return {pipeline, pi_layout};
 }
 
 auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
                               const std::vector<u32> &vert_code, VkFormat depth_format, VkSampleCountFlagBits samples)
         -> CompiledPipeline {
-    VkShaderModule vert_module{};
-    auto shader_ci = create_info<VkShaderModuleCreateInfo>();
-    shader_ci.codeSize = vert_code.size() * sizeof(u32);
-    shader_ci.pCode = vert_code.data();
-    vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &vert_module));
+    auto vert_smci = create_info<VkShaderModuleCreateInfo>();
+    vert_smci.codeSize = vert_code.size() * sizeof(u32);
+    vert_smci.pCode = vert_code.data();
 
     auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.pNext = &vert_smci;
     vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vert_stage_ci.module = vert_module;
+    vert_stage_ci.module = VK_NULL_HANDLE;
     vert_stage_ci.pName = "main_vs_mdi";
 
-
-    std::array stages = {
-            vert_stage_ci,
-    };
+    std::array stages = {vert_stage_ci};
 
     VkPushConstantRange push_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -202,41 +195,34 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "predepth");
 
-    // Cleanup local modules
-    vkDestroyShaderModule(device, vert_module, nullptr);
-
     return {.pipeline = pipeline, .layout = layout};
 }
 
 auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
                               const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                               VkFormat depth_format, VkSampleCountFlagBits samples) -> CompiledPipeline {
-    VkShaderModule vert_module{};
-    auto shader_ci = create_info<VkShaderModuleCreateInfo>();
-    shader_ci.codeSize = vert_code.size() * sizeof(u32);
-    shader_ci.pCode = vert_code.data();
-    vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &vert_module));
+    auto vert_smci = create_info<VkShaderModuleCreateInfo>();
+    vert_smci.codeSize = vert_code.size() * sizeof(u32);
+    vert_smci.pCode = vert_code.data();
 
-    VkShaderModule frag_module{};
-    shader_ci.codeSize = frag_code.size() * sizeof(u32);
-    shader_ci.pCode = frag_code.data();
-    vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &frag_module));
+    auto frag_smci = create_info<VkShaderModuleCreateInfo>();
+    frag_smci.codeSize = frag_code.size() * sizeof(u32);
+    frag_smci.pCode = frag_code.data();
 
     auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.pNext = &vert_smci;
     vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vert_stage_ci.module = vert_module;
+    vert_stage_ci.module = VK_NULL_HANDLE;
     vert_stage_ci.pName = "main_vs_mdi";
 
     auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    frag_stage_ci.pNext = &frag_smci;
     frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    frag_stage_ci.module = frag_module;
+    frag_stage_ci.module = VK_NULL_HANDLE;
     frag_stage_ci.pName = "fs_main";
-    std::array stages = {
-            vert_stage_ci,
-            frag_stage_ci,
-    };
 
-    // 2. Pipeline Layout (Inherit bindless + push constants)
+    std::array stages = {vert_stage_ci, frag_stage_ci};
+
     VkPushConstantRange push_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
@@ -253,7 +239,6 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
     vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, "predepth_alpha_tested");
 
-    // 3. Specialized Depth State
     auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
     ds.depthTestEnable = VK_TRUE;
     ds.depthWriteEnable = VK_TRUE;
@@ -261,22 +246,20 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
     ds.minDepthBounds = 0.0f;
     ds.maxDepthBounds = 1.0f;
 
-    // 4. No Color Attachments (The secret to Pre-Depth speed)
+    // No Color Attachments (The secret to Pre-Depth speed)
     auto cb = create_info<VkPipelineColorBlendStateCreateInfo>();
     cb.attachmentCount = 0;
     cb.pAttachments = nullptr;
 
-    // 5. Rasterization (Ensure Back-Face Culling is ON)
+    // Rasterization (Ensure Back-Face Culling is ON)
     auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
     rs.cullMode = VK_CULL_MODE_BACK_BIT;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
 
-    // 6. Dynamic Rendering Info
     auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
     rendering_info.depthAttachmentFormat = depth_format;
 
-    // Viewport/Scissor setup (Standard)
     auto vp = create_info<VkPipelineViewportStateCreateInfo>();
     vp.viewportCount = 1;
     vp.scissorCount = 1;
@@ -303,7 +286,6 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
                     .binding = 0,
                     .format = VK_FORMAT_R32G32B32_SFLOAT,
                     .offset = offsetof(PositionOnlyVertex, pos),
-
             },
             VkVertexInputAttributeDescription{
                     .location = 1,
@@ -347,14 +329,8 @@ auto create_predepth_pipeline(VkDevice device, PipelineCache *cache, VkDescripto
 
     VkPipeline pipeline;
     VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
-
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "predepth_alpha_tested");
-
-    // Cleanup local modules
-    vkDestroyShaderModule(device, vert_module, nullptr);
-    vkDestroyShaderModule(device, frag_module, nullptr);
-
 
     return {.pipeline = pipeline, .layout = layout};
 }
@@ -363,30 +339,28 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
                                             VkDescriptorSetLayout bindless_layout, const std::vector<u32> &vert_code,
                                             const std::vector<u32> &frag_code, VkFormat depth_format,
                                             VkSampleCountFlagBits samples) -> CompiledPipeline {
-    VkShaderModule vert_module{};
-    auto shader_ci = create_info<VkShaderModuleCreateInfo>();
-    shader_ci.codeSize = vert_code.size() * sizeof(u32);
-    shader_ci.pCode = vert_code.data();
-    vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &vert_module));
+    auto vert_smci = create_info<VkShaderModuleCreateInfo>();
+    vert_smci.codeSize = vert_code.size() * sizeof(u32);
+    vert_smci.pCode = vert_code.data();
 
-    VkShaderModule frag_module{};
-    shader_ci.codeSize = frag_code.size() * sizeof(u32);
-    shader_ci.pCode = frag_code.data();
-    vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &frag_module));
+    auto frag_smci = create_info<VkShaderModuleCreateInfo>();
+    frag_smci.codeSize = frag_code.size() * sizeof(u32);
+    frag_smci.pCode = frag_code.data();
 
     auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.pNext = &vert_smci;
     vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vert_stage_ci.module = vert_module;
+    vert_stage_ci.module = VK_NULL_HANDLE;
     vert_stage_ci.pName = "shadow_vs_mdi";
 
     auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    frag_stage_ci.pNext = &frag_smci;
     frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    frag_stage_ci.module = frag_module;
+    frag_stage_ci.module = VK_NULL_HANDLE;
     frag_stage_ci.pName = "shadow_fs_main";
 
     std::array stages = {vert_stage_ci, frag_stage_ci};
 
-    // Pipeline Layout
     VkPushConstantRange push_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
@@ -499,30 +473,24 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "directional_shadow_map");
 
-    vkDestroyShaderModule(device, vert_module, nullptr);
-    vkDestroyShaderModule(device, frag_module, nullptr);
-
     return {pipeline, layout};
 }
+
 auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cache,
                                             VkDescriptorSetLayout bindless_layout, const std::vector<u32> &vert_code,
                                             VkFormat depth_format, VkSampleCountFlagBits samples) -> CompiledPipeline {
-    VkShaderModule vert_module{};
-    auto shader_ci = create_info<VkShaderModuleCreateInfo>();
-    shader_ci.codeSize = vert_code.size() * sizeof(u32);
-    shader_ci.pCode = vert_code.data();
-    vk_check(vkCreateShaderModule(device, &shader_ci, nullptr, &vert_module));
+    auto vert_smci = create_info<VkShaderModuleCreateInfo>();
+    vert_smci.codeSize = vert_code.size() * sizeof(u32);
+    vert_smci.pCode = vert_code.data();
 
     auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.pNext = &vert_smci;
     vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vert_stage_ci.module = vert_module;
+    vert_stage_ci.module = VK_NULL_HANDLE;
     vert_stage_ci.pName = "shadow_vs_mdi";
 
-    std::array stages = {
-            vert_stage_ci,
-    };
+    std::array stages = {vert_stage_ci};
 
-    // Pipeline Layout
     VkPushConstantRange push_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
@@ -562,7 +530,6 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
     rs.depthBiasClamp = 0.0f;
     rs.depthBiasSlopeFactor = 0.0f; // Set dynamically
 
-    // Dynamic Rendering Info
     auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
     rendering_info.depthAttachmentFormat = depth_format;
 
@@ -636,31 +603,37 @@ auto create_directional_shadow_map_pipeline(VkDevice device, PipelineCache *cach
 
     VkPipeline pipeline;
     VkPipelineCache cache_handle = cache ? cache->get() : VK_NULL_HANDLE;
-
     vkCreateGraphicsPipelines(device, cache_handle, 1, &ci, nullptr, &pipeline);
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "directional_shadow_map");
 
-    vkDestroyShaderModule(device, vert_module, nullptr);
-
     return {.pipeline = pipeline, .layout = layout};
 }
-
 
 auto create_tonemap_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout layout,
                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                              const std::string_view vert_entry, const std::string_view frag_entry,
                              VkFormat color_format) -> CompiledPipeline {
-    VkShaderModule vert_shader{};
-    auto vert_create_info = create_info<VkShaderModuleCreateInfo>();
-    vert_create_info.codeSize = vert_code.size() * sizeof(u32);
-    vert_create_info.pCode = vert_code.data();
-    vk_check(vkCreateShaderModule(device, &vert_create_info, nullptr, &vert_shader));
+    auto vert_smci = create_info<VkShaderModuleCreateInfo>();
+    vert_smci.codeSize = vert_code.size() * sizeof(u32);
+    vert_smci.pCode = vert_code.data();
 
-    VkShaderModule frag_shader{};
-    auto frag_create_info = create_info<VkShaderModuleCreateInfo>();
-    frag_create_info.codeSize = frag_code.size() * sizeof(u32);
-    frag_create_info.pCode = frag_code.data();
-    vk_check(vkCreateShaderModule(device, &frag_create_info, nullptr, &frag_shader));
+    auto frag_smci = create_info<VkShaderModuleCreateInfo>();
+    frag_smci.codeSize = frag_code.size() * sizeof(u32);
+    frag_smci.pCode = frag_code.data();
+
+    auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.pNext = &vert_smci;
+    vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vert_stage_ci.module = VK_NULL_HANDLE;
+    vert_stage_ci.pName = vert_entry.data();
+
+    auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    frag_stage_ci.pNext = &frag_smci;
+    frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    frag_stage_ci.module = VK_NULL_HANDLE;
+    frag_stage_ci.pName = frag_entry.data();
+
+    std::array shader_stages{vert_stage_ci, frag_stage_ci};
 
     VkPushConstantRange push_constant_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -675,19 +648,6 @@ auto create_tonemap_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     plci.pPushConstantRanges = &push_constant_range;
     vk_check(vkCreatePipelineLayout(device, &plci, nullptr, &pipeline_layout));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, pipeline_layout, "tonemap");
-
-
-    auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
-    vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vert_stage_ci.module = vert_shader;
-    vert_stage_ci.pName = vert_entry.data();
-
-    auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
-    frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    frag_stage_ci.module = frag_shader;
-    frag_stage_ci.pName = frag_entry.data();
-
-    std::array shader_stages{vert_stage_ci, frag_stage_ci};
 
     auto vertex_input = create_info<VkPipelineVertexInputStateCreateInfo>();
     vertex_input.vertexBindingDescriptionCount = 0;
@@ -789,9 +749,6 @@ auto create_tonemap_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     vk_check(vkCreateGraphicsPipelines(device, cache_handle, 1, &pipeline_info, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "tonemap");
 
-    vkDestroyShaderModule(device, vert_shader, nullptr);
-    vkDestroyShaderModule(device, frag_shader, nullptr);
-
     return CompiledPipeline{pipeline, pipeline_layout};
 }
 
@@ -799,35 +756,28 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
                              const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
                              VkFormat gbuffer0_format, VkFormat gbuffer1_format, VkFormat gbuffer2_format,
                              VkFormat depth_format) -> CompiledPipeline {
-    VkShaderModule vert_module{};
-    {
-        auto ci = create_info<VkShaderModuleCreateInfo>();
-        ci.codeSize = vert_code.size() * sizeof(u32);
-        ci.pCode = vert_code.data();
-        vk_check(vkCreateShaderModule(device, &ci, nullptr, &vert_module));
-    }
+    auto vert_smci = create_info<VkShaderModuleCreateInfo>();
+    vert_smci.codeSize = vert_code.size() * sizeof(u32);
+    vert_smci.pCode = vert_code.data();
 
-    VkShaderModule frag_module{};
-    {
-        auto ci = create_info<VkShaderModuleCreateInfo>();
-        ci.codeSize = frag_code.size() * sizeof(u32);
-        ci.pCode = frag_code.data();
-        vk_check(vkCreateShaderModule(device, &ci, nullptr, &frag_module));
-    }
+    auto frag_smci = create_info<VkShaderModuleCreateInfo>();
+    frag_smci.codeSize = frag_code.size() * sizeof(u32);
+    frag_smci.pCode = frag_code.data();
 
     auto vert_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    vert_stage_ci.pNext = &vert_smci;
     vert_stage_ci.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vert_stage_ci.module = vert_module;
+    vert_stage_ci.module = VK_NULL_HANDLE;
     vert_stage_ci.pName = "main_vs_mdi";
 
     auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    frag_stage_ci.pNext = &frag_smci;
     frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    frag_stage_ci.module = frag_module;
+    frag_stage_ci.module = VK_NULL_HANDLE;
     frag_stage_ci.pName = "main_fs_mdi";
 
     std::array stages{vert_stage_ci, frag_stage_ci};
 
-    // Push constants for the GBuffer pass (your Slang GBufferPC)
     VkPushConstantRange push_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
@@ -908,25 +858,22 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
 
     auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
     rs.polygonMode = VK_POLYGON_MODE_FILL;
-    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
 
     auto ms = create_info<VkPipelineMultisampleStateCreateInfo>();
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-    // You're doing predepth, so keep depth test ON, depth write OFF.
-    // Compare op is dynamic in your engine, but set a sane default.
     auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
     ds.depthTestEnable = VK_TRUE;
     ds.depthWriteEnable = VK_FALSE;
-    ds.depthCompareOp = VK_COMPARE_OP_EQUAL; // matches your vkCmdSetDepthCompareOp(EQUAL)
+    ds.depthCompareOp = VK_COMPARE_OP_EQUAL;
     ds.depthBoundsTestEnable = VK_FALSE;
     ds.stencilTestEnable = VK_FALSE;
     ds.minDepthBounds = 0.0f;
     ds.maxDepthBounds = 1.0f;
 
-    // MRT: 3 attachments, no blending for gbuffer writes.
     VkPipelineColorBlendAttachmentState blend0{};
     blend0.blendEnable = VK_FALSE;
     blend0.colorWriteMask =
@@ -976,9 +923,6 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     vk_check(vkCreateGraphicsPipelines(device, cache_handle, 1, &gpci, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "gbuffer_mrt");
 
-    vkDestroyShaderModule(device, vert_module, nullptr);
-    vkDestroyShaderModule(device, frag_module, nullptr);
-
     return CompiledPipeline{pipeline, pipeline_layout};
 }
 
@@ -987,14 +931,11 @@ auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *
                                                 const std::vector<u32> &frag_code, const VkShaderModule vert,
                                                 std::string_view frag_entry, VkFormat color_format)
         -> CompiledPipeline {
-    VkShaderModule frag_shader{};
-    {
-        auto ci = create_info<VkShaderModuleCreateInfo>();
-        ci.codeSize = frag_code.size() * sizeof(u32);
-        ci.pCode = frag_code.data();
-        vk_check(vkCreateShaderModule(device, &ci, nullptr, &frag_shader));
-        set_debug_name(device, VK_OBJECT_TYPE_SHADER_MODULE, frag_shader, "deferred_lighting_vs");
-    }
+    // The vert shader is a cached module (get_or_create_fullscreen_vs), so it stays as VkShaderModule.
+    // Only the frag shader is created inline here.
+    auto frag_smci = create_info<VkShaderModuleCreateInfo>();
+    frag_smci.codeSize = frag_code.size() * sizeof(u32);
+    frag_smci.pCode = frag_code.data();
 
     VkPushConstantRange push_constant_range{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1019,8 +960,9 @@ auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *
     vert_stage_ci.pName = Pipeline::Fullscreen::vs_entry.data();
 
     auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    frag_stage_ci.pNext = &frag_smci;
     frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    frag_stage_ci.module = frag_shader;
+    frag_stage_ci.module = VK_NULL_HANDLE;
     frag_stage_ci.pName = frag_entry.data();
 
     std::array shader_stages{vert_stage_ci, frag_stage_ci};
@@ -1129,8 +1071,6 @@ auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *
     vk_check(vkCreateGraphicsPipelines(device, cache_handle, 1, &gpci, nullptr, &pipeline));
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "deferred_lighting_fs");
 
-    vkDestroyShaderModule(device, frag_shader, nullptr);
-
     return CompiledPipeline{.pipeline = pipeline, .layout = pipeline_layout};
 }
 
@@ -1208,13 +1148,9 @@ namespace Pipeline {
 
 
     auto create_fullscreen_pipeline(const Fullscreen &info) -> CompiledPipeline {
-        VkShaderModule frag_shader{};
-        {
-            VkShaderModuleCreateInfo ci = create_info<VkShaderModuleCreateInfo>();
-            ci.codeSize = info.frag_code.size() * sizeof(u32);
-            ci.pCode = info.frag_code.data();
-            vk_check(vkCreateShaderModule(info.device, &ci, nullptr, &frag_shader));
-        }
+        auto frag_smci = create_info<VkShaderModuleCreateInfo>();
+        frag_smci.codeSize = info.frag_code.size() * sizeof(u32);
+        frag_smci.pCode = info.frag_code.data();
 
         VkPushConstantRange push_range{
                 .stageFlags = info.push_constant_stages,
@@ -1232,14 +1168,16 @@ namespace Pipeline {
             vk_check(vkCreatePipelineLayout(info.device, &plci, nullptr, &pipeline_layout));
         }
 
+        // The fullscreen VS is a cached module (info.fullscreen_vs), used as-is.
         auto vs_stage = create_info<VkPipelineShaderStageCreateInfo>();
         vs_stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
         vs_stage.module = info.fullscreen_vs;
         vs_stage.pName = info.vs_entry.data();
 
         auto fs_stage = create_info<VkPipelineShaderStageCreateInfo>();
+        fs_stage.pNext = &frag_smci;
         fs_stage.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        fs_stage.module = frag_shader;
+        fs_stage.module = VK_NULL_HANDLE;
         fs_stage.pName = info.fs_entry.data();
 
         std::array stages{vs_stage, fs_stage};
@@ -1309,25 +1247,25 @@ namespace Pipeline {
         VkPipelineCache cache_handle = info.cache ? info.cache->get() : VK_NULL_HANDLE;
         vk_check(vkCreateGraphicsPipelines(info.device, cache_handle, 1, &gpci, nullptr, &pipeline));
 
-        vkDestroyShaderModule(info.device, frag_shader, nullptr);
-
         return CompiledPipeline{.pipeline = pipeline, .layout = pipeline_layout};
     }
 
     auto create_graphics_pipeline(const Pipeline::Graphics &info) -> CompiledPipeline {
-        std::vector<VkShaderModule> modules(info.stages.size());
+        // One VkShaderModuleCreateInfo per stage; the stage's pNext points into this vector,
+        // so it must not be resized after we start taking addresses.
+        std::vector<VkShaderModuleCreateInfo> smcis(info.stages.size());
         std::vector<VkPipelineShaderStageCreateInfo> stage_cis(info.stages.size());
 
         for (auto &&[i, v]: info.stages | std::views::enumerate) {
-            auto smci = create_info<VkShaderModuleCreateInfo>();
-            smci.codeSize = v.code.size() * sizeof(u32);
-            smci.pCode = v.code.data();
-            vk_check(vkCreateShaderModule(info.device, &smci, nullptr, &modules[i]));
+            smcis[i] = create_info<VkShaderModuleCreateInfo>();
+            smcis[i].codeSize = v.code.size() * sizeof(u32);
+            smcis[i].pCode = v.code.data();
 
             auto &s = stage_cis[i];
             s = create_info<VkPipelineShaderStageCreateInfo>();
+            s.pNext = &smcis[i];
             s.stage = v.stage;
-            s.module = modules[i];
+            s.module = VK_NULL_HANDLE;
             s.pName = v.entry.data();
         }
 
@@ -1478,9 +1416,6 @@ namespace Pipeline {
         vk_check(vkCreateGraphicsPipelines(info.device, cache_handle, 1, &gpci, nullptr, &pipeline));
         set_debug_name(info.device, VK_OBJECT_TYPE_PIPELINE, pipeline, info.debug_name);
 
-        for (auto mod: modules)
-            vkDestroyShaderModule(info.device, mod, nullptr);
-
         return {pipeline, layout};
     }
 } // namespace Pipeline
@@ -1490,39 +1425,34 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
                                        const std::vector<u32> &task_code, const std::vector<u32> &mesh_code,
                                        const std::vector<u32> &frag_code, VkFormat color_format, VkFormat depth_format,
                                        VkSampleCountFlagBits samples) -> CompiledPipeline {
-    VkShaderModule task_module{};
-    auto task_ci = create_info<VkShaderModuleCreateInfo>();
-    task_ci.codeSize = task_code.size() * sizeof(u32);
-    task_ci.pCode = task_code.data();
-    vk_check(vkCreateShaderModule(device, &task_ci, nullptr, &task_module));
+    auto task_smci = create_info<VkShaderModuleCreateInfo>();
+    task_smci.codeSize = task_code.size() * sizeof(u32);
+    task_smci.pCode = task_code.data();
 
-    // 1. Create Shader Modules
-    VkShaderModule mesh_module{};
-    auto mesh_ci = create_info<VkShaderModuleCreateInfo>();
-    mesh_ci.codeSize = mesh_code.size() * sizeof(u32);
-    mesh_ci.pCode = mesh_code.data();
-    vk_check(vkCreateShaderModule(device, &mesh_ci, nullptr, &mesh_module));
+    auto mesh_smci = create_info<VkShaderModuleCreateInfo>();
+    mesh_smci.codeSize = mesh_code.size() * sizeof(u32);
+    mesh_smci.pCode = mesh_code.data();
 
-    VkShaderModule frag_module{};
-    auto frag_ci = create_info<VkShaderModuleCreateInfo>();
-    frag_ci.codeSize = frag_code.size() * sizeof(u32);
-    frag_ci.pCode = frag_code.data();
-    vk_check(vkCreateShaderModule(device, &frag_ci, nullptr, &frag_module));
+    auto frag_smci = create_info<VkShaderModuleCreateInfo>();
+    frag_smci.codeSize = frag_code.size() * sizeof(u32);
+    frag_smci.pCode = frag_code.data();
 
-    // 2. Stages
     auto task_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    task_stage_ci.pNext = &task_smci;
     task_stage_ci.stage = VK_SHADER_STAGE_TASK_BIT_EXT;
-    task_stage_ci.module = task_module;
-    task_stage_ci.pName = "main_as"; // Entry point in Slang
+    task_stage_ci.module = VK_NULL_HANDLE;
+    task_stage_ci.pName = "main_as";
 
     auto mesh_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    mesh_stage_ci.pNext = &mesh_smci;
     mesh_stage_ci.stage = VK_SHADER_STAGE_MESH_BIT_EXT;
-    mesh_stage_ci.module = mesh_module;
-    mesh_stage_ci.pName = "main_ms"; // Entry point in Slang
+    mesh_stage_ci.module = VK_NULL_HANDLE;
+    mesh_stage_ci.pName = "main_ms";
 
     auto frag_stage_ci = create_info<VkPipelineShaderStageCreateInfo>();
+    frag_stage_ci.pNext = &frag_smci;
     frag_stage_ci.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    frag_stage_ci.module = frag_module;
+    frag_stage_ci.module = VK_NULL_HANDLE;
     frag_stage_ci.pName = "main_fs_debug";
 
     std::array stages = {task_stage_ci, mesh_stage_ci, frag_stage_ci};
@@ -1530,7 +1460,7 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
     VkPushConstantRange push_range{
             .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = sizeof(DebugClusteredPushConstants), //
+            .size = sizeof(DebugClusteredPushConstants),
     };
 
     auto layout_ci = create_info<VkPipelineLayoutCreateInfo>();
@@ -1542,7 +1472,7 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
     VkPipelineLayout layout;
     vkCreatePipelineLayout(device, &layout_ci, nullptr, &layout);
 
-    // 4. Color Blending (Additive for Light Volumes)
+    // Additive blending for light volumes
     VkPipelineColorBlendAttachmentState blend_attachment{
             .blendEnable = VK_TRUE,
             .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
@@ -1559,19 +1489,18 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
     cb.attachmentCount = 1;
     cb.pAttachments = &blend_attachment;
 
-    // 5. Depth State (Test against pre-depth, do NOT write)
+    // Test against pre-depth, do NOT write
     auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
     ds.depthTestEnable = VK_TRUE;
     ds.depthWriteEnable = VK_FALSE;
     ds.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // Reverse-Z
 
-    // 6. Rasterization (Front-Face culling so we see volume when inside)
+    // Front-face culling so we see the volume from inside
     auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
     rs.cullMode = VK_CULL_MODE_FRONT_BIT;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
 
-    // 7. Dynamic Rendering & Multisample
     auto rendering_info = create_info<VkPipelineRenderingCreateInfo>();
     rendering_info.colorAttachmentCount = 1;
     rendering_info.pColorAttachmentFormats = &color_format;
@@ -1589,7 +1518,7 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
     dy.dynamicStateCount = static_cast<u32>(dynamic_states.size());
     dy.pDynamicStates = dynamic_states.data();
 
-    // 8. Final Pipeline Create (Note: no VertexInput or InputAssembly)
+    // No VertexInput or InputAssembly for mesh shading
     auto ci = create_info<VkGraphicsPipelineCreateInfo>();
     ci.pNext = &rendering_info;
     ci.stageCount = static_cast<u32>(stages.size());
@@ -1608,28 +1537,25 @@ auto create_light_volume_mesh_pipeline(VkDevice device, PipelineCache *cache, Vk
 
     set_debug_name(device, VK_OBJECT_TYPE_PIPELINE, pipeline, "light_volume_mesh_pass");
 
-    vkDestroyShaderModule(device, task_module, nullptr);
-    vkDestroyShaderModule(device, mesh_module, nullptr);
-    vkDestroyShaderModule(device, frag_module, nullptr);
-
     return {pipeline, layout};
 }
 
 auto Pipeline::create_mesh_pipeline(const Mesh &info) -> CompiledPipeline {
+    // One VkShaderModuleCreateInfo per stage; must not be resized after addresses are taken.
+    std::vector<VkShaderModuleCreateInfo> smcis;
+    smcis.reserve(3); // task (optional) + mesh + fragment
     std::vector<VkPipelineShaderStageCreateInfo> stage_cis;
-    std::vector<VkShaderModule> modules;
 
     auto make_stage = [&](const ShaderStageInfo &s, VkShaderStageFlagBits stage_flag) {
-        VkShaderModule mod{};
-        auto smci = create_info<VkShaderModuleCreateInfo>();
+        smcis.push_back(create_info<VkShaderModuleCreateInfo>());
+        auto &smci = smcis.back();
         smci.codeSize = s.code.size() * sizeof(u32);
         smci.pCode = s.code.data();
-        vk_check(vkCreateShaderModule(info.device, &smci, nullptr, &mod));
-        modules.push_back(mod);
 
         auto ci = create_info<VkPipelineShaderStageCreateInfo>();
+        ci.pNext = &smci;
         ci.stage = stage_flag;
-        ci.module = mod;
+        ci.module = VK_NULL_HANDLE;
         ci.pName = s.entry.data();
         stage_cis.push_back(ci);
     };
@@ -1638,6 +1564,10 @@ auto Pipeline::create_mesh_pipeline(const Mesh &info) -> CompiledPipeline {
         make_stage(*info.stages.task, VK_SHADER_STAGE_TASK_BIT_EXT);
     make_stage(info.stages.mesh, VK_SHADER_STAGE_MESH_BIT_EXT);
     make_stage(info.stages.fragment, VK_SHADER_STAGE_FRAGMENT_BIT);
+
+    // After all stages are pushed, fix up pNext pointers (smcis vector is now stable).
+    for (auto &&[i, stage]: stage_cis | std::views::enumerate)
+        stage.pNext = &smcis[i];
 
     VkPushConstantRange push_range{
             .stageFlags = info.push_constant_stages,
@@ -1763,9 +1693,6 @@ auto Pipeline::create_mesh_pipeline(const Mesh &info) -> CompiledPipeline {
     VkPipelineCache cache_handle = info.cache ? info.cache->get() : VK_NULL_HANDLE;
     vk_check(vkCreateGraphicsPipelines(info.device, cache_handle, 1, &gpci, nullptr, &pipeline));
     set_debug_name(info.device, VK_OBJECT_TYPE_PIPELINE, pipeline, info.debug_name);
-
-    for (auto mod: modules)
-        vkDestroyShaderModule(info.device, mod, nullptr);
 
     return {pipeline, layout};
 }

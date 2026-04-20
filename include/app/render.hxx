@@ -13,11 +13,15 @@ struct FrameIndirectWriter {
     }
 };
 
+struct DrawRange {
+    u32 base;
+    u32 count;
+};
+
 struct DrawRanges {
-    u32 opaque_base;
-    u32 opaque_count;
-    u32 alpha_base;
-    u32 alpha_count;
+    DrawRange opaque;
+    DrawRange alpha;
+    DrawRange double_sided;
 };
 
 using MaterialBaseOffset = u32;
@@ -42,7 +46,7 @@ struct MeshDrawInfo {
     std::span<const SubmeshMaterialOverride> overrides;
 };
 
-auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffers buffers, const MeshData &mesh,
+auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffers &buffers, const MeshData &mesh,
                          const MeshDrawInfo &draw_info) -> DrawRanges;
 auto reserve_light_volumes(RenderContext &, u32, FrameIndirectWriter &,
                            AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> &, AlignedRingBuffer<u32> &, u32)

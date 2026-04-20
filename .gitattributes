@@ -1,4 +1,8 @@
 assets/meshes/**/*.scene.bz2 filter=lfs diff=lfs merge=lfs -text
 assets/meshes/**/*.scene filter=lfs diff=lfs merge=lfs -text
+assets/meshes/**/*.cscene.bz2 filter=lfs diff=lfs merge=lfs -text
+assets/meshes/**/*.cscene filter=lfs diff=lfs merge=lfs -text
 assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.cscene filter=lfs diff=lfs merge=lfs -text
 assets/meshes/SponzaGLTF/sponza_converted.cscene filter=lfs diff=lfs merge=lfs -text
+assets/meshes/NewSponza/curtains.cscene filter=lfs diff=lfs merge=lfs -text
+assets/meshes/NewSponza/new_sponza.cscene filter=lfs diff=lfs merge=lfs -text

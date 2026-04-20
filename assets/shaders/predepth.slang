@@ -59,7 +59,7 @@ VSOut main_vs_mdi(
 void fs_main(VSOut i, uniform PC pc)
 {
     Material mat = pc.materials[i.material_id];
-    float alpha = sample_texture(i.uvs.xy, mat.albedo_map, 0).a;
+    float alpha = sample_texture(i.uvs.xy, mat.albedo_map).a;
 
     if (alpha < alpha_cutoff) {
         discard;

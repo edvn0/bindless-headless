@@ -5,6 +5,7 @@
 #include "GlobalCommandContext.hxx"
 #include "Pool.hxx"
 #include "RenderContext.hxx"
+#include "StringPool.hxx"
 #include "Swapchain.hxx"
 #include "Types.hxx"
 

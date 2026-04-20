@@ -351,22 +351,40 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                             .sampler_index = 0,
                     };
 
-                    if (range.opaque_count > 0) {
-                        pc.base_draw_id = range.opaque_base;
+                    if (range.opaque.count > 0) {
+                        pc.base_draw_id = range.opaque.base;
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
                         vkCmdPushConstants(cmd, predepth->layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
                         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->layout, 0, 1,
                                                 &gpu.bindless.set, 0, nullptr);
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                                range.opaque_base * sizeof(VkDrawIndexedIndirectCommand);
+                                range.opaque.base * sizeof(VkDrawIndexedIndirectCommand);
 
-                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.opaque_count,
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.opaque.count,
                                                  sizeof(VkDrawIndexedIndirectCommand));
                     }
 
-                    if (range.alpha_count > 0) {
-                        pc.base_draw_id = range.alpha_base;
+                    if (range.double_sided.count > 0) {
+                        vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+                        pc.base_draw_id = range.double_sided.base;
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
+                        vkCmdPushConstants(cmd, predepth->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
+                                           &pc);
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->layout, 0, 1,
+                                                &gpu.bindless.set, 0, nullptr);
+                        const VkDeviceSize offset =
+                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
+                                range.double_sided.base * sizeof(VkDrawIndexedIndirectCommand);
+
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.double_sided.count,
+                                                 sizeof(VkDrawIndexedIndirectCommand));
+                        vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
+                    }
+
+                    if (range.alpha.count > 0) {
+                        pc.base_draw_id = range.alpha.base;
                         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->pipeline);
                         vkCmdPushConstants(cmd, alpha->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
@@ -375,9 +393,9 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                                                 &gpu.bindless.set, 0, nullptr);
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                                range.alpha_base * sizeof(VkDrawIndexedIndirectCommand);
+                                range.alpha.base * sizeof(VkDrawIndexedIndirectCommand);
 
-                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.alpha_count,
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.alpha.count,
                                                  sizeof(VkDrawIndexedIndirectCommand));
                     }
                 }
@@ -703,17 +721,17 @@ auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstan
                             .sampler_index = pipes.depth_compare_filter.index(),
                     };
 
-                    if (range.opaque_count > 0) {
-                        pc.base_draw_id = range.opaque_base;
+                    if (range.opaque.count > 0) {
+                        pc.base_draw_id = range.opaque.base;
                         vkCmdPushConstants(cmd, shadow_pipeline->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                            &pc);
 
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                                range.opaque_base * sizeof(VkDrawIndexedIndirectCommand);
+                                range.opaque.base * sizeof(VkDrawIndexedIndirectCommand);
 
-                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.opaque_count,
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.opaque.count,
                                                  sizeof(VkDrawIndexedIndirectCommand));
                     }
                 }
@@ -749,6 +767,8 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
                       std::span<const DrawRanges> ranges, const SubmitSynchronisation &sync) -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
     const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
+
+    const auto slot_offset = static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index));
 
     return submit_stage(
             gpu.tl_graphics, gpu.device,
@@ -844,32 +864,43 @@ auto run_gbuffer_pass(AppContext &ctx, VkExtent2D frame_extent, std::span<const 
                             .sampler_index = pipes.linear_repeat.index(),
                     };
 
-                    if (range.opaque_count > 0) {
-                        pc.base_draw_id = range.opaque_base;
+                    if (range.opaque.count > 0) {
+                        pc.base_draw_id = range.opaque.base;
                         vkCmdPushConstants(cmd, mrt_pipeline->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                            &pc);
 
-                        const VkDeviceSize offset =
-                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                                static_cast<VkDeviceSize>(range.opaque_base) * sizeof(VkDrawIndexedIndirectCommand);
+                        const VkDeviceSize offset = slot_offset + static_cast<VkDeviceSize>(range.opaque.base) *
+                                                                          sizeof(VkDrawIndexedIndirectCommand);
 
-                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.opaque_count,
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.opaque.count,
                                                  sizeof(VkDrawIndexedIndirectCommand));
                     }
 
-                    if (range.alpha_count > 0) {
-                        pc.base_draw_id = range.alpha_base;
+                    if (range.alpha.count > 0) {
+                        pc.base_draw_id = range.alpha.base;
                         vkCmdPushConstants(cmd, mrt_pipeline->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                            &pc);
 
-                        const VkDeviceSize offset =
-                                static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +
-                                static_cast<VkDeviceSize>(range.alpha_base) * sizeof(VkDrawIndexedIndirectCommand);
+                        const VkDeviceSize offset = slot_offset + static_cast<VkDeviceSize>(range.alpha.base) *
+                                                                          sizeof(VkDrawIndexedIndirectCommand);
 
-                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.alpha_count,
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.alpha.count,
                                                  sizeof(VkDrawIndexedIndirectCommand));
+                    }
+
+                    if (range.double_sided.count > 0) {
+                        vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+                        pc.base_draw_id = range.double_sided.base;
+                        vkCmdPushConstants(cmd, mrt_pipeline->layout,
+                                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
+                                           &pc);
+                        const VkDeviceSize offset = slot_offset + static_cast<VkDeviceSize>(range.double_sided.base) *
+                                                                          sizeof(VkDrawIndexedIndirectCommand);
+                        vkCmdDrawIndexedIndirect(cmd, indirect->buffer(), offset, range.double_sided.count,
+                                                 sizeof(VkDrawIndexedIndirectCommand));
+                        vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
                     }
                 }
 
@@ -1128,8 +1159,8 @@ auto run_ssao_blur_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSy
             sync);
 }
 
-auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, const u32,
-                                const SubmitSynchronisation &sync) -> u64 {
+auto run_deferred_lighting_pass(AppContext &ctx, const VkExtent2D frame_extent, const SubmitSynchronisation &sync)
+        -> u64 {
     auto &&[gpu, pipes, res, ui, scene] = ctx;
     const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
 
