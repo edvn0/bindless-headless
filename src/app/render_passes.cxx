@@ -687,7 +687,7 @@ auto run_directional_shadow_map_pass(AppContext &ctx, std::span<const MeshInstan
                 vkCmdSetScissor(cmd, 0, 1, &sc);
                 vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER_OR_EQUAL);
                 vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
-                vkCmdSetCullMode(cmd, VK_CULL_MODE_BACK_BIT);
+                vkCmdSetCullMode(cmd, VK_CULL_MODE_FRONT_BIT);
                 vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
                 vkCmdSetDepthBiasEnable(cmd, VK_TRUE);
                 vkCmdSetDepthBias(cmd, ui.shadow_config.depth_bias_constant_factor, ui.shadow_config.depth_bias_clamp,
