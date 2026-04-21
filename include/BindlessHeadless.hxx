@@ -27,47 +27,8 @@
 
 namespace detail {
     auto initialise_debug_name_func(VkInstance) -> void;
-
     auto set_debug_name_impl(VmaAllocator &, VkObjectType, u64, std::string_view) -> void;
     auto set_debug_name_impl(VkDevice, VkObjectType, u64, std::string_view) -> void;
-
-    auto submit_and_wait(VkDevice device, VkCommandPool cmd_pool, VkQueue queue, auto &&record) -> void {
-        VkCommandBufferAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                                       .pNext = nullptr,
-                                       .commandPool = cmd_pool,
-                                       .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                                       .commandBufferCount = 1};
-
-        VkCommandBuffer cb{};
-        vk_check(vkAllocateCommandBuffers(device, &ai, &cb));
-
-        VkCommandBufferBeginInfo bi{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-                                    .pNext = nullptr,
-                                    .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-                                    .pInheritanceInfo = nullptr};
-        vk_check(vkBeginCommandBuffer(cb, &bi));
-
-
-        record(cb);
-
-        vk_check(vkEndCommandBuffer(cb));
-
-        VkSubmitInfo si{};
-        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cb;
-
-        auto fci = create_info<VkFenceCreateInfo>();
-
-        VkFence fence{};
-        vk_check(vkCreateFence(device, &fci, nullptr, &fence));
-
-        vk_check(vkQueueSubmit(queue, 1, &si, fence));
-        vk_check(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
-
-        vkDestroyFence(device, fence, nullptr);
-        vkFreeCommandBuffers(device, cmd_pool, 1, &cb);
-    }
 } // namespace detail
 
 template<typename T>
@@ -97,6 +58,11 @@ enum class Stage : u32 {
     Billboard,
     Count,
 };
+constexpr std::array<std::string_view, static_cast<std::size_t>(Stage::Count)> stage_names = {
+        "GBuffer", "Predepth",        "Tonemapping",          "CubeRotation", "DeferredLighting", "SSAO", "SSAOBlur",
+        "Skybox",  "LightClustering", "DirectionalShadowMap", "Bloom",        "Billboard",
+};
+static_assert(stage_names.size() == static_cast<std::size_t>(Stage::Count), "stage_names size mismatch");
 
 constexpr auto stage_count = static_cast<u32>(Stage::Count);
 

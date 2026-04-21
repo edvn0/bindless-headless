@@ -292,7 +292,7 @@ namespace {
 
     auto draw_entity_node(entt::registry &reg, entt::entity entity, entt::entity &selected,
                           std::unordered_set<entt::entity> &visited) -> void {
-        if (!reg.valid(entity) || visited.count(entity))
+        if (!reg.valid(entity) || visited.contains(entity))
             return;
         visited.insert(entity);
 
@@ -301,37 +301,36 @@ namespace {
         const auto *hc = reg.try_get<HierarchyComponent>(entity);
         const bool has_children = hc && !hc->children.empty();
 
-        ImGuiTreeNodeFlags node_flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                                        ImGuiTreeNodeFlags_SpanFullWidth;
-
+        ImGuiTreeNodeFlags node_flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanFullWidth;
         if (selected == entity)
             node_flags |= ImGuiTreeNodeFlags_Selected;
         if (!has_children)
-            node_flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            node_flags |= ImGuiTreeNodeFlags_Leaf;
 
         ImGui::PushID(static_cast<int>(entt::to_integral(entity)));
+        bool node_open = ImGui::TreeNodeEx(label, node_flags);
 
-        const bool node_open = ImGui::TreeNodeEx(label, node_flags);
-
-        if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
+        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
             selected = entity;
 
         if (ImGui::BeginDragDropSource()) {
             ImGui::SetDragDropPayload("ENTITY_DND", &entity, sizeof(entity));
-            ImGui::Text("Move: %s", label);
+            ImGui::Text("Move %s", label);
             ImGui::EndDragDropSource();
         }
 
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload *payload = ImGui::AcceptDragDropPayload("ENTITY_DND")) {
                 const auto dragged = *static_cast<const entt::entity *>(payload->Data);
-                if (dragged != entity)
+                if (dragged != entity && !hierarchy::is_descendant_of(reg, dragged, entity)) {
                     hierarchy::set_parent(reg, dragged, entity);
+                }
             }
             ImGui::EndDragDropTarget();
         }
 
-        if (ImGui::BeginPopupContextItem("##entity_ctx")) {
+        bool should_destroy = false;
+        if (ImGui::BeginPopupContextItem()) {
             if (ImGui::MenuItem("Rename")) {
                 s_rename.target = entity;
                 if (mesh)
@@ -340,53 +339,42 @@ namespace {
                     s_rename.buf[0] = '\0';
                 s_rename.open_next = true;
             }
-
             if (ImGui::MenuItem("Create Child")) {
                 const std::string child_name = std::string(label) + "_child";
                 const auto child = entity_factory::make_empty(reg, child_name);
                 hierarchy::set_parent(reg, child, entity);
                 selected = child;
             }
-
             ImGui::Separator();
-
-            if (ImGui::MenuItem("Detach from Parent"))
+            if (ImGui::MenuItem("Detach"))
                 hierarchy::set_parent(reg, entity, entt::null);
 
-            ImGui::Separator();
-
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
-            if (ImGui::MenuItem("Destroy")) {
-                if (selected == entity)
-                    selected = entt::null;
-                std::vector<entt::entity> result{};
-                get_all_children(get_all_children, reg, entity, result);
-                std::ranges::for_each(result, [&](entt::entity e) { reg.destroy(e); });
-                reg.destroy(entity);
-
-                if (node_open && has_children)
-                    ImGui::TreePop();
-                ImGui::PopStyleColor();
-                ImGui::EndPopup();
-                ImGui::PopID();
-                return;
-            }
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 0.4f, 0.4f, 1));
+            if (ImGui::MenuItem("Destroy"))
+                should_destroy = true;
             ImGui::PopStyleColor();
+
             ImGui::EndPopup();
         }
 
-        if (node_open && has_children) {
-            auto sorted_children = hc->children;
-            std::ranges::sort(sorted_children, [&](entt::entity a, entt::entity b) {
-                auto *ma = reg.try_get<MeshComponent>(a);
-                auto *mb = reg.try_get<MeshComponent>(b);
-                const std::string_view na = ma ? ma->name : "";
-                const std::string_view nb = mb ? mb->name : "";
-                return na < nb;
-            });
-            for (auto child: sorted_children)
-                draw_entity_node(reg, child, selected, visited);
+        if (node_open) {
+            if (has_children) {
+                auto children_copy = hc->children;
+                for (auto child: children_copy)
+                    draw_entity_node(reg, child, selected, visited);
+            }
             ImGui::TreePop();
+        }
+
+        if (should_destroy) {
+            std::vector<entt::entity> targets{entity};
+            get_all_children(get_all_children, reg, entity, targets);
+            for (auto e: targets) {
+                if (reg.valid(e))
+                    reg.destroy(e);
+            }
+            if (selected == entity)
+                selected = entt::null;
         }
 
         ImGui::PopID();
@@ -769,6 +757,17 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
     widget("Debug clustering", [&c = ctx] {
         ImGui::ImageButton("Clustering", ImTextureRef{c.res.debug_culling.index()},
                            {ImGui::GetContentRegionAvail().x, ImGui::GetContentRegionAvail().y});
+    });
+
+    widget("Enabled Passes", [&c = ctx] {
+        for (int i = 0; i < static_cast<int>(Stage::Count); i++) {
+            const auto stage = static_cast<Stage>(i);
+            const auto &name = stage_names.at(i);
+            auto &enabled = c.res.enabled_passes[static_cast<u32>(stage)];
+            ImGui::PushID(static_cast<int>(stage));
+            ImGui::Checkbox(name.data(), &enabled);
+            ImGui::PopID();
+        }
     });
 
     widget("Cluster Configuration", [&] {

@@ -43,6 +43,7 @@ struct UBO {
     float4 frustum_planes[6];
     float4 sun_direction_intensity;
     float2 viewport_size;
+    uint frame_index;
 
     property sun_dir : float3
     {

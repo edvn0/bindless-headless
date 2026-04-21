@@ -896,8 +896,6 @@ namespace {
         out.height = static_cast<u32>(ktx2->baseHeight);
         out.levels = static_cast<u32>(ktx2->numLevels);
 
-        info("Name: {}, Levels: {}", out.name, out.levels);
-
         const bool needs_transcode = ktxTexture2_NeedsTranscoding(ktx2);
 
         if (needs_transcode) {

@@ -680,6 +680,8 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
             .scene = scene,
     };
 
+    res.enabled_passes.fill(true);
+
     gpu.opts = &opts;
     gpu.instance = &instance;
 
@@ -1574,7 +1576,7 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
                     const auto old_tonemap = res.tonemapped;
 
                     res.tonemapped = gpu.ctx.create_texture(create_offscreen_target(
-                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_SRGB, {}, "tonemapped"));
+                            gpu.allocator, e.width, e.height, VK_FORMAT_R8G8B8A8_SRGB, {0b111}, "tonemapped"));
                     destroy(gpu.ctx, old_tonemap, resize_context.retire_value);
                 });
 
@@ -1920,6 +1922,12 @@ gpu.bindless.need_repopulate = true;
         const auto swap_image_index = acquired->image_index;
         const auto frame_sync = acquired->sync;
 
+        auto maybe_run = [&]<typename TL>(Stage stage, TL &tl, const SubmitSynchronisation &sync, auto fn) -> u64 {
+            if (res.enabled_passes[stage_index(stage)])
+                return fn();
+            return submit_stage(tl, gpu.device, [](VkCommandBuffer) {}, sync);
+        };
+
         RP::setup_render_passes_for_frame(app_context, bounded_frame_index);
 
 
@@ -2048,6 +2056,7 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
+
             const std::array billboard_waits{
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::Bloom)],
@@ -2055,8 +2064,10 @@ gpu.bindless.need_repopulate = true;
                             .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },
             };
-            fs.timeline_values[stage_index(Stage::Billboard)] = run_billboard_pass(
-                    app_context, render_scene_extent, SubmitSynchronisation{.timeline_waits = billboard_waits});
+            const SubmitSynchronisation billboard_sync{.timeline_waits = billboard_waits};
+            fs.timeline_values[stage_index(Stage::Billboard)] =
+                    maybe_run(Stage::Billboard, gpu.tl_graphics, billboard_sync,
+                              [&] { return run_billboard_pass(app_context, render_scene_extent, billboard_sync); });
         }
 
         {

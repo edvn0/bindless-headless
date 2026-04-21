@@ -10,20 +10,26 @@ namespace hierarchy {
         return reg.get<HierarchyComponent>(e);
     }
 
-    auto set_parent(entt::registry &reg, entt::entity child, entt::entity new_parent) -> void {
-        auto &[parent, children] = get_or_add(reg, child);
+    auto set_parent(entt::registry &reg, Child child, Parent new_parent) -> void {
+        if (child == new_parent)
+            return;
 
-        if (parent != entt::null && reg.valid(parent)) {
-            auto &old_ph = get_or_add(reg, parent);
-            auto &cv = old_ph.children;
-            std::erase(cv, child);
+        if (auto *hc = reg.try_get<HierarchyComponent>(child)) {
+            if (hc->parent != entt::null && reg.valid(hc->parent)) {
+                if (auto *old_p_hc = reg.try_get<HierarchyComponent>(hc->parent)) {
+                    std::erase(old_p_hc->children, child);
+                }
+            }
+            hc->parent = new_parent;
+        } else if (new_parent != entt::null) {
+            reg.emplace<HierarchyComponent>(child, new_parent);
         }
 
-        parent = new_parent;
-
         if (new_parent != entt::null && reg.valid(new_parent)) {
-            if (auto &ph = get_or_add(reg, new_parent); std::ranges::find(ph.children, child) == ph.children.end())
-                ph.children.push_back(child);
+            auto &new_p_hc = get_or_add(reg, new_parent);
+            if (std::ranges::find(new_p_hc.children, child) == new_p_hc.children.end()) {
+                new_p_hc.children.push_back(child);
+            }
         }
     }
 
@@ -43,6 +49,19 @@ namespace hierarchy {
             return reg.get<MeshComponent>(a).name < reg.get<MeshComponent>(b).name;
         });
         return result;
+    }
+
+    auto is_descendant_of(entt::registry &reg, entt::entity parent, entt::entity potential_child) -> bool {
+        if (parent == potential_child)
+            return true;
+
+        if (auto *hc = reg.try_get<HierarchyComponent>(parent)) {
+            for (auto child: hc->children) {
+                if (is_descendant_of(reg, child, potential_child))
+                    return true;
+            }
+        }
+        return false;
     }
 
 } // namespace hierarchy

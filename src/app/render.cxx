@@ -55,23 +55,18 @@ auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffe
     const auto alpha_count = static_cast<u32>(alpha_cmds.size());
     const auto double_sided_count = static_cast<u32>(double_sided_cmds.size());
 
-    // pack contiguously within the allocated block
-    const u32 opaque_base = block_base;
-    const u32 alpha_base = block_base + opaque_count;
-    const u32 ds_base = block_base + opaque_count + alpha_count;
 
-    if (opaque_count > 0) {
-        buffers.cmd_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_cmds));
-        buffers.material_id_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_mats));
-    }
-    if (alpha_count > 0) {
-        buffers.cmd_ring.write_elements(ctx, frame_index, alpha_base, std::span(alpha_cmds));
-        buffers.material_id_ring.write_elements(ctx, frame_index, alpha_base, std::span(alpha_mats));
-    }
-    if (double_sided_count > 0) {
-        buffers.cmd_ring.write_elements(ctx, frame_index, ds_base, std::span(double_sided_cmds));
-        buffers.material_id_ring.write_elements(ctx, frame_index, ds_base, std::span(double_sided_mats));
-    }
+    const u32 opaque_base = block_base;
+    buffers.cmd_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_cmds));
+    buffers.material_id_ring.write_elements(ctx, frame_index, opaque_base, std::span(opaque_mats));
+
+    const u32 alpha_base = block_base + opaque_count;
+    buffers.cmd_ring.write_elements(ctx, frame_index, alpha_base, std::span(alpha_cmds));
+    buffers.material_id_ring.write_elements(ctx, frame_index, alpha_base, std::span(alpha_mats));
+
+    const u32 ds_base = block_base + opaque_count + alpha_count;
+    buffers.cmd_ring.write_elements(ctx, frame_index, ds_base, std::span(double_sided_cmds));
+    buffers.material_id_ring.write_elements(ctx, frame_index, ds_base, std::span(double_sided_mats));
 
     return {
             .opaque = {.base = opaque_base, .count = opaque_count},

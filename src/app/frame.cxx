@@ -38,6 +38,7 @@ auto write_camera_to_frame_ubo(FrameUBO &ubo, RenderContext &ctx, AlignedRingBuf
                                u32 frame_index, const EditorCamera &cam, VkExtent2D extent, float fov_y_radians,
                                float near_plane, float far_plane) -> void {
     fill_frame_ubo_from_camera(ubo, cam, extent, fov_y_radians, near_plane, far_plane);
+    ubo.frame_index = frame_index;
     frame_ubo_ring.write_element(ctx, frame_index, 0, ubo);
 }
 

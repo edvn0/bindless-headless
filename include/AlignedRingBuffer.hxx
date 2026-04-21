@@ -40,6 +40,9 @@ public:
 
     // Write multiple elements starting at element_index within the given slot
     auto write_elements(RenderContext &ctx, u64 slot_index, u64 element_index, std::span<T const> values) -> void {
+        if (values.empty())
+            return;
+
         auto *buf = ctx.buffers.get(buffer);
         if (!buf) {
             error("AlignedRingBuffer: invalid buffer handle");

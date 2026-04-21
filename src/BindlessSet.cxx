@@ -106,9 +106,7 @@ auto BindlessSet::flush_pending_writes(VkImageView dummy_sampled, VkImageView du
         const auto &pw = pending_texture_writes[i];
 
         const VkImageView sv = (pw.sampled_view != VK_NULL_HANDLE) ? pw.sampled_view : dummy_sampled;
-        const VkImageView stv = (pw.storage_view != VK_NULL_HANDLE)   ? pw.storage_view
-                                : (pw.sampled_view != VK_NULL_HANDLE) ? pw.sampled_view
-                                                                      : dummy_storage;
+        const VkImageView stv = (pw.storage_view != VK_NULL_HANDLE) ? pw.storage_view : dummy_storage;
 
         sampled_infos[i] = {.sampler = VK_NULL_HANDLE, .imageView = sv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
         storage_infos[i] = {.sampler = VK_NULL_HANDLE, .imageView = stv, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
@@ -277,7 +275,7 @@ auto BindlessSet::repopulate_if_needed(TexturePool &textures, SamplerPool &sampl
                 break;
             }
 
-            const VkSampler s = sampler_entry.object;
+            const auto &s = sampler_entry.object;
             sampler_infos[idx] = VkDescriptorImageInfo{
                     .sampler = (s != VK_NULL_HANDLE) ? s : dummy_vk_sampler,
                     .imageView = VK_NULL_HANDLE,
@@ -305,7 +303,7 @@ auto BindlessSet::repopulate_if_needed(TexturePool &textures, SamplerPool &sampl
                 break;
             }
 
-            const VkSampler s = sampler_entry.object;
+            const auto &s = sampler_entry.object;
             comparison_sampler_infos[idx] = VkDescriptorImageInfo{
                     .sampler = (s != VK_NULL_HANDLE) ? s : dummy_vk_sampler,
                     .imageView = VK_NULL_HANDLE,

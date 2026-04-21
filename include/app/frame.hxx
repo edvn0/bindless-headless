@@ -21,6 +21,7 @@ struct FrameUBO {
     std::array<FrustumPlane, 6> frustum_planes{}; // left, right, bottom, top, near, far
     glm::vec4 sun_direction_intensity{};
     glm::vec2 viewport_size{};
+    u32 frame_index{};
 };
 
 

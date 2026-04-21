@@ -240,6 +240,8 @@ struct AppResources {
     TextureHandle bloom_threshold{};
     u32 bloom_mip_count{6};
 
+    std::array<bool, stage_count> enabled_passes{};
+
     static constexpr u32 max_draws_per_frame = 100'000U;
     AlignedRingBuffer<VkDrawIndexedIndirectCommand> indirect_ring{};
     AlignedRingBuffer<VkDrawMeshTasksIndirectCommandEXT> mesh_indirect_ring{};

@@ -368,11 +368,11 @@ auto run_predepth_pass(AppContext &ctx, VkExtent2D frame_extent,
                     if (range.double_sided.count > 0) {
                         vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
                         pc.base_draw_id = range.double_sided.base;
-                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->pipeline);
-                        vkCmdPushConstants(cmd, predepth->layout,
+                        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->pipeline);
+                        vkCmdPushConstants(cmd, alpha->layout,
                                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc),
                                            &pc);
-                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, predepth->layout, 0, 1,
+                        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, alpha->layout, 0, 1,
                                                 &gpu.bindless.set, 0, nullptr);
                         const VkDeviceSize offset =
                                 static_cast<VkDeviceSize>(res.indirect_ring.slot_offset_bytes(bounded_frame_index)) +

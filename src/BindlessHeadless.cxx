@@ -367,6 +367,7 @@ auto create_offscreen_target(VmaAllocator &alloc, u32 width, u32 height, VkForma
     } else {
         t.storage_view = VK_NULL_HANDLE;
         t.storage_view_type = VK_IMAGE_VIEW_TYPE_2D;
+        info("Storage view not created for {}", name);
     }
 
     set_debug_name(alloc, VK_OBJECT_TYPE_IMAGE, t.image, name);
@@ -1519,6 +1520,7 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
             VK_EXT_MESH_SHADER_EXTENSION_NAME,
             VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
             VK_KHR_MAINTENANCE_9_EXTENSION_NAME,
+            VK_KHR_MAINTENANCE_5_EXTENSION_NAME,
             VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
             VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
             VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME,
@@ -1559,8 +1561,11 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
     VkPhysicalDeviceVulkan13Features features13{};
     features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, features13.pNext = &features12;
 
+    VkPhysicalDeviceVulkan14Features features14{};
+    features14.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES, features14.pNext = &features13;
+
     VkPhysicalDeviceFeatures2 features2{};
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, features2.pNext = &features13;
+    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, features2.pNext = &features14;
 
 
     vkGetPhysicalDeviceFeatures2(pd, &features2);
@@ -1608,6 +1613,8 @@ auto create_device(VkPhysicalDevice pd, u32 graphics_index, u32 compute_index, u
     features13.dynamicRendering = VK_TRUE;
     features13.synchronization2 = VK_TRUE;
     features13.robustImageAccess = VK_TRUE;
+
+    features14.maintenance5 = VK_TRUE;
 
     if (enabled_features.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
         enabled_features.contains(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)) {

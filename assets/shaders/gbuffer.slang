@@ -2,6 +2,7 @@ import common;
 import maths;
 import pointer;
 import constants;
+import dithering;
 
 // -------------------------------------------------------------------------------------------------
 // Material evaluation (NOW uses vertex T/B/N for normal mapping)
@@ -36,19 +37,13 @@ float3 normal_ts_to_ws(float3 n_ts, float3 t_ws, float3 b_ws, float3 n_ws) {
     return safe_normalize(mul(n_ts, TBN));
 }
 
-SurfaceMaterial evaluate_material_tbn(Material mat, float4 multi_uv, float3 n_ws_geom, float3 t_ws, float3 b_ws,
+SurfaceMaterial evaluate_material_tbn(Material mat, float4 albedo_sample, float4 multi_uv, float3 n_ws_geom, float3 t_ws, float3 b_ws,
                                       uint sampler_index) {
     SurfaceMaterial surf;
     var uv = multi_uv.xy;
 
-    // Albedo
-    if (mat.has_albedo_map()) {
-        float4 a = sample_texture(uv, mat.albedo_map, sampler_index);
-        surf.albedo.rgb = a.rgb * mat.albedo_factor.rgb;
-        surf.albedo.a = 1.0F;
-    } else {
-        surf.albedo = mat.albedo_factor.rgba;
-    }
+    surf.albedo.rgb = albedo_sample.rgb * mat.albedo_factor.rgb;
+    surf.albedo.a = 1.0;
 
     float3 N = safe_normalize(n_ws_geom);
     if (mat.has_normal_map()) {
@@ -336,11 +331,23 @@ struct GBufferOutput {
                                       bool is_front_face : SV_IsFrontFace, out GBufferOutput out_gbuf) {
     Material mat = pc.materials[NonUniformResourceIndex(input.material)];
 
+        float4 albedo_sample = mat.albedo_factor;
+        if (mat.has_albedo_map()) {
+            albedo_sample *= sample_texture(input.uv.xy, mat.albedo_map, pc.sampler_index);
+        }
+
+        if (mat.is_alpha_tested() && albedo_sample.a < alpha_cutoff) {
+            discard;
+        }
+
+        if (mat.is_transparent() && is_dithered_discarded(albedo_sample.a, input.position.xy, pc.frame_ubo->frame_index)) {
+            discard;
+        }
+
     float3 n_ws = is_front_face ? input.n_ws : -input.n_ws;
     float3 t_ws = is_front_face ? input.t_ws : -input.t_ws;
     float3 b_ws = is_front_face ? input.b_ws : -input.b_ws;
-
-    SurfaceMaterial surf = evaluate_material_tbn(mat, input.uv, n_ws, t_ws, b_ws, pc.sampler_index);
+SurfaceMaterial surf = evaluate_material_tbn(mat, albedo_sample, input.uv, n_ws, t_ws, b_ws, pc.sampler_index);
 
     out_gbuf.albedo_ao = float4(surf.albedo.rgb, saturate(surf.occlusion));
 

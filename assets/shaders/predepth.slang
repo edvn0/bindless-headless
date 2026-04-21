@@ -2,12 +2,14 @@ import common;
 import maths;
 import constants;
 import pointer;
+import dithering;
+
 
 struct PC {
-    UBO* frame_ubo;
+    DeviceReadPtr<UBO> frame_ubo;
     DeviceReadPtr<InstanceData> instance_data;
-    uint* draw_material_ids;
-    Material* materials;
+    DeviceReadPtr<uint> draw_material_ids;
+    DeviceReadPtr<Material> materials;
     uint       base_draw_id;
     uint       sampler_index;
 };
@@ -59,9 +61,24 @@ VSOut main_vs_mdi(
 void fs_main(VSOut i, uniform PC pc)
 {
     Material mat = pc.materials[i.material_id];
-    float alpha = sample_texture(i.uvs.xy, mat.albedo_map).a;
 
-    if (alpha < alpha_cutoff) {
-        discard;
+    // We only need the alpha channel for depth testing
+    float alpha = mat.albedo_factor.a;
+    if (mat.has_albedo_map()) {
+        alpha *= sample_texture(i.uvs.xy, mat.albedo_map, pc.sampler_index).a;
+    }
+
+    // 1. Alpha Test (GLTF Mask Mode)
+    if (mat.is_alpha_tested()) {
+        if (alpha < alpha_cutoff) {
+            discard;
+        }
+    }
+
+    // 2. Dithered Transparency
+    if (mat.is_transparent()) {
+        if (is_dithered_discarded(alpha, i.position.xy, pc.frame_ubo->frame_index)) {
+            discard;
+        }
     }
 }
