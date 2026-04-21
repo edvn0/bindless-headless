@@ -365,12 +365,16 @@ struct UIValueLatch {
         changed = true;
     }
 
+    auto mark_dirty() -> void { changed = true; }
+
     auto consume() -> T {
         changed = false;
         if constexpr (std::is_move_constructible_v<T>)
             return std::move(value);
         else
             return value;
+
+        value = T{};
     }
 
     auto consume_if_changed() -> std::optional<T> {

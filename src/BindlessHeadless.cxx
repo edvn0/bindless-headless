@@ -1732,7 +1732,7 @@ auto throttle(auto &tl, VkDevice device) -> void {
 
 auto throttle(ComputeTimeline &tl, VkDevice device) -> void { return throttle<ComputeTimeline>(tl, device); }
 
-auto flush_material_pool(RenderContext &ctx) -> void {
+/*auto flush_material_pool(RenderContext &ctx) -> void {
     auto &pool = ctx.materials;
 
     if (!pool.dirty) [[likely]]
@@ -1754,22 +1754,79 @@ auto flush_material_pool(RenderContext &ctx) -> void {
     destroy(ctx, old_handle);
     pool.gpu_buffer = ctx.create_buffer(std::move(buf));
     pool.dirty = false;
+}*/
+
+auto flush_material_pool(RenderContext &ctx) -> void {
+    auto &pool = ctx.materials;
+    if (!pool.dirty)
+        return;
+
+    // 1. Handle Growth
+    if (pool.gpu_count > pool.current_gpu_capacity) {
+        // Grow by 1.5x or 2x
+        u32 new_capacity = std::max(pool.gpu_count, (u32) (pool.current_gpu_capacity * 1.5f));
+        new_capacity = std::max(new_capacity, 32u); // Minimum floor
+
+        auto new_buffer = Buffer::zeroes(ctx.allocator, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                         new_capacity * sizeof(GPUMaterialData), "global_material_pool")
+                                  .value();
+
+        if (pool.gpu_buffer) {
+            destroy(ctx, pool.gpu_buffer);
+        }
+
+        pool.gpu_buffer = ctx.create_buffer(std::move(new_buffer));
+        pool.current_gpu_capacity = new_capacity;
+
+        pool.dirty_min_idx = 0;
+        pool.dirty_max_idx = pool.gpu_count - 1;
+    }
+
+    u32 update_count = (pool.dirty_max_idx - pool.dirty_min_idx) + 1;
+    std::vector<GPUMaterialData> staging_data(update_count);
+
+    for (u32 i = 0; i < update_count; ++i) {
+        u32 gpu_slot = pool.dirty_min_idx + i;
+        u32 pool_idx = pool.gpu_to_pool[gpu_slot];
+        staging_data[i] = *pool.cpu_pool.get(pool.cpu_pool.get_handle(pool_idx));
+    }
+
+    ctx.buffers.get(pool.gpu_buffer)
+            ->write_slice(ctx.allocator, std::span{staging_data}, pool.dirty_min_idx * sizeof(GPUMaterialData));
+
+    // Reset tracking
+    pool.dirty = false;
+    pool.dirty_min_idx = 0xFFFFFFFFu;
+    pool.dirty_max_idx = 0;
 }
 
-auto GPUMaterialPool::register_batch(std::span<const GPUMaterialData> mats) -> u32 {
-    const u32 base = gpu_count;
-    for (const auto &mat: mats) {
-        const auto handle = cpu_pool.create(GPUMaterialData{mat});
-        const u32 gpu_slot = gpu_count++;
+auto GPUMaterialPool::register_batch(std::span<const GPUMaterialData> materials) -> u32 {
+    const u32 batch_size = static_cast<u32>(materials.size());
+    const u32 first_gpu_slot = gpu_count;
 
-        if (pool_to_gpu.size() <= handle.index())
-            pool_to_gpu.resize(handle.index() + 1, UINT32_MAX);
-        if (gpu_to_pool.size() <= gpu_slot)
-            gpu_to_pool.resize(gpu_slot + 1, UINT32_MAX);
+    const u32 new_total_count = gpu_count + batch_size;
 
-        pool_to_gpu[handle.index()] = gpu_slot;
-        gpu_to_pool[gpu_slot] = handle.index();
+    if (new_total_count > gpu_to_pool.size()) {
+        u32 new_vec_capacity = std::max(new_total_count, static_cast<u32>(gpu_to_pool.size() * 1.5f));
+        gpu_to_pool.resize(new_vec_capacity);
+        pool_to_gpu.resize(new_vec_capacity);
     }
+
+    for (u32 i = 0; i < batch_size; ++i) {
+        const u32 current_gpu_slot = gpu_count + i;
+
+        auto handle = cpu_pool.create(GPUMaterialData{materials[i]});
+        u32 pool_idx = handle.index();
+
+        gpu_to_pool[current_gpu_slot] = pool_idx;
+        pool_to_gpu[pool_idx] = current_gpu_slot;
+    }
+
     dirty = true;
-    return base;
+    dirty_min_idx = std::min(dirty_min_idx, first_gpu_slot);
+    dirty_max_idx = std::max(dirty_max_idx, new_total_count - 1);
+
+    gpu_count = new_total_count;
+
+    return first_gpu_slot;
 }

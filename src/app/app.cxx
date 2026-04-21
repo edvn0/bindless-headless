@@ -1188,6 +1188,7 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
                                             .value();
 
         ui.clustering_config = res.clustering_config;
+        ui.clustering_config.mark_dirty();
     }
 
     res.frame_ubo_ring =

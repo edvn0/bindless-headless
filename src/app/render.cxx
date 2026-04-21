@@ -33,6 +33,12 @@ auto write_mesh_indirect(RenderContext &ctx, u32 frame_index, IndirectWriteBuffe
             }
         }
         const auto &material = ctx.materials.cpu_pool.get(ctx.materials.cpu_pool.get_handle(mat_id));
+
+        if (material->is_set<MaterialFlags::Transparent>()) {
+            // FIXME(edwin): Add transparent pass.
+            continue;
+        }
+
         if (s.alpha_tested) {
             alpha_cmds.push_back(c);
             alpha_mats.push_back(mat_id);

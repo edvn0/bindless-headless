@@ -302,11 +302,21 @@ struct GPUMaterialPool {
     Pool<struct MaterialTag, GPUMaterialData> cpu_pool{};
 
     BufferHandle gpu_buffer{};
+    u32 current_gpu_capacity{0};
     bool dirty{true};
 
     std::vector<u32> pool_to_gpu{};
     std::vector<u32> gpu_to_pool{};
     u32 gpu_count{0};
+
+    u32 dirty_min_idx{0xFFFFFFFFu};
+    u32 dirty_max_idx{0};
+
+    auto mark_dirty(u32 gpu_idx) -> void {
+        dirty = true;
+        dirty_min_idx = std::min(dirty_min_idx, gpu_idx);
+        dirty_max_idx = std::max(dirty_max_idx, gpu_idx);
+    }
 
     auto register_batch(std::span<const GPUMaterialData>) -> u32;
 };
