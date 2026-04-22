@@ -127,6 +127,30 @@
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "installDir": "${sourceDir}/out/install/${presetName}",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "HAS_TRACY": "ON",
+        "SCENE_COMPRESSION": "lz4",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_C_COMPILER": "gcc"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
+          "sourceDir": "$env{HOME}/.vs/$ms{projectDirName}"
+        }
+      }
+    },
+    {
+      "name": "linux-relwithdebinfo",
+      "displayName": "Linux relwithdebinfo",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "HAS_TRACY": "ON",
         "SCENE_COMPRESSION": "lz4",

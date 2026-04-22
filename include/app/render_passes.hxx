@@ -66,31 +66,20 @@ namespace RP {
 
 auto run_rotation_pass(AppContext &, BoundedLastFrameIndex, const DeviceAddress &,
                        const SubmitSynchronisation & = no_waits) -> TimelineValue;
-
 auto run_predepth_pass(AppContext &, VkExtent2D, std::span<const MeshInstanceRange>, std::span<const DrawRanges>,
                        const SubmitSynchronisation &) -> u64;
-
 auto run_light_clustering_pass(AppContext &, const SubmitSynchronisation &) -> TimelineValue;
-
 auto run_directional_shadow_map_pass(AppContext &, std::span<const MeshInstanceRange>, std::span<const DrawRanges>,
                                      const SubmitSynchronisation &) -> u64;
-
 auto run_gbuffer_pass(AppContext &, VkExtent2D, std::span<const MeshInstanceRange>, std::span<const DrawRanges>,
                       const SubmitSynchronisation &) -> u64;
-
 auto run_ssao_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 auto run_ssao_blur_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
-
 auto run_deferred_lighting_pass(AppContext &, const VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
-
 auto run_environment_skybox_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
-
 auto run_bloom_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
-
+auto run_infinite_grid_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
 auto run_billboard_pass(AppContext &, VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
-
 auto run_tonemap_pass(AppContext &, const VkExtent2D, const SubmitSynchronisation &) -> TimelineValue;
-
 auto run_imgui_pass(AppContext &, const SubmitSynchronisation &) -> TimelineValue;
-
 auto run_swapchain_pass(AppContext &, const u32 swap_image_index, const SubmitSynchronisation &) -> TimelineValue;

@@ -100,6 +100,8 @@ struct AppPipelines {
     PipelineHandle directional_shadow_map_pipeline{};
     PipelineHandle directional_shadow_map_alpha_pipeline{};
 
+    PipelineHandle infinite_grid_pipeline{};
+
     PipelineHandle skybox_pipeline{};
 
     PipelineHandle ssao_pipeline{};
@@ -319,6 +321,13 @@ struct BloomConfig {
     float strength{1.0f};
 };
 
+enum class GimzmoMode : u32 { Local, World };
+enum class GizmoOperation {
+    Translation = 7, // ImGuizmo
+    Rotation = 120, // ImGuizmo
+    Scale = 896, // ImGuizmo
+};
+
 struct AppUI {
     AppState app_state{};
     std::unique_ptr<ImGuiRenderer> gui{};
@@ -342,6 +351,9 @@ struct AppUI {
     UIValueLatch<ClusterConfig> clustering_config{};
 
     UIValueLatch<u32> shadow_map_resolution{2048};
+
+    GimzmoMode gizmo_mode{GimzmoMode::Local};
+    GizmoOperation gizmo_operation{GizmoOperation::Translation};
 
     LatestBuffer<double> last_compute_res;
     LatestBuffer<double> last_graphics_res;

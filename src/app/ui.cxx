@@ -476,23 +476,26 @@ auto draw_ui(AppContext &ctx, AppState &output) -> void {
         const auto view = ctx.res.frame_ubo->view;
         const auto &proj = ctx.res.frame_ubo->projection;
 
+        auto draw_list = ImGui::GetWindowDrawList();
+
         ImVec2 avail = ImGui::GetContentRegionAvail();
         if (avail.x >= 1.0f && avail.y >= 1.0f) {
             const ImVec2 p0 = ImGui::GetCursorScreenPos();
             const ImVec2 p1 = {p0.x + avail.x, p0.y + avail.y};
 
-            ImGui::GetWindowDrawList()->AddImage(ImTextureID{ctx.res.tonemapped.index()}, p0, p1);
+            draw_list->AddImage(ImTextureID{ctx.res.tonemapped.index()}, p0, p1);
 
-            if (ctx.scene.selected_entity != entt::null && ctx.scene.scene.registry.valid(ctx.scene.selected_entity)) {
+            if (ctx.scene.scene.registry.valid(ctx.scene.selected_entity)) {
                 if (auto *transform = ctx.scene.scene.registry.try_get<TransformComponent>(ctx.scene.selected_entity)) {
-                    ImGuizmo::SetDrawlist(ImGui::GetWindowDrawList());
+                    ImGuizmo::SetDrawlist(draw_list);
                     ImGuizmo::SetOrthographic(false);
                     ImGuizmo::SetRect(p0.x, p0.y, avail.x, avail.y);
 
                     auto model = glm::mat4{transform->local_to_world};
 
-                    ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ImGuizmo::TRANSLATE,
-                                         ImGuizmo::LOCAL, glm::value_ptr(model));
+                    ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj),
+                                         static_cast<ImGuizmo::OPERATION>(ctx.ui.gizmo_operation),
+                                         static_cast<ImGuizmo::MODE>(ctx.ui.gizmo_mode), glm::value_ptr(model));
 
                     if (ImGuizmo::IsUsing()) {
                         transform->local_to_world = glm::mat4x3{model};

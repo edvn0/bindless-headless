@@ -93,7 +93,10 @@ struct DeferredLightingPushConstants {
     float log_z_scale;
     f32 near_plane{z_near};
     f32 far_plane{z_far};
-
+    f32 fog_start{50.0f};
+    f32 fog_end{200.0f};
+    std::array<f32, 3> padding{0, 0, 0};
+    glm::vec4 fog_color{0.5f, 0.6f, 0.7f, 0.3f};
     u32 tiles_x;
     u32 tiles_y;
     u32 tiles_z;
@@ -107,6 +110,7 @@ struct DeferredLightingPushConstants {
     u32 shadow_sampler_index;
     u32 debug_mode;
 };
+static_assert(sizeof(DeferredLightingPushConstants) == 192);
 
 struct PresentPushConstants {
     u32 image_index;
@@ -203,11 +207,16 @@ struct BillboardPushConstants {
     u32 sampler_index;
     float world_size; // billboard size in world units e.g. 0.25
 };
+struct InfiniteGridPushConstants {
+    DeviceReadPtr<FrameUBO> frame_ubo;
+    glm::vec4 origin;
+};
 
 struct CompiledPipeline {
     VkPipeline pipeline{VK_NULL_HANDLE};
     VkPipelineLayout layout{VK_NULL_HANDLE};
 };
+
 
 auto create_compute_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &, std::size_t,
                              std::string_view) -> CompiledPipeline;
@@ -238,6 +247,10 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
 auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *cache,
                                                 VkDescriptorSetLayout bindless_layout, const std::vector<u32> &frag,
                                                 VkShaderModule, std::string_view frag_entry, VkFormat color_format)
+        -> CompiledPipeline;
+
+auto create_infinite_grid_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &vert_code,
+                                   const std::vector<u32> &frag_code, VkFormat color_format, VkFormat depth_format)
         -> CompiledPipeline;
 
 auto create_predepth_pipeline(VkDevice, PipelineCache *, VkDescriptorSetLayout, const std::vector<u32> &, VkFormat,
@@ -280,7 +293,8 @@ namespace Pipeline {
 
     struct ColorAttachmentInfo {
         VkFormat format{VK_FORMAT_UNDEFINED};
-        bool blend_additive = false; // false = no blend, true = additive (light volumes)
+        bool blend_additive = false;
+        bool blend_alpha = false;
     };
 
     struct VertexInputInfo {

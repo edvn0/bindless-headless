@@ -15,9 +15,7 @@ struct Scene {
 namespace hierarchy {
     using Parent = entt::entity;
     using Child = entt::entity;
-    auto get_or_add(entt::registry &reg, entt::entity e) -> HierarchyComponent &;
     auto roots(entt::registry &) -> std::vector<entt::entity>;
-    auto is_descendant_of(entt::registry &reg, entt::entity parent, entt::entity potential_child) -> bool;
-
+    auto is_descendant_of(entt::registry &reg, Parent parent, Child potential_child) -> bool;
     auto set_parent(entt::registry &reg, Child child, Parent new_parent) -> void;
 } // namespace hierarchy

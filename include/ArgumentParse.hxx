@@ -8,7 +8,7 @@
 struct CLIOptions {
     std::uint32_t width{1280};
     std::uint32_t height{720};
-    bool vsync{false};
+    bool vsync{true};
     bool validation_layers{true};
     std::optional<std::string> title{};
     std::optional<std::filesystem::path> pipeline_cache_dir{};

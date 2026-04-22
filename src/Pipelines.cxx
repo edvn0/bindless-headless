@@ -926,6 +926,37 @@ auto create_gbuffer_pipeline(VkDevice device, PipelineCache *cache, VkDescriptor
     return CompiledPipeline{pipeline, pipeline_layout};
 }
 
+auto create_infinite_grid_pipeline(VkDevice device, PipelineCache *cache, VkDescriptorSetLayout bindless_layout,
+                                   const std::vector<u32> &vert_code, const std::vector<u32> &frag_code,
+                                   VkFormat color_format, VkFormat depth_format) -> CompiledPipeline {
+    const std::array stages{
+            Pipeline::ShaderStageInfo{vert_code, "vs_main", VK_SHADER_STAGE_VERTEX_BIT},
+            Pipeline::ShaderStageInfo{frag_code, "fs_main", VK_SHADER_STAGE_FRAGMENT_BIT},
+    };
+    const std::array color_attachments{
+            Pipeline::ColorAttachmentInfo{.format = color_format, .blend_alpha = true},
+    };
+    const std::array extra_dynamic_states{
+            VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
+            VK_DYNAMIC_STATE_DEPTH_BOUNDS,       VK_DYNAMIC_STATE_CULL_MODE,
+    };
+    return Pipeline::create_graphics_pipeline(Pipeline::Graphics{
+            .device = device,
+            .cache = cache,
+            .bindless_layout = bindless_layout,
+            .debug_name = "infinite_grid",
+            .stages = stages,
+            .push_constant_size = sizeof(InfiniteGridPushConstants),
+            .push_constant_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .color_attachments = color_attachments,
+            .depth_format = depth_format,
+            .depth_mode = Pipeline::DepthMode::test_greater_equal,
+            .cull_mode = Pipeline::CullMode::none,
+            .vertex_input = std::nullopt,
+            .extra_dynamic_states = extra_dynamic_states,
+    });
+}
+
 auto create_deferred_lighting_graphics_pipeline(VkDevice device, PipelineCache *cache,
                                                 VkDescriptorSetLayout bindless_layout,
                                                 const std::vector<u32> &frag_code, const VkShaderModule vert,
@@ -1251,8 +1282,6 @@ namespace Pipeline {
     }
 
     auto create_graphics_pipeline(const Pipeline::Graphics &info) -> CompiledPipeline {
-        // One VkShaderModuleCreateInfo per stage; the stage's pNext points into this vector,
-        // so it must not be resized after we start taking addresses.
         std::vector<VkShaderModuleCreateInfo> smcis(info.stages.size());
         std::vector<VkPipelineShaderStageCreateInfo> stage_cis(info.stages.size());
 
@@ -1269,7 +1298,6 @@ namespace Pipeline {
             s.pName = v.entry.data();
         }
 
-        // --- Pipeline layout ---
         VkPushConstantRange push_range{
                 .stageFlags = info.push_constant_stages,
                 .offset = 0,
@@ -1288,7 +1316,6 @@ namespace Pipeline {
         vk_check(vkCreatePipelineLayout(info.device, &plci, nullptr, &layout));
         set_debug_name(info.device, VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, info.debug_name);
 
-        // --- Vertex input ---
         auto vi = create_info<VkPipelineVertexInputStateCreateInfo>();
         if (info.vertex_input) {
             vi.vertexBindingDescriptionCount = static_cast<u32>(info.vertex_input->bindings.size());
@@ -1300,12 +1327,10 @@ namespace Pipeline {
         auto ia = create_info<VkPipelineInputAssemblyStateCreateInfo>();
         ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-        // --- Viewport/Scissor ---
         auto vp = create_info<VkPipelineViewportStateCreateInfo>();
         vp.viewportCount = 1;
         vp.scissorCount = 1;
 
-        // --- Rasterization ---
         auto rs = create_info<VkPipelineRasterizationStateCreateInfo>();
         rs.lineWidth = 1.0f;
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
@@ -1321,11 +1346,9 @@ namespace Pipeline {
         }();
         rs.depthBiasEnable = info.depth_bias ? VK_TRUE : VK_FALSE;
 
-        // --- Multisample ---
         auto ms = create_info<VkPipelineMultisampleStateCreateInfo>();
         ms.rasterizationSamples = info.samples;
 
-        // --- Depth/Stencil ---
         auto ds = create_info<VkPipelineDepthStencilStateCreateInfo>();
         switch (info.depth_mode) {
             case DepthMode::write:
@@ -1353,7 +1376,6 @@ namespace Pipeline {
         ds.minDepthBounds = 0.0f;
         ds.maxDepthBounds = 1.0f;
 
-        // --- Color blend ---
         std::vector<VkPipelineColorBlendAttachmentState> blend_attachments;
         std::vector<VkFormat> color_formats;
 
@@ -1369,6 +1391,14 @@ namespace Pipeline {
                 a.colorBlendOp = VK_BLEND_OP_ADD;
                 a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
                 a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.alphaBlendOp = VK_BLEND_OP_ADD;
+            } else if (att.blend_alpha) {
+                a.blendEnable = VK_TRUE;
+                a.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+                a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+                a.colorBlendOp = VK_BLEND_OP_ADD;
+                a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
                 a.alphaBlendOp = VK_BLEND_OP_ADD;
             }
             blend_attachments.push_back(a);
@@ -1399,8 +1429,8 @@ namespace Pipeline {
         gpci.pNext = &ri;
         gpci.stageCount = static_cast<u32>(stage_cis.size());
         gpci.pStages = stage_cis.data();
-        gpci.pVertexInputState = info.vertex_input ? &vi : nullptr;
-        gpci.pInputAssemblyState = info.vertex_input ? &ia : nullptr;
+        gpci.pVertexInputState = &vi;
+        gpci.pInputAssemblyState = &ia;
         gpci.pViewportState = &vp;
         gpci.pRasterizationState = &rs;
         gpci.pMultisampleState = &ms;

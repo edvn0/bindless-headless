@@ -98,6 +98,12 @@ namespace RP {
                         static_cast<u32>(GraphicsStamp::BillboardEnd),
                         static_cast<u32>(idx),
                 };
+            case GraphicsIndex::InfiniteGrid:
+                return {
+                        static_cast<u32>(GraphicsStamp::InfiniteGridBegin),
+                        static_cast<u32>(GraphicsStamp::InfiniteGridEnd),
+                        static_cast<u32>(idx),
+                };
             default:
                 error("What happened here?");
                 std::abort();
@@ -1546,6 +1552,110 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                 dep_release.imageMemoryBarrierCount = 1;
                 dep_release.pImageMemoryBarriers = &release_us0;
                 vkCmdPipelineBarrier2(cmd, &dep_release);
+            },
+            sync);
+}
+
+auto run_infinite_grid_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchronisation &sync)
+        -> TimelineValue {
+    auto &&[gpu, pipes, res, ui, scene] = ctx;
+    const auto &bounded_frame_index = RP::get_frame_markers().frame_index;
+
+    return submit_stage(
+            gpu.tl_graphics, gpu.device,
+            [&](VkCommandBuffer cmd) {
+                TRACY_GPU_ZONE(gpu.tracy_graphics.ctx, cmd, "InfiniteGrid");
+                auto _ = RP::begin_graphics(cmd, GraphicsIndex::InfiniteGrid);
+
+                auto *lit = gpu.ctx.textures.get(res.lit_hdr);
+                auto *depth = gpu.ctx.textures.get(res.depth);
+
+                const std::array<VkImageMemoryBarrier2, 2> barriers{{
+                        VkImageMemoryBarrier2{
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .pNext = nullptr,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                .dstAccessMask =
+                                        VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = lit->image,
+                                .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+                        },
+                        VkImageMemoryBarrier2{
+                                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .pNext = nullptr,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT,
+                                .dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = depth->image,
+                                .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+                        },
+                }};
+
+                VkDependencyInfo dep{};
+                dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+                dep.imageMemoryBarrierCount = static_cast<u32>(barriers.size());
+                dep.pImageMemoryBarriers = barriers.data();
+                vkCmdPipelineBarrier2(cmd, &dep);
+
+                auto color_att = create_info<VkRenderingAttachmentInfo>();
+                color_att.imageView = lit->attachment_view;
+                color_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                color_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                color_att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+                auto depth_att = create_info<VkRenderingAttachmentInfo>();
+                depth_att.imageView = depth->attachment_view;
+                depth_att.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                depth_att.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                depth_att.storeOp = VK_ATTACHMENT_STORE_OP_NONE; // read-only
+
+                auto ri = create_info<VkRenderingInfo>();
+                ri.renderArea = {.offset = {0, 0}, .extent = frame_extent};
+                ri.layerCount = 1;
+                ri.colorAttachmentCount = 1;
+                ri.pColorAttachments = &color_att;
+                ri.pDepthAttachment = &depth_att;
+
+                vkCmdBeginRendering(cmd, &ri);
+
+                auto *pipe = gpu.ctx.pipeline_pool.get(pipes.infinite_grid_pipeline);
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->pipeline);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe->layout, 0, 1, &gpu.bindless.set, 0,
+                                        nullptr);
+
+                auto &&[vp, sc] = viewport_scissors(frame_extent);
+                vkCmdSetViewport(cmd, 0, 1, &vp);
+                vkCmdSetScissor(cmd, 0, 1, &sc);
+                vkCmdSetDepthWriteEnable(cmd, VK_FALSE);
+                vkCmdSetDepthTestEnable(cmd, VK_TRUE);
+                vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_GREATER);
+                vkCmdSetDepthBounds(cmd, 0.0f, 1.0f);
+                vkCmdSetCullMode(cmd, VK_CULL_MODE_NONE);
+
+                const InfiniteGridPushConstants pc{
+                        .frame_ubo = res.frame_ubo_ring.slot_device_address(bounded_frame_index),
+                        .origin = glm::vec4(0.0f),
+                };
+                vkCmdPushConstants(cmd, pipe->layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(pc), &pc);
+
+                vkCmdDraw(cmd, 6, 1, 0, 0);
+
+                vkCmdEndRendering(cmd);
+
+                vkCmdSetDepthWriteEnable(cmd, VK_TRUE);
             },
             sync);
 }

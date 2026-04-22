@@ -56,11 +56,13 @@ enum class Stage : u32 {
     DirectionalShadowMap,
     Bloom,
     Billboard,
+    InfiniteGrid,
     Count,
 };
 constexpr std::array<std::string_view, static_cast<std::size_t>(Stage::Count)> stage_names = {
-        "GBuffer", "Predepth",        "Tonemapping",          "CubeRotation", "DeferredLighting", "SSAO", "SSAOBlur",
-        "Skybox",  "LightClustering", "DirectionalShadowMap", "Bloom",        "Billboard",
+        "GBuffer", "Predepth",  "Tonemapping",  "CubeRotation",    "DeferredLighting",
+        "SSAO",    "SSAOBlur",  "Skybox",       "LightClustering", "DirectionalShadowMap",
+        "Bloom",   "Billboard", "InfiniteGrid",
 };
 static_assert(stage_names.size() == static_cast<std::size_t>(Stage::Count), "stage_names size mismatch");
 
@@ -407,12 +409,27 @@ enum class GraphicsStamp : u32 {
     DirectionalShadowMapEnd,
     BillboardBegin,
     BillboardEnd,
-    Count
+    InfiniteGridBegin,
+    InfiniteGridEnd,
+    Count,
 };
-enum class GraphicsIndex : u32 { PreDepth, GBuffer, Deferred, Skybox, Tonemap, Present, ShadowMap, Billboard, Count };
-inline constexpr auto graphics_stages =
-        std::array{GraphicsIndex::PreDepth, GraphicsIndex::GBuffer, GraphicsIndex::Deferred,  GraphicsIndex::Skybox,
-                   GraphicsIndex::Tonemap,  GraphicsIndex::Present, GraphicsIndex::ShadowMap, GraphicsIndex::Billboard};
+enum class GraphicsIndex : u32 {
+    PreDepth,
+    GBuffer,
+    Deferred,
+    Skybox,
+    Tonemap,
+    Present,
+    ShadowMap,
+    Billboard,
+    InfiniteGrid,
+    Count,
+};
+inline constexpr auto graphics_stages = std::array{
+        GraphicsIndex::PreDepth,  GraphicsIndex::GBuffer,   GraphicsIndex::Deferred,
+        GraphicsIndex::Skybox,    GraphicsIndex::Tonemap,   GraphicsIndex::Present,
+        GraphicsIndex::ShadowMap, GraphicsIndex::Billboard, GraphicsIndex::InfiniteGrid,
+};
 
 inline constexpr u32 graphics_query_count = static_cast<u32>(GraphicsStamp::Count);
 inline constexpr u32 stats_graphics_count = static_cast<u32>(GraphicsIndex::Count);
@@ -458,6 +475,8 @@ constexpr auto get_graphics_pass_name(const GraphicsIndex index) -> std::string_
             return "Directional Shadow Map";
         case GraphicsIndex::Billboard:
             return "Billboard";
+        case GraphicsIndex::InfiniteGrid:
+            return "Infinite Grid";
         case GraphicsIndex::Count:
             break;
     }

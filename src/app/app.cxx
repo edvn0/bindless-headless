@@ -212,8 +212,6 @@ namespace {
     auto set_window_callbacks(GLFWwindow *window, AppUI &ui) -> void {
         glfwSetWindowUserPointer(window, &ui.app_state);
 
-        // Detach any existing callbacks (ImGui backend may have installed them),
-        // store them so we can forward into them.
         imgui_key_callback = glfwSetKeyCallback(window, nullptr);
         imgui_char_callback = glfwSetCharCallback(window, nullptr);
         imgui_mouse_button_callback = glfwSetMouseButtonCallback(window, nullptr);
@@ -424,34 +422,30 @@ namespace {
 
             dispatcher.dispatch<KeyPressedEvent>([&](KeyPressedEvent &event) {
                 if (event.key == GLFW_KEY_F1) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::ClusterGrid;
-                    return true;
-                } else if (event.key == GLFW_KEY_F2) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::LightCount;
-                    return true;
-                } else if (event.key == GLFW_KEY_F3) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::LightDensity;
-                    return true;
-                } else if (event.key == GLFW_KEY_F4) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::DepthSlices;
-                    return true;
-                } else if (event.key == GLFW_KEY_F5) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::LightHeatmap;
-                    return true;
-                } else if (event.key == GLFW_KEY_F6) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::FirstLight;
-                    return true;
-                } else if (event.key == GLFW_KEY_F7) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::ClusterOccupancy;
-                    return true;
-                } else if (event.key == GLFW_KEY_F8) {
-                    ui.debug_mode = AppUI::ClusterDebugMode::None;
+                    int current_mode = static_cast<int>(ui.debug_mode);
+                    int next_mode = (current_mode + 1) % static_cast<int>(AppUI::ClusterDebugMode::Count);
+                    ui.debug_mode = static_cast<AppUI::ClusterDebugMode>(next_mode);
                     return true;
                 }
                 if (event.key == GLFW_KEY_F11) {
                     ui.capture_next_frame = true;
                     return true;
                 }
+
+                // R;T;G = Rotate; Translate; Scale
+                if (event.key == GLFW_KEY_R && event.mods == GLFW_MOD_SHIFT) {
+                    ui.gizmo_operation = static_cast<GizmoOperation>(ImGuizmo::OPERATION::ROTATE);
+                    return true;
+                }
+                if (event.key == GLFW_KEY_T && event.mods == GLFW_MOD_SHIFT) {
+                    ui.gizmo_operation = static_cast<GizmoOperation>(ImGuizmo::OPERATION::TRANSLATE);
+                    return true;
+                }
+                if (event.key == GLFW_KEY_G && event.mods == GLFW_MOD_SHIFT) {
+                    ui.gizmo_operation = static_cast<GizmoOperation>(ImGuizmo::OPERATION::SCALE);
+                    return true;
+                }
+
 
                 return false;
             });
@@ -615,7 +609,12 @@ namespace {
     }
 
     template<typename T>
-    auto flush_render_queue(WatermarkedQueue<T> &queue, AppResources &res, RenderContext &ctx, u32 frame_idx) -> void {
+        requires requires(const T &t) {
+            std::begin(t.objects);
+            std::end(t.objects);
+            std::size(t.objects);
+        }
+    auto flush_render_queue(T &queue, AppResources &res, RenderContext &ctx, u32 frame_idx) -> void {
         res.mesh_instance_ranges.clear();
 
         std::ranges::sort(queue.objects, {}, &MeshSubmission::mesh_index);
@@ -1337,6 +1336,17 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
                                                             std::span(point_light_billboard_reflection)),
                             "Failed to compile point light billboard shader");
 
+                    std::array<const std::string_view, 2> infinite_grid_names{
+                            "vs_main",
+                            "fs_main",
+                    };
+                    std::array<ReflectionData, infinite_grid_names.size()> infinite_grid_reflection{};
+                    TRY_UNWRAP_WITH_DISCARD(infinite_grid_code,
+                                            gpu.compiler->compile_from_file("assets/shaders/infinite_grid.slang",
+                                                                            std::span(infinite_grid_names),
+                                                                            std::span(infinite_grid_reflection)),
+                                            "Failed to compile infinite grid shader");
+
                     auto &&[crp, lrp] = create_compute_pipelines(
                             gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, sizeof(RotatePushConstant),
                             std::span(rotate_cubes_code), std::span(rotate_cubes_names));
@@ -1458,6 +1468,10 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
                             gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, bloom_code.at(2),
                             sizeof(BloomUpsamplePushConstants), "bloom_upsample_cs");
 
+                    auto infinite_grid = create_infinite_grid_pipeline(
+                            gpu.device, gpu.ctx.pipeline_cache.get(), gpu.bindless.layout, infinite_grid_code.at(0),
+                            infinite_grid_code.at(1), VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_D32_SFLOAT);
+
                     {
                         const std::array color_atts{Pipeline::ColorAttachmentInfo{
                                 .format = VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -1509,6 +1523,7 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
                              rc.retire_value);
                     hot_swap(pipes.ssao_pipeline, std::move(ssao), gpu.ctx, rc.retire_value);
                     hot_swap(pipes.ssao_blur_pipeline, std::move(ssao_blur), gpu.ctx, rc.retire_value);
+                    hot_swap(pipes.infinite_grid_pipeline, std::move(infinite_grid), gpu.ctx, rc.retire_value);
                 },
                 ResizeTrigger::Shaders);
     }
@@ -2044,9 +2059,24 @@ gpu.bindless.need_repopulate = true;
         }
 
         {
-            const std::array bloom_waits{
+            const std::array skybox_waits{
                     TimelineWait{
                             .value = fs.timeline_values[stage_index(Stage::Skybox)],
+                            .semaphore = gpu.tl_graphics.timeline,
+                            .stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    },
+            };
+            fs.timeline_values[stage_index(Stage::InfiniteGrid)] = maybe_run(
+                    Stage::InfiniteGrid, gpu.tl_graphics, SubmitSynchronisation{.timeline_waits = skybox_waits}, [&] {
+                        return run_infinite_grid_pass(app_context, render_scene_extent,
+                                                      SubmitSynchronisation{.timeline_waits = skybox_waits});
+                    });
+        }
+
+        {
+            const std::array bloom_waits{
+                    TimelineWait{
+                            .value = fs.timeline_values[stage_index(Stage::InfiniteGrid)],
                             .semaphore = gpu.tl_graphics.timeline,
                             .stage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     },

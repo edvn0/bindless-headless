@@ -397,6 +397,10 @@ struct DeferredLightingPushConstants {
     float log_z_scale;
     float z_near;
     float z_far;
+    float fog_start;
+    float fog_end;
+    float _pad[3];
+    float4 fog_color;
     uint tiles_x;
     uint tiles_y;
     uint tiles_z;
@@ -505,5 +509,10 @@ if (pc.debug_mode == 5) {
         1.0
     );
 }
-    return float4(color, 1.0);
+if (depth > 0.0) {
+    float cam_dist = length(pc.frame_ubo->camera_position.xyz - world_pos);
+    float fog_t = saturate((cam_dist - pc.fog_start) / max(pc.fog_end - pc.fog_start, 0.001));
+    color = lerp(color, pc.fog_color.rgb, fog_t * pc.fog_color.a);
+}
+return float4(color, 1.0);
 }
