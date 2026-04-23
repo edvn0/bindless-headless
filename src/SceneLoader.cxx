@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <glm/gtc/packing.hpp>
+#include <ios>
 #include <iterator>
 #include <numeric>
 #include <optional>
@@ -69,7 +70,7 @@ namespace Tooling {
         }
 
         auto read_file_bytes(const std::filesystem::path &path) -> tl::expected<std::vector<std::byte>, Error> {
-            std::ifstream f(path, std::ios::binary);
+            std::ifstream f(path, std::ios::in | std::ios::binary);
             if (!f)
                 return tl::unexpected(make_error("Failed to open file for reading: " + path.string()));
             f.seekg(0, std::ios::end);

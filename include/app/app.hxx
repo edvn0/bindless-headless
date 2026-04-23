@@ -240,7 +240,7 @@ struct AppResources {
     Vec<TextureHandle> bloom_downsample{};
     Vec<TextureHandle> bloom_upsample{};
     TextureHandle bloom_threshold{};
-    u32 bloom_mip_count{6};
+    u32 bloom_mip_count{8};
 
     std::array<bool, stage_count> enabled_passes{};
 

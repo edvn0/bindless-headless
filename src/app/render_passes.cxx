@@ -1498,6 +1498,7 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
 
                 for (i32 i = static_cast<i32>(mip_count) - 2; i >= 0; --i) {
                     auto *us_tex = gpu.ctx.textures.get(res.bloom_upsample[i]);
+                    auto dims = std::array{us_tex->width, us_tex->height};
                     us_tex->transition_if_not_initialised(
                             cmd, VK_IMAGE_LAYOUT_GENERAL,
                             {VK_ACCESS_2_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT});
@@ -1514,9 +1515,6 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                     dep_us.pMemoryBarriers = &us_barrier;
                     vkCmdPipelineBarrier2(cmd, &dep_us);
 
-                    const u32 dst_w = std::max(1u, frame_extent.width >> (i + 1));
-                    const u32 dst_h = std::max(1u, frame_extent.height >> (i + 1));
-
                     const BloomUpsamplePushConstants us_pc{
                             .src_index = us_src_index,
                             .accumulate_index = res.bloom_upsample[i].index(),
@@ -1528,7 +1526,7 @@ auto run_bloom_pass(AppContext &ctx, VkExtent2D frame_extent, const SubmitSynchr
                     vkCmdPushConstants(cmd, upsample_pipe->layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(us_pc),
                                        &us_pc);
 
-                    vkCmdDispatch(cmd, (dst_w + 7u) / 8u, (dst_h + 7u) / 8u, 1);
+                    vkCmdDispatch(cmd, (dims.at(0) + 7u) / 8u, (dims.at(1) + 7u) / 8u, 1);
 
                     us_src_index = res.bloom_upsample[i].index();
                 }

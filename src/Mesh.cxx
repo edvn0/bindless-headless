@@ -10,6 +10,7 @@
 
 #include <ktx.h>
 #include <ktxvulkan.h>
+#include <semaphore>
 #include <volk.h>
 
 
@@ -1023,6 +1024,8 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
     std::vector<std::future<LoadedTextureCpu>> tex_futures;
     tex_futures.reserve(header.texture_count);
 
+    std::counting_semaphore<> semaphore(4);
+
     {
         auto _ = NanoProfiler{"Texture loading"};
         for (u32 i = 0; i < header.texture_count; ++i) {
@@ -1052,11 +1055,15 @@ auto load_scene(RenderContext &ctx, const std::filesystem::path &scene_path, flo
             const std::string debug_name = std::string(string_at(string_blob, t.name_str));
             const TexSlot slot = tex_slots[i];
 
-            tex_futures.emplace_back(std::async(
-                    std::launch::async,
-                    [bytes = std::move(ktx_copy), slot, name = std::move(debug_name)]() mutable -> LoadedTextureCpu {
-                        return decode_ktx2_bytes(std::span<const std::byte>(bytes), slot.type, slot.tex_class, name);
-                    }));
+            tex_futures.emplace_back(std::async(std::launch::async,
+                                                [bytes = std::move(ktx_copy), slot, name = std::move(debug_name),
+                                                 &semaphore]() mutable -> LoadedTextureCpu {
+                                                    semaphore.acquire();
+                                                    auto result = decode_ktx2_bytes(std::span<const std::byte>(bytes),
+                                                                                    slot.type, slot.tex_class, name);
+                                                    semaphore.release();
+                                                    return result;
+                                                }));
         }
     }
 

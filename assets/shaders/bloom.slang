@@ -119,9 +119,9 @@ void bloom_upsample_cs(
     if (any(dispatch_id.xy >= dims)) return;
 
     float2 uv = (float2(dispatch_id.xy) + 0.5) / float2(dims);
-
-    // Scale radius by texel size so offsets are uniform in pixel space
-    float2 r = pc.filter_radius * float2(1.0 / float(dims.x), 1.0 / float(dims.y));
+        
+    float aspect = float(dims.y) / float(dims.x);
+    float2 r = pc.filter_radius * float2(aspect, 1.0) / float(dims.y);
 
     float4 result =
           (1.0 / 16.0) * sample_texture_lod(uv + float2(-r.x, -r.y), pc.src_index, 0.0, pc.sampler_index)

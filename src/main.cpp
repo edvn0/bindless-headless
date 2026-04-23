@@ -105,10 +105,11 @@ auto main(int argc, char **argv) -> int {
     }));
 
         // LOAD_MESH("/home/edwin/Assets/Meshes/SponzaGLTF/Sponza.gltf", "SponzaGLTF/sponza_converted");
-        // LOAD_MESH("/home/edwin/Assets/Meshes/DamagedHelmet/glTF/DamagedHelmet.gltf",
-        //           "DamagedHelmetGLTF/damaged_helmet_converted");
+        LOAD_MESH("/home/edwin/Assets/Meshes/DamagedHelmet/glTF/DamagedHelmet.gltf",
+                  "DamagedHelmetGLTF/damaged_helmet_converted");
         LOAD_MESH("/home/edwin/Assets/Meshes/main_sponza/NewSponza_Main_glTF_003.gltf", "NewSponza/new_sponza");
         LOAD_MESH("/home/edwin/Assets/Meshes/pkg_a_curtains/NewSponza_Curtains_glTF.gltf", "NewSponza/curtains");
+        LOAD_MESH("/home/edwin/dev/bindless-headless/assets/meshes/capsule.glb", "capsule/capsule_converted");
 
 #undef LOAD_MESH
 

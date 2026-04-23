@@ -568,12 +568,12 @@ namespace {
 
         auto operator()(auto &engine) { return sample(engine); }
     };
-    auto create_scene(Scene &scene, const AABB &) -> void {
+
+    auto create_scene(Scene &scene, const AABB &aabb) -> void {
         auto &reg = scene.registry;
 
-        //  auto rng =
-        //          std::mt19937{static_cast<unsigned
-        //          long>(std::chrono::system_clock::now().time_since_epoch().count())};
+        auto rng =
+                std::mt19937{static_cast<unsigned long>(std::chrono::system_clock::now().time_since_epoch().count())};
 
         /* auto sponza = reg.create();
         reg.emplace<MeshComponent>(sponza, MeshComponent{.name = "sponza", .mesh_index = 0u});
@@ -586,26 +586,26 @@ namespace {
         auto sponza_curtains = reg.create();
         reg.emplace<MeshComponent>(sponza_curtains, MeshComponent{.name = "sponza_curtains", .mesh_index = 1u});
         reg.emplace<TransformComponent>(sponza_curtains, glm::identity<glm::mat4x3>());
-        /*
-                auto capsule = reg.create();
-                reg.emplace<MeshComponent>(capsule, MeshComponent{.name = "capsule", .mesh_index = 3u});
-                reg.emplace<TransformComponent>(capsule, glm::identity<glm::mat4x3>()); */
 
-        /* std::vector<entt::entity> helmets;
+        auto capsule = reg.create();
+        reg.emplace<MeshComponent>(capsule, MeshComponent{.name = "capsule", .mesh_index = 2u});
+        reg.emplace<TransformComponent>(capsule, glm::identity<glm::mat4x3>());
+
+        std::vector<entt::entity> helmets;
         static constexpr auto size = 60;
         helmets.reserve(size);
 
         auto distrib = MultiDistrib{aabb};
         for (auto i: std::views::iota(0, size)) {
             auto e = reg.create();
-            reg.emplace<MeshComponent>(e, MeshComponent{.name = std::format("damaged_helmet_{}", i), .mesh_index = 4u});
+            reg.emplace<MeshComponent>(e, MeshComponent{.name = std::format("damaged_helmet_{}", i), .mesh_index = 3u});
             auto random_position = distrib(rng);
             reg.emplace<TransformComponent>(e, glm::translate(glm::mat4{1.0f}, random_position) *
                                                        glm::toMat4(random_rotation(rng)));
             helmets.push_back(e);
         }
 
-        generate_random_hierarchies(reg, helmets, 4, rng, 0.3f); */
+        generate_random_hierarchies(reg, helmets, 4, rng, 0.3f);
     }
 
     template<typename T>
@@ -1117,14 +1117,14 @@ auto BindlessApp::run(EngineOptions &opts, InstanceWithDebug &instance, RenderDo
                       "Failed to load new curtains mesh");
         res.meshes.emplace_back(std::move(loaded_new_sponza_curtains));
 
-        /*         TRY_PROPAGATE(loaded_capsule, load_static_mesh(gpu.ctx, "assets/meshes/capsule.obj"),
-                              "Failed to load capsule mesh");
-                res.meshes.emplace_back(std::move(loaded_capsule));
+        TRY_PROPAGATE(loaded_capsule, load_scene(gpu.ctx, "assets/meshes/capsule/capsule_converted.cscene"),
+                      "Failed to load capsule mesh");
+        res.meshes.emplace_back(std::move(loaded_capsule));
 
-                TRY_PROPAGATE(loaded_damaged_helmet,
-                              load_scene(gpu.ctx, "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.cscene"),
-                              "Failed to load damaged helmet mesh");
-                res.meshes.emplace_back(std::move(loaded_damaged_helmet)); */
+        TRY_PROPAGATE(loaded_damaged_helmet,
+                      load_scene(gpu.ctx, "assets/meshes/DamagedHelmetGLTF/damaged_helmet_converted.cscene"),
+                      "Failed to load damaged helmet mesh");
+        res.meshes.emplace_back(std::move(loaded_damaged_helmet));
 
         create_scene(scene.scene, res.meshes.at(0).mesh_aabb);
     }
@@ -1920,10 +1920,9 @@ gpu.bindless.need_repopulate = true;
             vkResetQueryPool(gpu.device, b->pool, 0, b->query_count);
             vkResetQueryPool(gpu.device, c->pool, 0, c->query_count);
             vkResetQueryPool(gpu.device, d->pool, 0, d->query_count);
-
-            TracyVkCollectHost(gpu.tracy_compute.ctx);
-            TracyVkCollectHost(gpu.tracy_graphics.ctx);
         }
+        TracyVkCollectHost(gpu.tracy_compute.ctx);
+        TracyVkCollectHost(gpu.tracy_graphics.ctx);
 
         auto acquired = gpu.swapchain.acquire_next_image(bounded_frame_index);
         if (!acquired) {

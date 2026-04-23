@@ -1699,12 +1699,9 @@ auto create_allocator(VkInstance instance, VkPhysicalDevice pd, VkDevice device,
         info.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
     }
 
-    VmaVulkanFunctions vma_vulkan_func{};
-    vma_vulkan_func.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-    vma_vulkan_func.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
-
-    info.pVulkanFunctions = &vma_vulkan_func;
-
+    VmaVulkanFunctions vulkan_functions{};
+    vk_check(vmaImportVulkanFunctionsFromVolk(&info, &vulkan_functions));
+    info.pVulkanFunctions = &vulkan_functions;
     VmaAllocator alloc{};
     vmaCreateAllocator(&info, &alloc);
     return alloc;

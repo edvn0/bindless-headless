@@ -35,7 +35,7 @@ void fs_main(VSOut i, uniform TonemapPushConstants pc, out PSOut o) {
     float3 hdr   = sample_texture_lod(i.uv, pc.image_index, 0.0, pc.sampler_index).rgb;
     float3 bloom = sample_texture_lod(i.uv, pc.bloom_index,  0.0, pc.sampler_index).rgb;
 
-    float3 combined = hdr * pc.exposure + bloom * 0.01*pc.bloom_strength;
+    float3 combined = hdr * pc.exposure + bloom * pc.bloom_strength;
 
     const float a = 2.51;
     const float b = 0.03;
